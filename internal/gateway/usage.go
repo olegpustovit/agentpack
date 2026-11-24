@@ -61,9 +61,16 @@ type limitSample struct {
 }
 
 type usageReport struct {
-	Hourly   []usageHour    `json:"hourly"`
-	Sessions []usageSession `json:"sessions"`
-	Samples  []limitSample  `json:"samples"`
+	Hourly   []usageHour         `json:"hourly"`
+	Sessions []usageSession      `json:"sessions"`
+	Samples  []limitSample       `json:"samples"`
+	Coverage []usageNodeCoverage `json:"coverage,omitempty"`
+}
+
+type usageNodeCoverage struct {
+	NodeID   string    `json:"node_id"`
+	State    string    `json:"state"`
+	LastSync time.Time `json:"last_sync,omitzero"`
 }
 
 // serveUsage reads replicated rows only, so the page works offline and never asks a peer.
@@ -75,7 +82,11 @@ func (g *Gateway) serveUsage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "from and to must be Unix seconds, at most 100 days apart", http.StatusBadRequest)
 		return
 	}
-	report, err := readUsage(r.Context(), g.store.Reader, from, to)
+	coverage, err := g.usageCoverage(r.Context())
+	var report usageReport
+	if err == nil {
+		report, err = readUsage(r.Context(), g.store.Reader, from, to)
+	}
 	if err != nil {
 		if r.Context().Err() != nil {
 			return
@@ -86,7 +97,43 @@ func (g *Gateway) serveUsage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "usage unavailable", http.StatusInternalServerError)
 		return
 	}
+	report.Coverage = coverage
 	network.WriteJSON(w, report)
+}
+
+// A peer is current when its last pull completed. Missing peers and rejected pulls
+// leave their saved rows readable, but those rows cannot establish zero usage.
+func (g *Gateway) usageCoverage(ctx context.Context) ([]usageNodeCoverage, error) {
+	local, err := g.nodeID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	coverage := []usageNodeCoverage{{NodeID: local, State: "current"}}
+	if g.options.Library.Store == nil {
+		return coverage, nil
+	}
+	peers, err := g.options.Library.Store.ListPeers()
+	if err != nil {
+		return nil, err
+	}
+	for _, peer := range peers {
+		if !peer.Mesh || peer.Node == local {
+			continue
+		}
+		value, known := g.replicaStatus.Load(peer.Node)
+		contact, _ := value.(replicaContact)
+		row := usageNodeCoverage{NodeID: peer.Node, State: "pending", LastSync: contact.LastSuccess}
+		switch {
+		case known && !contact.Reachable:
+			row.State = "offline"
+		case contact.Error != "":
+			row.State = "stale"
+		case !contact.LastSuccess.IsZero():
+			row.State = "current"
+		}
+		coverage = append(coverage, row)
+	}
+	return coverage, nil
 }
 
 func readUsage(ctx context.Context, db *sql.DB, from, to int64) (report usageReport, err error) {

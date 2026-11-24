@@ -2,12 +2,15 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"net"
 	"net/http"
@@ -24,6 +27,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -192,7 +196,45 @@ func secureRequest(r *http.Request) bool {
 	return strings.HasPrefix(sourceOf(r).origin, "https://")
 }
 
-const publicOffPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Public access is off</title><main class="auth-shell"><section class="auth-card"><h1>Public access is off</h1><p>This address forwards to an Agentpack gateway that only answers its own machine and tailnet. To use it, open Settings › Sharing on that machine and turn on Public access.</p></section></main></html>`
+const publicOffStyle = `
+  body { margin: 0; font: 1rem/1.5 system-ui, sans-serif; }
+  main { box-sizing: border-box; max-width: 36rem; margin: 2rem auto; padding: 0 1.25rem; overflow-wrap: anywhere; }
+  h1 { font-size: 1.5rem; line-height: 1.25; }
+  h2 { font-size: 1rem; }
+  dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .25rem 1rem; }
+  dt { font-weight: 600; }
+  dd { margin: 0; }
+  a { display: inline-grid; min-height: 2.75rem; align-items: center; }
+`
+
+var publicOffPage = template.Must(template.New("public-off").Parse(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{{.Title}}</title>
+  <style>` + publicOffStyle + `</style>
+</head>
+<body>
+<main>
+  <h1>{{.Title}}</h1>
+  <p>On the gateway machine, run <code>ap</code> to open Agentpack. From the tailnet, you can use a paired gateway to reach shared sessions.</p>
+  {{if .NeedsClaim}}
+  <p>Ask the gateway owner to claim this gateway on its own machine before using this public address.</p>
+  {{else}}
+  <p>Ask the gateway owner to turn on Public access in <strong>Settings › Sharing</strong> on that machine.</p>
+  {{end}}
+  <p><a href="">Retry</a></p>
+  <h2>Diagnostics to share with the owner</h2>
+  <dl>
+    <dt>Gateway</dt><dd><bdi>{{.Name}}</bdi></dd>
+    <dt>Time</dt><dd><time datetime="{{.Time}}">{{.Time}}</time></dd>
+    <dt>Request ID</dt><dd><code>{{.RequestID}}</code></dd>
+  </dl>
+</main>
+</body>
+</html>`))
 
 // servePublicOff answers a proxied HTTPS request while public access is off, remembering its host.
 func (g *Gateway) servePublicOff(w http.ResponseWriter, r *http.Request, source requestSource) {
@@ -206,9 +248,23 @@ func (g *Gateway) servePublicOff(w http.ResponseWriter, r *http.Request, source 
 		g.public.mu.Unlock()
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+	w.Header().Set("Cache-Control", "no-store")
+	styleHash := sha256.Sum256([]byte(publicOffStyle))
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; style-src 'sha256-"+base64.StdEncoding.EncodeToString(styleHash[:])+"'")
+	needsClaim := source.origin != ""
+	title := "Public access is off"
+	if needsClaim {
+		title = "Gateway setup required"
+	}
 	w.WriteHeader(http.StatusForbidden)
-	_, _ = io.WriteString(w, publicOffPage)
+	if err := publicOffPage.Execute(w, struct {
+		NeedsClaim                   bool
+		Title, Name, Time, RequestID string
+	}{needsClaim, title, session.LocalHostname(), time.Now().UTC().Format(time.RFC3339), w.Header().Get("X-Agentpack-Trace")}); err != nil {
+		if event := obs.From(r.Context()); event != nil {
+			event.Fail(fmt.Errorf("render public access status: %w", err))
+		}
+	}
 }
 
 // serveProbe answers the gateway's own verification request, which must arrive through the
@@ -369,12 +425,13 @@ func (g *Gateway) verifyPublic(ctx context.Context, origin *url.URL, report func
 	return true
 }
 
-// setPublic turns public access on (after verification) or off. Progress streams as NDJSON lines:
-// one per check, then the resulting status.
+// setPublic checks an address or changes public access. A check does not write the setting.
+// Enabling verifies again so an earlier check never grants access to an address that now fails.
 func (g *Gateway) setPublic(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Enabled bool   `json:"enabled"`
-		Origin  string `json:"origin,omitempty"`
+		Enabled   bool   `json:"enabled"`
+		Origin    string `json:"origin,omitempty"`
+		CheckOnly bool   `json:"check_only,omitempty"`
 	}
 	if !network.ReadJSON(w, r, &input) {
 		return
@@ -396,7 +453,7 @@ func (g *Gateway) setPublic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var origin *url.URL
-	if input.Enabled {
+	if input.Enabled || input.CheckOnly {
 		if origin, err = parsePublicOrigin(input.Origin); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -410,7 +467,14 @@ func (g *Gateway) setPublic(w http.ResponseWriter, r *http.Request) {
 		_ = controller.Flush()
 	}
 	if origin != nil && !g.verifyPublic(r.Context(), origin, func(check publicCheck) { report(check) }) {
+		if event := obs.From(r.Context()); event != nil {
+			event.Fail(errors.New("verify public access"))
+		}
 		report(map[string]publicStatus{"public": g.publicStatus(r.Context())})
+		return
+	}
+	if input.CheckOnly {
+		report(map[string]string{"verified_origin": origin.String()})
 		return
 	}
 	if err := g.writePublic(r.Context(), origin); err != nil {

@@ -63,6 +63,14 @@ describe("startSessionBody", () => {
     expect(startSessionBody({ ...base, worktree: "new", worktreeName: "Fix it", carry: true })).toMatchObject({ worktree: "new", worktree_name: "Fix it", carry: true })
     expect(startSessionBody({ ...base, worktree: "/h/worktrees/0123456789abcdef/x", carry: false })).not.toHaveProperty("carry")
   })
+
+  it("sends a resumed chat's message only when explicitly requested", () => {
+    const resumed = { directory: "/work/x", harness: "claude", mode: "default", view: "chat" as const, agentSessionId: "old", prompt: "  Fix it\nThen review  " }
+    expect(startSessionBody(resumed)).toMatchObject({ agent_session_id: "old" })
+    expect(startSessionBody(resumed)).not.toHaveProperty("first_message")
+    expect(startSessionBody({ ...resumed, sendOnResume: true }).first_message).toBe("Fix it\nThen review")
+    expect(startSessionBody({ ...resumed, view: "terminal", sendOnResume: true })).not.toHaveProperty("first_message")
+  })
 })
 
 describe("reusesOperationId", () => {

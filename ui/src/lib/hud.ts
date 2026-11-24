@@ -4,7 +4,7 @@ import { useEffect, useState, useSyncExternalStore } from "react"
 // viewer shows the latest one in place and keeps a short log, the way Xcode's activity viewer does.
 export type Activity = { id: number; tone: "done" | "failed"; message: string; at: number; retry?: () => void }
 
-const LIMIT = 20
+const HISTORY_LIMIT = 20
 let log: Activity[] = []
 let next = 0
 const watchers = new Set<() => void>()
@@ -27,14 +27,20 @@ export function dismissActivity(id: number) {
   publish(log.filter((item) => item.id !== id))
 }
 
+export function clearActivity() {
+  publish([])
+}
+
 // Plain functions so any module can report an outcome without a hook.
 // Failures stay in the toolbar until dismissed or retried, per the alert model.
 export const hud = {
   success(message: string) {
-    publish([{ id: ++next, tone: "done" as const, message, at: Date.now() }, ...log].slice(0, LIMIT))
+    const failures = log.filter((item) => item.tone === "failed")
+    const outcomes = log.filter((item) => item.tone === "done").slice(0, HISTORY_LIMIT - 1)
+    publish([...failures, { id: ++next, tone: "done", message, at: Date.now() }, ...outcomes])
   },
   error(message: string, retry?: () => void) {
-    publish([{ id: ++next, tone: "failed" as const, message, at: Date.now(), retry }, ...log].slice(0, LIMIT))
+    publish([{ id: ++next, tone: "failed", message, at: Date.now(), retry }, ...log.filter((item) => item.tone !== "failed" || item.message !== message)])
   },
 }
 

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react"
-import { ArrowLeft, Ellipsis, PanelRight, Square, SquareTerminal } from "lucide-react"
+import { ArrowLeft, ChevronLeft, ChevronRight, Ellipsis, PanelRight, Square, SquareTerminal } from "lucide-react"
 import { Section } from "@/components/kit/data"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
 import { Banner, Spinner } from "@/components/kit/feedback"
@@ -29,7 +29,7 @@ import { configQuery } from "@/lib/config"
 import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, mergeConversationPages, type ConversationPage } from "./queries"
 import type { PromptFrom, ThreadItem } from "./model"
 import { helperSubagents, isOpenRequest } from "./reducer"
-import { latestUserPrompt, quoteMessage, ThreadView } from "./thread-view"
+import { latestUserPrompt, quoteMessage, signInNotice, ThreadView } from "./thread-view"
 import { ElicitationCard, PermissionCard } from "./request-cards"
 import { GoalPill, parseGoalCommand, useGoalActions } from "./goal-sheet"
 import { subagentRunning } from "./subagent-card"
@@ -52,6 +52,57 @@ function currentPlan(items: ThreadItem[]): PlanEntry[] {
     if (item.kind === "plan") plan = (item.data as { entries?: PlanEntry[] } | undefined)?.entries ?? []
   }
   return plan
+}
+
+function RequestDock({ items, machine, sessionId, agent }: { items: ThreadItem[]; machine: string; sessionId: string; agent: string }) {
+  const pending = items.filter(isOpenRequest)
+  const first = pending[0]?.seq
+  const [selected, setSelected] = useState(first)
+  const [answered, setAnswered] = useState<number[]>([])
+  const selectedItem = selected === undefined ? undefined : items.find((item) => item.seq === selected)
+  const resolvedElsewhere = selected !== undefined && selectedItem &&
+    (selectedItem.kind === "permission" || selectedItem.kind === "elicitation") &&
+    !isOpenRequest(selectedItem) && !answered.includes(selected)
+  const active = pending.findIndex((item) => item.seq === selected)
+  const index = active < 0 ? 0 : active
+  // The initial log can contain only history. Select an item when a new request reaches this view.
+  if ((selected === undefined || !selectedItem || answered.includes(selected)) && selected !== first && active < 0) {
+    setSelected(first)
+  }
+  if (!pending.length && !resolvedElsewhere) return null
+  return (
+    <section aria-label="Requests from the agent" data-slot="pinned-requests" className="max-h-[42dvh] overflow-auto rounded-(--r-sheet) border-[0.5px] border-(--sep) bg-(--window)">
+      {resolvedElsewhere ? (
+        <div className="flex flex-wrap items-center justify-between gap-(--s2) px-(--s4) py-(--s2) text-(length:--fs-sm)">
+          <span role="status">{(selectedItem.data as { resolved?: boolean }).resolved ? "Answered elsewhere" : "Request is no longer active"}</span>
+          <Button type="button" size="sm" variant="ghost" onClick={() => setSelected(first)}>{pending.length ? "Show next request" : "Dismiss"}</Button>
+        </div>
+      ) : pending.length > 1 && (
+        <div className="flex items-center gap-(--s2) px-(--s3) py-(--s1)">
+          <span role="status" className="flex-1 text-(length:--fs-sm) text-(--fg2)">Request {index + 1} of {pending.length}</span>
+          <Button type="button" variant="ghost" size="icon" aria-label="Previous request" disabled={index === 0} onClick={() => setSelected(pending[index - 1]?.seq)}><ChevronLeft aria-hidden /></Button>
+          <Button type="button" variant="ghost" size="icon" aria-label="Next request" disabled={index === pending.length - 1} onClick={() => setSelected(pending[index + 1]?.seq)}><ChevronRight aria-hidden /></Button>
+        </div>
+      )}
+      {pending.map((item, position) => {
+        function onAnswer(active: boolean) {
+          if (item.seq === undefined) return
+          const seq = item.seq
+          setAnswered((current) => {
+            const other = current.filter((id) => id !== seq && pending.some((open) => open.seq === id))
+            return active ? [...other, seq] : other
+          })
+        }
+        return (
+          <div key={item.seq} hidden={resolvedElsewhere || position !== index}>
+            {item.kind === "permission"
+              ? <PermissionCard item={item} machine={machine} sessionId={sessionId} agent={agent} onAnswer={onAnswer} />
+              : <ElicitationCard item={item} machine={machine} sessionId={sessionId} onAnswer={onAnswer} />}
+          </div>
+        )
+      })}
+    </section>
+  )
 }
 
 // Loaded on demand so the conversation UI stays out of the initial bundle.
@@ -202,12 +253,15 @@ export default function ConversationPane({
   const stopping = cancelTurn.isPending
   const stopTurn = cancelTurn.mutate
   useEffect(() => {
-    // Esc anywhere in the pane: leave a subagent, else stop the turn; fields and dialogs keep their own Esc.
+    // Esc anywhere in the pane leaves a subagent; ⌘. / Ctrl+. stops the turn, so Esc can never end one (CHT-02).
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return
-      if ((event.target as HTMLElement | null)?.closest("input, textarea, [role=dialog], [role=menu]")) return
-      if (subagentId) void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, sub: undefined }) })
-      else if (working && !stopping && !readOnly) stopTurn()
+      const stop = event.key === "." && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey
+      if ((event.key !== "Escape" && !stop) || event.defaultPrevented || event.repeat || event.isComposing) return
+      const target = event.target instanceof Element ? event.target : undefined
+      if (target?.closest("[role=dialog], [role=alertdialog], [role=menu], .xterm")) return
+      if (!stop && target?.closest("input, textarea")) return
+      if (!stop && subagentId) void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, sub: undefined }) })
+      else if (stop && working && !stopping && !readOnly) stopTurn()
       else return
       event.preventDefault()
     }
@@ -281,7 +335,7 @@ export default function ConversationPane({
     enabled: chatAllowsTerminal && !readOnly,
     refetchInterval: eventsConnected ? false : 15_000,
   })
-  const terminalAvailable = chatAllowsTerminal && !(shells.error instanceof ApiError && [403, 409].includes(shells.error.status))
+  const terminalAvailable = chatAllowsTerminal && !readOnly && !(shells.error instanceof ApiError && [403, 409].includes(shells.error.status))
   useEffect(() => {
     if (!terminalAvailable) return
     const run = (command: TerminalCommand | "open") => {
@@ -325,7 +379,16 @@ export default function ConversationPane({
     parent.context_limit && parent.context_tokens !== undefined
       ? Math.min(100, Math.round((parent.context_tokens / parent.context_limit) * 100))
       : undefined
-
+  const [retryingOffline, setRetryingOffline] = useState(false)
+  const lastSync = info?.last_sync ?? info?.last_used
+  async function retryOffline() {
+    setRetryingOffline(true)
+    await Promise.all([
+      queryClient.refetchQueries({ queryKey: sessionsQuery(false).queryKey, type: "active" }),
+      queryClient.refetchQueries({ queryKey: conversationEventsQuery(machine, sessionId).queryKey, type: "active" }),
+    ])
+    setRetryingOffline(false)
+  }
 
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-(--window)">
@@ -362,7 +425,17 @@ export default function ConversationPane({
           <PanelRight aria-hidden />
         </Button>
       </ToolbarSlot>
-      {readOnly && <Banner>{info?.archived_at ? "Cold storage · read-only" : `Offline, read-only${info?.last_sync ? ` · Last sync ${relativeTime(new Date(info.last_sync), Date.now())}` : ""}`}</Banner>}
+      {readOnly && (
+        <Banner action={!info?.archived_at && (
+          <Button type="button" size="sm" disabled={retryingOffline} onClick={() => void retryOffline()}>
+            {retryingOffline ? "Checking…" : "Retry"}
+          </Button>
+        )}>
+          {info?.archived_at
+            ? "Archived · read-only"
+            : `Offline · saved history${lastSync ? ` · Last seen ${relativeTime(new Date(lastSync), waitNow)}` : ""}`}
+        </Banner>
+      )}
       {archiveUnavailable && <Banner>{archiveUnavailable}</Banner>}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
@@ -437,7 +510,7 @@ export default function ConversationPane({
                   authHarness={info?.harness}
                   // The gateway restarts a running chat once its agent is signed in; a stopped one resumes here.
                   onSignedIn={!subagent && !readOnly && (resumable || live)
-                    ? () => { if (resumable) resume.mutate(composer.draft.trim()) }
+                    ? () => { if (resumable) resume.mutate("") }
                     : undefined}
                 />
               )}
@@ -460,9 +533,9 @@ export default function ConversationPane({
       )}
       {!readOnly && !subagentId && (
         <Composer
-          composer={composer} machine={machine} sessionId={sessionId} info={info} parent={parent} history={history}
+          composer={composer} machine={machine} machineName={machineName} sessionId={sessionId} info={info} parent={parent} history={history}
           chatConfig={chatConfig} commands={commands} contextPercent={contextPercent} compact={canCompact ? compact : undefined}
-          starting={starting} resumable={resumable} needsUpdate={needsUpdate} stopping={cancelTurn.isPending} onStop={() => cancelTurn.mutate()}
+          starting={starting} resumable={resumable} awaitingSignIn={resumable && !!signInNotice(parent.items)} needsUpdate={needsUpdate} stopping={cancelTurn.isPending} onStop={() => cancelTurn.mutate()}
           onFork={canFork && !fork.isPending ? forkChat : undefined} onSwitchTerminal={onSwitchTerminal} onGoalCommand={goalCommand}
           threadScrollRef={threadScrollRef} stickToBottomRef={stickToBottomRef}
         >
@@ -481,13 +554,7 @@ export default function ConversationPane({
               </span>
             </div>
           )}
-          {parent.items.some(isOpenRequest) && (
-            <div data-slot="pinned-requests" className="flex max-h-[50vh] flex-col gap-(--s3) overflow-auto">
-              {parent.items.filter(isOpenRequest).map((item) => item.kind === "permission"
-                ? <PermissionCard key={item.seq} item={item} machine={machine} sessionId={sessionId} agent={agentName} />
-                : <ElicitationCard key={item.seq} item={item} machine={machine} sessionId={sessionId} />)}
-            </div>
-          )}
+          <RequestDock key={sessionId} items={parent.items} machine={machine} sessionId={sessionId} agent={agentName} />
         </Composer>
       )}
           </div>
@@ -516,6 +583,8 @@ export default function ConversationPane({
           onOpenSubagent={openSubagent}
           onSendComments={(text, sent) => submitPrompt({ text, attachments: [], clearComposer: false }, undefined, { onSuccess: sent })}
           sendingComments={send.isPending}
+          branch={git?.branch}
+          chatConfig={chatConfig}
           git={
             <>
               {canLoadGit && !readOnly && (
@@ -528,7 +597,7 @@ export default function ConversationPane({
                   </div>
                 </Section>
               )}
-              <GitInspectorSections machine={machine} sessionId={sessionId} git={git} readOnly={readOnly || needsUpdate} onAskRebase={askAgent} />
+              <GitInspectorSections machine={machine} sessionId={sessionId} info={info} git={git} readOnly={readOnly || needsUpdate} onAskRebase={askAgent} />
             </>
           }
         />

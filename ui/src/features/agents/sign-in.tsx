@@ -63,8 +63,11 @@ export function SignIn({
     mutationFn: async (input: string) => readStep(await api<unknown>(`${agentPath(harness)}/${encodeURIComponent(step!.id)}`, { machine, body: { input } })),
     onSuccess: () => setPasted(""),
   })
-  // A gateway restart or a newer sign-in ends this one; its machine no longer knows it.
-  const current: LoginStep | undefined = status.error && step ? { ...step, state: "failed", error: routeMissing(status.error) ? failure(status.error, `sign ${name} in`) : "it ended on the machine" } : status.data ?? step
+  // A gateway restart or a newer attempt can make this login unknown to the machine.
+  const missing = routeMissing(status.error)
+  const current: LoginStep | undefined = missing && step
+    ? { ...step, state: "failed", error: `This attempt is no longer available on ${machineName}.` }
+    : status.data ?? step
   const cancel = () => {
     if (step?.state === "waiting" && current?.state === "waiting") {
       void api(`${agentPath(harness)}/${encodeURIComponent(step.id)}`, { machine, method: "DELETE" }).catch(() => {})
@@ -163,9 +166,16 @@ export function SignIn({
           </li>
         )}
       </ol>
-      <div className="flex items-center gap-(--s3) text-(length:--fs-sm) text-(--fg2)">
-        <Spinner />
-        <span className="flex-1">Waiting for the sign-in on {machineName}</span>
+      {status.error && !missing && (
+        <FieldError>{`Couldn't check the sign-in on ${machineName}.`}</FieldError>
+      )}
+      <div className="flex flex-wrap items-center gap-(--s3) text-(length:--fs-sm) text-(--fg2)">
+        {!status.error && <Spinner />}
+        <span className="flex-1">
+          Waiting for the sign-in on {machineName}
+          {current.expiresAt && ` · Expires at ${new Date(current.expiresAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`}
+        </span>
+        {status.error && !missing && <Button type="button" size="sm" onClick={() => void status.refetch()}>Retry</Button>}
         <Button type="button" size="sm" onClick={cancel}>Cancel</Button>
       </div>
     </div>

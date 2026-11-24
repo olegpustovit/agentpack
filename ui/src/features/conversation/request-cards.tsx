@@ -1,18 +1,36 @@
-import { useState } from "react"
+import { useId, useState } from "react"
 import { ExternalLink, Lock } from "lucide-react"
+import { FieldError } from "@/components/kit/forms"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { api } from "@/lib/api"
-import { hud } from "@/lib/hud"
 import { useIntent } from "@/lib/intent"
 import type { ElicitationField, ElicitationPayload, PermissionPayload, ThreadItem } from "./model"
 import { conversationErrorMessage, conversationNeedsUpdate } from "./queries"
 
 // Answer cards for permission and elicitation requests. The sessions home renders them too,
 // so this file must stay free of markdown, diff and highlight imports (check-size.ts enforces it).
-export function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem; machine: string; sessionId: string }) {
+type RequestCardProps = {
+  item: ThreadItem
+  machine: string
+  sessionId: string
+  readOnly?: boolean
+  onAnswer?: (active: boolean) => void
+}
+
+function RequestFailure({ machine, action, error, retry }: { machine: string; action: string; error: Error; retry?: () => void }) {
+  return (
+    <div className="mt-(--s3) flex flex-wrap items-center gap-(--s2)">
+      <FieldError>{conversationErrorMessage(machine, action, error)}</FieldError>
+      {retry && !conversationNeedsUpdate(error) && <Button type="button" size="sm" onClick={retry}>Retry</Button>}
+    </div>
+  )
+}
+
+export function ElicitationCard({ item, machine, sessionId, readOnly, onAnswer }: RequestCardProps) {
   const ask = item.data as ElicitationPayload & { optionIds?: string[]; allowMultiple?: boolean }
   const [selected, setSelected] = useState<string[]>([])
+  const [retryAnswer, setRetryAnswer] = useState<() => void>()
   const answer = useIntent({
     request: (value: string, idempotencyKey) =>
       api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/elicitation`, {
@@ -21,8 +39,11 @@ export function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem
         idempotencyKey,
         body: { elicitation_id: ask.elicitationId, value },
       }),
-    failed: (error, _value, retry) =>
-      hud.error(conversationErrorMessage(machine, "answer a question", error), conversationNeedsUpdate(error) ? undefined : retry),
+    apply: () => {
+      onAnswer?.(true)
+      return () => onAnswer?.(false)
+    },
+    failed: (_error, _value, retry) => setRetryAnswer(() => retry),
   })
   const submitted = answer.isPending || answer.isSuccess ? answer.input : undefined
   const result = ask.result
@@ -35,6 +56,8 @@ export function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem
         <p role="status" className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">
           {answer.isPending ? "Sending answer…" : `Answered: ${answerSummary(ask, submitted)}`}
         </p>
+      ) : readOnly ? (
+        <p className="mt-(--s2) text-(length:--fs-sm) text-(--fg2)">Saved request · read-only</p>
       ) : ask.fields?.length ? (
         <ElicitationForm fields={ask.fields} disabled={!ask.elicitationId || answer.isPending} onSubmit={(value) => answer.mutate(value)} />
       ) : link !== undefined ? (
@@ -82,6 +105,7 @@ export function ElicitationCard({ item, machine, sessionId }: { item: ThreadItem
           )}
         </div>
       )}
+      {answer.error && <RequestFailure machine={machine} action="answer a question" error={answer.error} retry={retryAnswer} />}
     </div>
   )
 }
@@ -183,12 +207,40 @@ function permissionVerb(tool?: string): string {
   }
 }
 
-// Adapters word options as "Yes"/"No"; the card uses the prototype's verbs and keeps specific labels.
-function optionLabel(option: { id: string; label: string }): string {
-  if (option.id.startsWith("reject") || option.label === "No") return "Reject"
-  if (option.id === "allow-once" || option.label === "Yes") return "Allow once"
-  if (option.id === "allow-always") return "Always allow"
-  return option.label
+type PermissionOption = NonNullable<PermissionPayload["options"]>[number]
+
+function optionKind(option: PermissionOption): string | undefined {
+  if (option.kind) return option.kind
+  const label = option.label.toLowerCase()
+  if (option.id === "allow-always" || label === "always allow") return "allow_always"
+  if (option.id === "reject-always") return "reject_always"
+  if (option.id === "allow-once" || label === "yes" || label === "allow once") return "allow_once"
+  if (option.id.startsWith("reject") || label === "no" || label === "deny" || label === "reject") return "reject_once"
+}
+
+function optionLabel(option: PermissionOption): string {
+  // Current adapters describe the actual effect in the option name. Older logs used Yes and No.
+  if (option.kind) return option.label
+  if (option.label === "Yes") return optionKind(option) === "allow_always" ? "Always allow" : "Allow once"
+  return option.label === "No" ? "Reject" : option.label
+}
+
+// ACP leaves the scope, lifetime, and storage of remembered choices to the original agent.
+function remembersPermission(kind?: string) {
+  return kind === "allow_always" || kind === "reject_always"
+}
+
+function PermissionRecovery() {
+  return (
+    <details className="min-w-0 pl-[calc(var(--s3)+14px)] text-(length:--fs-xs) text-(--fg2)">
+      <summary className="cursor-pointer text-(--accent)">Review remembered permission</summary>
+      <div className="mt-(--s2) flex flex-col gap-(--s2)">
+        <p>The choice is managed by the agent that asked. Its answer above describes the scope it offered.</p>
+        <p>To remove a saved Claude Code rule, run <code>/permissions</code> in Claude Code from the same project on the machine that ran the chat. <a href="https://code.claude.com/docs/en/permissions#manage-permissions" target="_blank" rel="noreferrer" className="text-(--accent) underline">Claude Code permissions</a></p>
+        <p>For a Codex command-prefix rule, review the rules in the Codex configuration used for the chat. <a href="https://developers.openai.com/codex/rules" target="_blank" rel="noreferrer" className="text-(--accent) underline">Codex command rules</a></p>
+      </div>
+    </details>
+  )
 }
 
 export function PermissionCard({
@@ -197,14 +249,11 @@ export function PermissionCard({
   sessionId,
   readOnly,
   agent,
-}: {
-  item: ThreadItem
-  machine: string
-  sessionId: string
-  readOnly?: boolean
-  agent?: string
-}) {
+  onAnswer,
+}: RequestCardProps & { agent?: string }) {
   const perm = item.data as PermissionPayload
+  const scopeId = useId()
+  const [retryAnswer, setRetryAnswer] = useState<() => void>()
   const answer = useIntent({
     request: (optionId: string, idempotencyKey) =>
       api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/permission`, {
@@ -213,11 +262,16 @@ export function PermissionCard({
         idempotencyKey,
         body: { request_id: perm.requestId, option_id: optionId },
       }),
-    failed: (error, _value, retry) =>
-      hud.error(conversationErrorMessage(machine, "answer a permission request", error), conversationNeedsUpdate(error) ? undefined : retry),
+    apply: () => {
+      onAnswer?.(true)
+      return () => onAnswer?.(false)
+    },
+    failed: (_error, _value, retry) => setRetryAnswer(() => retry),
   })
-  const open = !readOnly && !perm.resolved && !perm.inactive
   const options = perm.options ?? []
+  const command = perm.summary && (
+    <pre data-slot="permission-command" className="my-(--s4) max-h-40 overflow-auto rounded-(--r-ctl) bg-(--code) px-(--s4) py-(--s3) font-(family-name:--mono) text-(length:--fs-sm) text-(--fg) whitespace-pre-wrap break-words">{perm.summary}</pre>
+  )
   const submitted = answer.isPending || answer.isSuccess ? answer.input : undefined
   if (perm.resolved || perm.inactive || submitted !== undefined) {
     const id = perm.resolved ? perm.result?.optionId : submitted
@@ -226,11 +280,15 @@ export function PermissionCard({
     const status = perm.inactive && !perm.resolved ? "No longer active"
       : answer.isPending && !perm.resolved ? "Sending answer…"
       : `Answered: ${answerLabel ?? "—"}`
+    const remembered = chosen && (perm.resolved || answer.isSuccess) && remembersPermission(optionKind(chosen))
     return (
-      <p data-slot="permission-card" className="flex min-h-(--row-h) items-center gap-(--s3) text-(length:--fs-sm) text-(--fg3)">
-        <Lock aria-hidden className="size-3.5 shrink-0" />
-        <span role="status" className="min-w-0 truncate">{status}{perm.summary ? ` · ${perm.summary}` : ""}</span>
-      </p>
+      <div data-slot="permission-card">
+        <p className="flex min-h-(--row-h) items-center gap-(--s3) text-(length:--fs-sm) text-(--fg3)">
+          <Lock aria-hidden className="size-3.5 shrink-0" />
+          <span role="status" className="min-w-0 [overflow-wrap:anywhere]">{status}{perm.summary ? ` · ${perm.summary}` : ""}</span>
+        </p>
+        {remembered && <PermissionRecovery />}
+      </div>
     )
   }
   return (
@@ -238,15 +296,7 @@ export function PermissionCard({
       data-slot="permission-card"
       role="group"
       aria-label={`Permission request: ${perm.tool ?? "Permission"}`}
-      tabIndex={0}
-      onKeyDown={(event) => {
-        if (!open || !perm.requestId || answer.isPending || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
-        if (event.target instanceof HTMLElement && event.target.closest("input, textarea, select, [contenteditable='true']")) return
-        const option = event.key === "Enter" && event.target === event.currentTarget ? options[0] : /^[1-9]$/.test(event.key) ? options[Number(event.key) - 1] : undefined
-        if (!option) return
-        event.preventDefault()
-        answer.mutate(option.id)
-      }}
+      tabIndex={-1}
       className="rounded-(--r-sheet) border-[0.5px] border-(--warn) bg-(--window) px-(--s5) pt-(--s5) pb-(--s4) shadow-(--shadow-card) outline-none focus-visible:ring-2 focus-visible:ring-(--accent-soft)"
     >
       <div className="flex items-start gap-(--s4)">
@@ -255,15 +305,35 @@ export function PermissionCard({
         </span>
         <p className="pt-(--s1) text-(length:--fs) font-semibold text-(--fg)">Allow {agent || "the agent"} to {permissionVerb(perm.tool)}?</p>
       </div>
-      {perm.summary && <pre data-slot="permission-command" className="my-(--s4) max-h-40 overflow-auto rounded-(--r-ctl) bg-(--code) px-(--s4) py-(--s3) font-(family-name:--mono) text-(length:--fs-sm) text-(--fg) whitespace-pre-wrap break-words">{perm.summary}</pre>}
-      <div className="flex flex-wrap justify-end gap-(--s2)">
-        {options.map((option, index) => ({ option, index })).reverse().map(({ option, index }) => (
-          <Button key={option.id} type="button" size="sm" variant={index === 0 ? "primary" : "default"} title={index < 9 ? `Press ${index + 1}` : undefined} disabled={!perm.requestId || answer.isPending} onClick={() => answer.mutate(option.id)}>
-            {optionLabel(option)}
-            {index === 0 && <kbd aria-hidden className="font-(family-name:--mono) opacity-70">↩</kbd>}
-          </Button>
-        ))}
-      </div>
+      {perm.summary && perm.summary.length > 180 ? (
+        <details className="my-(--s3) text-(length:--fs-sm) text-(--fg2)">
+          <summary className="cursor-pointer">Review request details</summary>
+          {command}
+        </details>
+      ) : command}
+      {readOnly ? (
+        <p className="text-(length:--fs-sm) text-(--fg2)">Saved request · read-only</p>
+      ) : (
+        <div className="flex flex-wrap justify-end gap-(--s2)">
+          {options.toReversed().map((option, index) => {
+            const kind = optionKind(option)
+            const remembered = remembersPermission(kind)
+            const id = `${scopeId}-${index}`
+            return (
+              <div key={option.id} className="flex flex-col items-end gap-(--s1)">
+                <Button
+                  type="button" size="sm" variant={kind === "allow_once" ? "primary" : "default"}
+                  aria-describedby={remembered ? id : undefined} disabled={!perm.requestId} onClick={() => answer.mutate(option.id)}
+                >
+                  {optionLabel(option)}
+                </Button>
+                {remembered && <p id={id} className="text-(length:--fs-xs) text-(--fg2)">Agent remembers this choice</p>}
+              </div>
+            )
+          })}
+        </div>
+      )}
+      {answer.error && <RequestFailure machine={machine} action="answer a permission request" error={answer.error} retry={retryAnswer} />}
     </div>
   )
 }

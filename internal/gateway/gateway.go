@@ -36,10 +36,10 @@ type GatewayOptions struct {
 	Home, Address, PublicURL string
 	Start                    func(context.Context, session.SessionInfo, string) (string, error)
 	Packages                 func(context.Context, string) (network.ProjectContents, error)
-	Install                  func(context.Context, string, string, bool) error
+	Install                  func(context.Context, string, string, bool, string) error
 	SaveProject              func(context.Context, ProjectSettingsInput) error
 	InstallMCP               func(context.Context, string, registry.MCPServerInput, bool) error
-	Update                   func(ctx context.Context, version string) error
+	Update                   func(ctx context.Context, version string, progress func(UpdatePhase)) error
 	Library                  LibraryOptions
 	Assets                   http.Handler
 	Version                  string
@@ -60,7 +60,7 @@ type Gateway struct {
 
 	options           GatewayOptions
 	startingChats     sync.Map
-	starting          sync.WaitGroup // chats launching in the background; tests wait on it
+	starting          sync.WaitGroup // session launches that outlive a request
 	chatLifecycle     sync.Mutex     // serializes resume claims with settling dead chats
 	verifiedEndpoints sync.Map       // worker.json path → mod time of an endpoint whose worker answered
 	store             *state.Store
@@ -83,8 +83,7 @@ type Gateway struct {
 	syncTransfers     map[string]*stateTransferFile
 	identityMu        sync.Mutex
 	updateMu          sync.Mutex
-	updating          bool
-	updateError       string
+	updateStatus      gatewayUpdateStatus
 	identityAt        time.Time
 	identitySelf      tailnetSelf
 	events            eventHub
@@ -489,7 +488,16 @@ func fail(w http.ResponseWriter, r *http.Request, err error) {
 	http.Error(w, "gateway operation failed", http.StatusInternalServerError)
 }
 func writeSessionStart(w http.ResponseWriter, r *http.Request, info session.SessionInfo, err error) {
-	if errors.Is(err, errChatStartClaim) {
+	var worktree *sessionWorktreeError
+	if errors.As(err, &worktree) {
+		gitFailure(w, r, http.StatusUnprocessableEntity, worktree.error, map[string]any{"field": "worktree"})
+		return
+	}
+	if errors.Is(err, errTerminalStartUnknown) {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if errors.Is(err, errStartClaim) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
@@ -505,7 +513,7 @@ func writeSessionStart(w http.ResponseWriter, r *http.Request, info session.Sess
 		http.Error(w, "could not verify ACP session owner", http.StatusInternalServerError)
 		return
 	}
-	if errors.Is(err, errUnknownFolder) || errors.Is(err, errInvalidChatID) || errors.Is(err, errResumeOwnFolder) {
+	if errors.Is(err, errUnknownFolder) || errors.Is(err, errInvalidChatID) || errors.Is(err, errInvalidTerminalID) || errors.Is(err, errResumeOwnFolder) {
 		badRequest(w, err.Error())
 		return
 	}

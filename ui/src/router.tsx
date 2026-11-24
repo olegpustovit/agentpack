@@ -1,6 +1,7 @@
 import { createRouter } from "@tanstack/react-router"
 import { Banner } from "./components/kit/feedback"
 import { Button } from "./components/ui/button"
+import { createViewHistory } from "./features/shell/views"
 import { routeTree } from "./routeTree.gen"
 import { createQueryClient } from "./lib/query-client"
 import { reportError } from "./lib/telemetry"
@@ -9,6 +10,7 @@ export const queryClient = createQueryClient()
 
 export const router = createRouter({
   routeTree,
+  history: createViewHistory(),
   context: { queryClient },
   defaultPreload: "intent",
   defaultPreloadStaleTime: 0,

@@ -1,5 +1,5 @@
 export function isFolderPath(query: string): boolean {
-  return /^(~|\/|[A-Za-z]:\\)/.test(query)
+  return /^(~|\/|\\\\|[A-Za-z]:[\\/])/.test(query)
 }
 
 export function splitFolderPath(query: string) {
@@ -12,7 +12,7 @@ export function parentFolderInput(query: string): string | undefined {
   return splitFolderPath(query.slice(0, -1)).dir
 }
 
-export function matchingFolders<T extends { name: string; hidden: boolean }>(entries: T[], segment: string): T[] {
+export function matchingFolders<T extends { name: string; hidden: boolean }>(entries: T[], segment: string, showHidden = false): T[] {
   const needle = segment.toLowerCase()
-  return entries.filter((entry) => (!entry.hidden || needle.startsWith(".")) && entry.name.toLowerCase().startsWith(needle))
+  return entries.filter((entry) => (showHidden || !entry.hidden || needle.startsWith(".")) && entry.name.toLowerCase().startsWith(needle))
 }

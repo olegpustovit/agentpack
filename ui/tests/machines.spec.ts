@@ -108,7 +108,7 @@ test("machine detail shows its agents, system, projects and updates an outdated 
   await expect(page.getByRole("button", { name: "Updating…" })).toBeDisabled()
   // A gateway that never reports another version stops the polling.
   await page.clock.fastForward("05:00")
-  await expect(page.getByText("oracle-vm hasn't reported a new version")).toBeVisible()
+  await expect(page.getByTestId("content").getByText("oracle-vm hasn't reported a new version · Timed out.")).toBeVisible()
   await expect(page.getByRole("button", { name: "Update to 0.9.2" })).toBeEnabled()
 })
 

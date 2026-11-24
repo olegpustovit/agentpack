@@ -2,7 +2,7 @@ import { api } from "@/lib/api"
 import type { Agentpack, Draft, MCPServerInput, PackagePin, Revision } from "@/lib/api-types"
 
 // Shapes from internal/gateway/library*.go and internal/registry/drafts.go.
-export type PackageDiff = { add: string[]; update: string[]; remove: string[]; mode?: string }
+export type PackageDiff = { add: string[]; update: string[]; remove: string[]; mode?: string; preview_digest?: string }
 
 export type DraftReview = {
   draft: Draft
@@ -34,8 +34,11 @@ export type SaveRevisionInput = {
 }
 
 // `machine` is the gateway id ("local" for this gateway). The api helper omits `node` for it.
-export function installPackage(machine: string, directory: string, spec: string, restart: boolean) {
-  return api<{ installed: boolean }>("/api/packages", { machine, body: { directory, spec, restart } })
+export function installPackage(machine: string, directory: string, spec: string, restart: boolean, previewDigest?: string) {
+  return api<{ installed: boolean }>("/api/packages", {
+    machine,
+    body: { directory, spec, restart, ...(previewDigest ? { preview_digest: previewDigest } : {}) },
+  })
 }
 
 export function installMCP(machine: string, directory: string, server: MCPServerInput, restart: boolean) {
@@ -49,10 +52,10 @@ export function restorePreview(machine: string, packId: string, revisionId: stri
   )
 }
 
-export function restoreRevision(machine: string, packId: string, revisionId: string, directory: string, restart: boolean) {
+export function restoreRevision(machine: string, packId: string, revisionId: string, directory: string, restart: boolean, previewDigest: string) {
   return api<{ restored: boolean }>(
     `/api/library/agentpacks/${encodeURIComponent(packId)}/revisions/${encodeURIComponent(revisionId)}/restore`,
-    { machine, body: { directory, restart } },
+    { machine, body: { directory, restart, preview_digest: previewDigest } },
   )
 }
 
@@ -81,12 +84,12 @@ export function discardDraft(id: string) {
 }
 
 // Applies a draft through the normal install or restore endpoint, then discards it.
-export async function applyDraft(draft: Draft, restart: boolean) {
+export async function applyDraft(draft: Draft, restart: boolean, previewDigest: string) {
   if (draft.pack_id) {
     if (!draft.revision) throw new Error("This pending restore has no revision. Discard it and save again.")
-    await restoreRevision(draft.node, draft.pack_id, draft.revision, draft.directory, restart)
+    await restoreRevision(draft.node, draft.pack_id, draft.revision, draft.directory, restart, previewDigest)
   } else {
-    await installPackage(draft.node, draft.directory, draft.item, restart)
+    await installPackage(draft.node, draft.directory, draft.item, restart, previewDigest)
   }
   await discardDraft(draft.id)
 }

@@ -40,6 +40,13 @@ export function edgeOf(peer: TopologyPeer): Edge {
   return { label: "path unknown", dashed: false }
 }
 
+// Human-readable route text for compact phone rows.
+export function routeLabel(peer: TopologyPeer): string {
+  if (peer.connection === "relay") return peer.relay ? `Relay via ${peer.relay}` : "Relay"
+  if (peer.connection === "direct") return "Direct"
+  return ""
+}
+
 // The topology endpoint always reports 0 sessions, so the sessions query count is the real source.
 export function sessionCount(fromTopology: number | undefined, fromQuery: number | undefined): number | undefined {
   return fromTopology || fromQuery

@@ -46,17 +46,24 @@ function grid(page: Page) {
   return page.getByRole("table", { name: "Machines and connections" })
 }
 
-function row(page: Page, name: string) {
-  return grid(page).locator("tbody tr").filter({ hasText: name })
+function phoneList(page: Page) {
+  return page.getByRole("list", { name: "Machines and connections" })
+}
+
+function row(page: Page, name: string, isPhone = false) {
+  return isPhone
+    ? phoneList(page).locator("li").filter({ hasText: name })
+    : grid(page).locator("tbody tr").filter({ hasText: name })
 }
 
 test("only the sidebar machines are shown, with the same state", async ({ page }) => {
+  const isPhone = test.info().project.name === "phone"
   await page.goto("/machines/topology")
 
-  await expect(row(page, "mac-studio")).toContainText("Reachable")
-  await expect(row(page, "build-box")).toContainText("Offline")
-  await expect(row(page, "iphone")).toHaveCount(0)
-  await expect(row(page, "ci-runner-3")).toHaveCount(0)
+  await expect(row(page, "mac-studio", isPhone)).toContainText("Reachable")
+  await expect(row(page, "build-box", isPhone)).toContainText("Offline")
+  await expect(row(page, "iphone", isPhone)).toHaveCount(0)
+  await expect(row(page, "ci-runner-3", isPhone)).toHaveCount(0)
 })
 
 test("diagram labels each edge and dashes only the relay one", async ({ page }) => {
@@ -66,10 +73,10 @@ test("diagram labels each edge and dashes only the relay one", async ({ page }) 
   await expect(svg.locator("path")).toHaveCount(2)
   await expect(svg.locator("path[stroke-dasharray]")).toHaveCount(1)
   if (test.info().project.name === "phone") {
-    // Phones hide the diagram by design (max-[760px]:hidden) and show the same edge labels in the grid's Path column.
+    // Phones hide the diagram and render compact rows instead of a wide table.
     await expect(svg).toBeHidden()
-    await expect(row(page, "mac-studio")).toContainText("direct")
-    await expect(row(page, "fedora-laptop")).toContainText("relay fra")
+    await expect(row(page, "mac-studio", true)).toContainText("Direct")
+    await expect(row(page, "fedora-laptop", true)).toContainText("Relay via fra")
   } else {
     await expect(svg.getByText(/^direct/)).toBeVisible()
     await expect(svg.getByText(/^relay fra/)).toBeVisible()
@@ -79,20 +86,21 @@ test("diagram labels each edge and dashes only the relay one", async ({ page }) 
 })
 
 test("no IP address appears on the page or in the grid", async ({ page }) => {
+  const isPhone = test.info().project.name === "phone"
   await page.goto("/machines/topology")
-  await expect(row(page, "mac-studio")).toBeVisible()
+  await expect(row(page, "mac-studio", isPhone)).toBeVisible()
   const html = await page.evaluate(() => document.body.outerHTML)
   expect(html).not.toMatch(ipv4)
   expect(html).not.toMatch(ipv6)
-  const gridHtml = await grid(page).evaluate((table) => table.outerHTML)
-  expect(gridHtml).not.toMatch(ipv4)
-  expect(gridHtml).not.toMatch(ipv6)
+  const containerHtml = await (isPhone ? phoneList(page) : grid(page)).evaluate((element) => element.outerHTML)
+  expect(containerHtml).not.toMatch(ipv4)
+  expect(containerHtml).not.toMatch(ipv6)
 })
 
 test("the layout does not overflow at 390 px", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto("/machines/topology")
-  await expect(grid(page)).toBeVisible()
+  await expect(phoneList(page)).toBeVisible()
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
   expect(overflow).toBeLessThanOrEqual(0)

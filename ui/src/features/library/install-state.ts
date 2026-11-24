@@ -37,7 +37,7 @@ export function destinationState(item: InstallItem, target: Destination): Destin
   }
   if (project.error) return { disabled: true, draftReason: "", text: `Could not check pins · ${project.error}` }
   const pin = project.packages.find((entry) => entry.module === item.module)
-  if (pin?.commit === item.commit) return { disabled: true, draftReason: "", text: "Installed" }
+  if (pin?.commit === item.commit) return { disabled: true, draftReason: "", text: "Already installed" }
   return {
     disabled: false,
     draftReason: "",
@@ -45,7 +45,7 @@ export function destinationState(item: InstallItem, target: Destination): Destin
   }
 }
 
-// The exact pins a draft must still match. Throws when the identity is incomplete, so the row can say so.
+// The destination’s last known pins, for checking what changed since the draft was saved.
 export function expectedPins(items: InstallItem[]): Record<string, PackagePin> {
   const pins: Record<string, PackagePin> = {}
   for (const item of items) {
@@ -78,13 +78,20 @@ export async function runLimited<T>(items: T[], keyOf: (item: T) => string, limi
   )
 }
 
-// A draft applies only if the review taken just before applying is still ready and every pin matches.
 export function canApplyDraft(review: DraftReview): boolean {
-  return review.ready && review.pins_match && review.folder_match
+  return review.ready && review.folder_match && Boolean(review.diff?.preview_digest)
+}
+
+export function affectedSessions(sessions: SessionInfo[], directory: string): SessionInfo[] {
+  return sessions.filter((session) => session.directory === directory && session.state.running && (session.state.interactive || session.transport === "acp"))
 }
 
 export function affectedAgents(sessions: SessionInfo[], directory: string): number {
-  return sessions.filter((session) => session.directory === directory && session.state.running && (session.state.interactive || session.transport === "acp")).length
+  return affectedSessions(sessions, directory).length
+}
+
+export function affectedAgentLabels(sessions: SessionInfo[], directory: string): string[] {
+  return affectedSessions(sessions, directory).map((session) => session.name || session.harness)
 }
 
 export function restartCopy(count: number): string {

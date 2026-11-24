@@ -7,7 +7,7 @@ import { useLimitGroups } from "@/features/limits/model"
 import { tightestWindow } from "@/features/limits/model"
 import { AgentTile } from "@/components/kit/agent-tile"
 import { cn } from "@/lib/utils"
-import { fmt, metrics, totalsBy, viewKinds, type UsageHour } from "./model"
+import { fmt, metrics, reportsCost, totalsBy, viewKinds, type UsageHour } from "./model"
 import { useNames, useUsage } from "./use-usage"
 
 const groups = [
@@ -59,7 +59,7 @@ export function UsageSidebar() {
                     <Folder aria-hidden className="shrink-0 text-(--fg2) sel:text-(--accent-fg)" />
                   )}
                   <span className="min-w-0 flex-1 truncate">{names.of(group.kind, id)}</span>
-                  <span className={trailing}>{fmt(value, kind)}</span>
+                  <span className={trailing}>{kind === "cost" && !reportsCost(rows.filter((row) => group.key(row) === id)) ? "—" : fmt(value, kind)}</span>
                 </SourceRow>
               ))}
             </div>

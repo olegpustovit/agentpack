@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test"
+import { session } from "./helpers"
 
 const identity = { node: { id: "n1", name: "host-a", os: "linux", version: "0" }, auth: "password", tailscale_user: "" }
 const alpha = "github.com/acme/alpha"
@@ -44,7 +45,10 @@ const pack = {
   ],
 }
 local.agentpacks = [pack]
-const peer = { packages: [] as unknown[], agentpacks: [] as unknown[], projects: [project("/srv/oracle/app", "folder-oracle")] }
+const peer = { packages: [] as unknown[], agentpacks: [] as unknown[], projects: [{
+  ...project("/srv/oracle/app", "folder-oracle"),
+  packages: [{ ...pkg, module: "github.com/acme/baseline", name: "baseline", commit: "abc1000", cache_key: "baseline-key" }],
+}] }
 const machines: Record<string, { packages: unknown[]; agentpacks: unknown[]; projects: unknown[] }> = { local, n2: peer }
 
 function machineOf(url: string): string {
@@ -76,7 +80,7 @@ async function mockGateway(page: Page) {
   })
   await page.route(/\/api\/library\/drafts\/[^/]+\/review$/, (route) => {
     record(route)
-    return route.fulfill({ json: { draft: drafts[0], ready: true, pins_match: true, folder_match: true, reason: "Ready to install the exact pin.", diff: { add: [alpha], update: [], remove: [], mode: "default" } } })
+    return route.fulfill({ json: { draft: drafts[0], ready: true, pins_match: true, folder_match: true, reason: "Ready to install the exact pin.", diff: { add: [alpha], update: [], remove: [], mode: "default", preview_digest: "install-current" } } })
   })
   await page.route(/\/api\/library\/drafts\/[^/]+$/, (route) => {
     record(route)
@@ -89,7 +93,7 @@ async function mockGateway(page: Page) {
   })
   await page.route(/\/restore-preview\?/, (route) => {
     record(route)
-    return route.fulfill({ json: { add: ["github.com/acme/gamma"], update: [], remove: [], mode: "default" } })
+    return route.fulfill({ json: { add: ["github.com/acme/gamma"], update: [], remove: [], mode: "default", preview_digest: "restore-current" } })
   })
   await page.route(/\/api\/library\/agentpacks\/[^/]+\/revisions\/[^/]+\/restore(\?.*)?$/, (route) => {
     record(route)
@@ -111,7 +115,7 @@ test("two installs run at a time per machine, and nothing is sent before Install
     maxInFlight = Math.max(maxInFlight, inFlight)
     await new Promise<void>((release) => held.push(release))
     inFlight--
-    expect(call.body).toMatchObject({ spec: alphaPin, restart: true })
+    expect(call.body).toMatchObject({ spec: alphaPin, restart: false })
     await route.fulfill({ json: { installed: true } })
   })
 
@@ -154,6 +158,105 @@ test("a row that fails keeps its error visible after the install finishes", asyn
   await expect(page.getByRole("button", { name: "Done" })).toBeVisible()
   await expect(page.getByRole("dialog")).toContainText("Couldn't install: Folder is not available on this machine.")
   await expect(page.getByRole("dialog").getByText("Installed", { exact: true })).toHaveCount(1)
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Retry failed (1)" })).toBeVisible()
+})
+
+test("LIB-05: duplicate project names are distinguishable and rows meet touch height", async ({ page, isMobile }) => {
+  await page.route(/\/api\/projects(\?.*)?$/, (route) => {
+    const node = machineOf(route.request().url())
+    if (node === "local") return route.fulfill({ json: [project("/srv/team-a/web", "f1"), project("/srv/team-b/web", "f2")] })
+    return route.fulfill({ json: [] })
+  })
+
+  await page.goto("/library/package/github.com/acme/alpha")
+  await page.getByRole("button", { name: "Install…" }).click()
+  const dialog = page.getByRole("dialog")
+  const first = dialog.getByRole("checkbox", { name: /\/srv\/team-a\/web/ })
+  const second = dialog.getByRole("checkbox", { name: /\/srv\/team-b\/web/ })
+  await expect(first).toBeVisible()
+  await expect(second).toBeVisible()
+  const secondRow = dialog.locator("label").filter({ hasText: "/srv/team-b/web" })
+  const box = await secondRow.boundingBox()
+  expect(box?.height ?? 0).toBeGreaterThanOrEqual(isMobile ? 44 : 24)
+  await secondRow.click()
+  await expect(second).toBeChecked()
+  await expect(first).not.toBeChecked()
+  await expect(dialog).toContainText("1 project selected")
+})
+
+test.describe("phone viewport", () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+
+  test("LIB-05 on phone: Install rows are at least 44 px tall and distinguishable", async ({ page }) => {
+    await page.route(/\/api\/projects(\?.*)?$/, (route) => {
+      const node = machineOf(route.request().url())
+      if (node === "local") return route.fulfill({ json: [project("/srv/team-a/web", "f1"), project("/srv/team-b/web", "f2")] })
+      return route.fulfill({ json: [] })
+    })
+    await page.goto("/library/package/github.com/acme/alpha")
+    await page.getByRole("button", { name: "Install…" }).click()
+    const dialog = page.getByRole("dialog")
+    const secondRow = dialog.locator("label").filter({ hasText: "/srv/team-b/web" })
+    const box = await secondRow.boundingBox()
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(44)
+    await secondRow.tap({ position: { x: 20, y: box!.height - 1 } })
+    await expect(dialog.getByRole("checkbox", { name: /team-b/ })).toBeChecked()
+    await expect(dialog.getByRole("checkbox", { name: /team-a/ })).not.toBeChecked()
+  })
+})
+
+test("LIB-10: Add package reviews before writes, retains results, and retries only failed packages", async ({ page }) => {
+  const pkgB = { ...pkg, id: "beta-local", module: "github.com/acme/beta", name: "beta", commit: "111122223333" }
+  const pkgC = { ...pkg, id: "gamma-local", module: "github.com/acme/gamma", name: "gamma", commit: "444455556666" }
+  await page.route(/\/api\/library\/packages(\?.*)?$/, (route) =>
+    route.fulfill({ json: machineOf(route.request().url()) === "local" ? [pkg, pkgB, pkgC] : [] }),
+  )
+  let failBeta = true
+  let firstProjectAvailable = true
+  await page.route(/\/api\/projects(\?.*)?$/, (route) =>
+    route.fulfill({
+      json: machineOf(route.request().url()) === "local"
+        ? local.projects.filter((project) => firstProjectAvailable || !project.directory.endsWith("/one"))
+        : [],
+    }),
+  )
+  await page.route(/\/api\/packages(\?.*)?$/, (route) => {
+    const call = record(route)
+    const body = call.body as { spec?: string } | null
+    if (body?.spec?.includes("beta") && failBeta) {
+      firstProjectAvailable = false
+      return route.fulfill({ status: 500, json: { error: "Checksum mismatch on beta package download." } })
+    }
+    return route.fulfill({ json: { installed: true } })
+  })
+
+  await page.goto("/library?add=1")
+  const dialog = page.getByRole("dialog")
+  await dialog.getByRole("checkbox", { name: /^alpha/ }).click()
+  await dialog.getByRole("checkbox", { name: /^beta/ }).click()
+  await dialog.getByRole("checkbox", { name: /^gamma/ }).click()
+  await dialog.getByRole("button", { name: "Review packages", exact: true }).click()
+  const review = dialog.getByRole("list", { name: "Packages to install" })
+  await expect(review.getByRole("listitem")).toHaveCount(3)
+  await expect(review).toContainText(alphaPin)
+  await expect(review).toContainText("host-a · /srv/local/one")
+  await expect(dialog.getByRole("checkbox", { name: "Restart affected agents now" })).not.toBeChecked()
+  expect(calls).toEqual([])
+  await dialog.getByRole("button", { name: "Install 3 packages" }).click()
+
+  await expect(dialog).toContainText("2 installed · 1 failed")
+  await expect(dialog.getByText("Installed", { exact: true })).toHaveCount(2)
+  await expect(dialog).toContainText("Couldn't install: Checksum mismatch on beta package download.")
+  expect(calls).toHaveLength(3)
+
+  failBeta = false
+  calls.length = 0
+  await dialog.getByRole("button", { name: "Retry failed (1)" }).click()
+  await expect(dialog.getByText("Installed", { exact: true })).toHaveCount(3)
+  expect(calls).toHaveLength(1)
+  expect(calls[0]?.body).toMatchObject({ spec: expect.stringContaining("beta"), directory: "/srv/local/one", restart: false })
+  await dialog.getByRole("button", { name: "Done", exact: true }).click()
+  await expect(dialog).toBeHidden()
 })
 
 test("an install into an offline machine is saved as a draft with its exact pins", async ({ page }) => {
@@ -183,13 +286,31 @@ test("an install into an offline machine is saved as a draft with its exact pins
         directory: "/srv/oracle/app",
         reason: "Machine offline",
         folder_identity: "folder-oracle",
-        expected_pins: { [alpha]: { commit: "abcd1234ef56", cache_key: "alpha-key" } },
+        expected_pins: { "github.com/acme/baseline": { commit: "abc1000", cache_key: "baseline-key" } },
       },
     },
   ])
 })
 
-test("restore takes one project at a time and shows the live diff for it", async ({ page }) => {
+test("restore requires a server-reviewed digest and a new confirmation after conflict", async ({ page }) => {
+  await page.route(/\/api\/sessions(\?.*)?$/, (route) =>
+    route.fulfill({ json: [
+      { ...session, id: "affected", name: "Build review", directory: "/srv/oracle/app", node_id: "n2" },
+      { ...session, id: "elsewhere", name: "Other session", directory: "/srv/local/one" },
+    ] }),
+  )
+  let digest: string | undefined
+  let changed = false
+  await page.route(/\/restore-preview\?/, (route) =>
+    route.fulfill({ json: { add: ["github.com/acme/gamma"], update: changed ? [alpha] : [], remove: [], preview_digest: digest } }),
+  )
+  await page.route(/\/revisions\/rev1\/restore(\?.*)?$/, (route) => {
+    record(route)
+    if (changed) return route.fulfill({ json: { restored: true } })
+    changed = true
+    digest = "restore-next"
+    return route.fulfill({ status: 409, json: { error: "Changed since preview" } })
+  })
   await page.goto("/library/agentpack/pk1")
   await page.getByRole("button", { name: /Initial/ }).click()
   await page.getByRole("button", { name: "Restore…" }).click()
@@ -197,15 +318,29 @@ test("restore takes one project at a time and shows the live diff for it", async
   const dialog = page.getByRole("dialog")
   await dialog.getByRole("radio", { name: /one/ }).check()
   await expect(dialog.getByText("Add github.com/acme/gamma")).toBeVisible()
+  await expect(dialog).toContainText("Needs update")
+  await expect(dialog.getByRole("button", { name: "Restore", exact: true })).toBeDisabled()
+  digest = "restore-current"
   await dialog.getByRole("radio", { name: /app/ }).check()
   await expect(dialog.getByRole("radio", { checked: true })).toHaveCount(1)
   await expect(dialog.getByRole("radio", { name: /app/ })).toBeChecked()
   await expect(dialog.getByRole("radio", { name: /one/ })).not.toBeChecked()
+  const affected = dialog.getByRole("region", { name: "Affected sessions" })
+  await expect(affected.getByRole("listitem")).toHaveText(["Build review"])
+  await expect(dialog.getByRole("checkbox", { name: /Restart affected agents/ })).not.toBeChecked()
 
   await dialog.getByRole("button", { name: "Restore", exact: true }).click()
+  await expect(dialog).toContainText("Changed since you reviewed")
+  await expect(dialog).toContainText(`Update ${alpha}`)
+  const restores = () => calls.filter((call) => call.path.endsWith("/restore"))
+  expect(restores()).toHaveLength(1)
+  await dialog.getByRole("button", { name: "Confirm restore", exact: true }).click()
   await expect(page.getByText("Restored team-pack")).toBeVisible()
-  const restore = calls.find((call) => call.path.endsWith("/restore"))
-  expect(restore).toMatchObject({ method: "POST", node: "n2", body: { directory: "/srv/oracle/app", restart: true } })
+  expect(restores()).toMatchObject(
+    ["restore-current", "restore-next"].map((preview_digest) => ({
+      method: "POST", node: "n2", body: { directory: "/srv/oracle/app", restart: false, preview_digest },
+    })),
+  )
 })
 
 test("Add package… from ?add=1 posts the spec to the chosen project", async ({ page }) => {
@@ -216,8 +351,9 @@ test("Add package… from ?add=1 posts the spec to the chosen project", async ({
   await dialog.getByLabel("Package", { exact: true }).fill("github.com/acme/new@abcd1234ef56")
   await dialog.getByRole("combobox", { name: "Project" }).click()
   await page.getByRole("option", { name: /oracle-vm · app/ }).click()
+  await dialog.getByRole("button", { name: "Review packages", exact: true }).click()
   await expect(dialog.getByRole("checkbox", { name: "Restart affected agents now" })).not.toBeChecked()
-  await dialog.getByRole("button", { name: "Add package", exact: true }).click()
+  await dialog.getByRole("button", { name: "Install 1 package", exact: true }).click()
 
   await expect.poll(() => calls.length).toBe(1)
   expect(calls[0]).toEqual({
@@ -226,5 +362,6 @@ test("Add package… from ?add=1 posts the spec to the chosen project", async ({
     node: "n2",
     body: { directory: "/srv/oracle/app", spec: "github.com/acme/new@abcd1234ef56", restart: false },
   })
+  await dialog.getByRole("button", { name: "Done", exact: true }).click()
   await expect(page).toHaveURL(/\/library$/)
 })

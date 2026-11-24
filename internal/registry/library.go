@@ -227,7 +227,14 @@ func cachedModule(owner, repo, inRepoPath string) (string, bool) {
 // which of the packages it needs this machine still has to fetch.
 func (s *Store) DraftStateOf(draft Draft, definition string) (DraftState, error) {
 	state := DraftState{Pins: map[string]PackagePin{}}
-	locked, err := lockfile.LoadFromPath(paths.LockPath(definition))
+	snapshot, err := readReviewSnapshot(definition)
+	if err != nil {
+		return state, err
+	}
+	if !snapshot.hadLock {
+		return state, fmt.Errorf("project lockfile is missing")
+	}
+	locked, err := decodeLock(snapshot.lock)
 	if err != nil {
 		return state, err
 	}
@@ -276,7 +283,7 @@ func (s *Store) DraftStateOf(draft Draft, definition string) (DraftState, error)
 				return state, nil
 			}
 		}
-		diff := DiffResult{Add: []string{}, Update: []string{}, Remove: []string{}}
+		diff := DiffResult{Add: []string{}, Update: []string{}, Remove: []string{}, PreviewDigest: snapshot.digest(definition, "install:"+draft.Item)}
 		if current, exists := state.Pins[module]; !exists {
 			diff.Add = append(diff.Add, module)
 		} else if current.Commit != commit {

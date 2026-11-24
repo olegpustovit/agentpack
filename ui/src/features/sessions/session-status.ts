@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useSyncExternalStore } from "react"
 import type { WaitItem } from "@/lib/api-types"
 import { lastActivity, rowKey, type ListedSession } from "./group"
 
@@ -44,7 +44,7 @@ export function sessionGlyphState(session: ListedSession): "running" | "stopped"
   if (session.offline) return "offline"
   if (isStarting(session)) return "starting"
   // A stopped chat can keep a stale needs_you; nothing can answer it any more.
-  if (!session.state.running && !session.state.restarting) return "stopped"
+  if (session.ended_at || (!session.state.running && !session.state.restarting)) return "stopped"
   if (session.conversation_state === "needs_you") return "needsYou"
   if (session.conversation_state === "idle" && session.state.running) return openWaits(session).length ? "waiting" : "idle"
   if (session.conversation_state === "working" && session.state.running) return "running"
@@ -76,7 +76,7 @@ export function sessionStatusWord(session: ListedSession, stopping: boolean): st
   if (stopping) return "Stopping…"
   if (isStarting(session)) return undefined
   if (session.state.restarting) return "Restarting"
-  if (!session.state.running) return "Stopped"
+  if (session.ended_at || !session.state.running) return session.conversation_state === "needs_you" ? "Stopped · request expired" : "Stopped"
   if (session.conversation_state === "needs_you") return "Needs you"
   if (session.state.running) return undefined
   return "Stopped"
@@ -99,9 +99,33 @@ export function isUnread(session: ListedSession, seenAt: number | undefined): bo
 }
 
 const SEEN_KEY = "agentpack.sessions.seen"
+const seenListeners = new Set<() => void>()
+let seen: Record<string, number> | undefined
+
+function subscribeSeen(listener: () => void) {
+  seenListeners.add(listener)
+  return () => { seenListeners.delete(listener) }
+}
+
+function getSeen() {
+  return seen ??= loadSeen()
+}
+
+export function useSeen() {
+  return useSyncExternalStore(subscribeSeen, getSeen)
+}
+
+export function markSeen(key: string, activity: string | undefined) {
+  const current = getSeen()
+  const at = Math.max(Date.now(), activity ? Date.parse(activity) || 0 : 0)
+  if ((current[key] ?? 0) >= at) return
+  seen = { ...current, [key]: at }
+  saveSeen(seen)
+  for (const listener of seenListeners) listener()
+}
 
 // Per-viewer convenience: storage may be blocked, so every access falls back to nothing.
-export function loadSeen(): Record<string, number> {
+function loadSeen(): Record<string, number> {
   try {
     const stored = localStorage.getItem(SEEN_KEY)
     // First visit: rows never opened count as seen now, so old history isn't all "unread".
@@ -117,7 +141,7 @@ export function loadSeen(): Record<string, number> {
   }
 }
 
-export function saveSeen(seen: Record<string, number>) {
+function saveSeen(seen: Record<string, number>) {
   try {
     localStorage.setItem(SEEN_KEY, JSON.stringify(seen))
   } catch {

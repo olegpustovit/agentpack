@@ -21,7 +21,7 @@ import (
 )
 
 func (g *Gateway) registerAuth(mux routeRegistrar) {
-	mux.HandleFunc("GET /api/status", g.auth.status)
+	mux.HandleFunc("GET /api/status", g.accountStatus)
 	mux.HandleFunc("POST /api/claim", g.auth.claim)
 	mux.HandleFunc("POST /api/login", g.auth.login)
 	mux.HandleFunc("POST /api/logout", g.logout)
@@ -139,28 +139,40 @@ AND EXISTS(SELECT 1 FROM users u WHERE u.email=auth_sessions.email AND u.disable
 
 func (a *gatewayAuth) authenticated(r *http.Request) bool { return a.email(r) != "" }
 
-func (a *gatewayAuth) status(w http.ResponseWriter, r *http.Request) {
-	claimed, err := a.claimed(r.Context())
-	if err != nil {
+func (g *Gateway) accountStatus(w http.ResponseWriter, r *http.Request) {
+	a := g.auth
+	var hasAccounts bool
+	var joinPeer string
+	if err := a.store.Reader.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM users), join_peer FROM local_node WHERE id=1").Scan(&hasAccounts, &joinPeer); err != nil {
 		authFailure(w, r, "account state unavailable", err)
 		return
 	}
-	legacy := false
-	if !claimed {
+	status := AccountStatus{Claimed: hasAccounts || joinPeer != "", Joining: !hasAccounts && joinPeer != "", NodeName: session.LocalHostname()}
+	if !status.Claimed {
 		hash, err := a.legacyHash()
 		if err != nil {
 			authFailure(w, r, "legacy account unavailable", err)
 			return
 		}
-		legacy = len(hash) != 0
+		status.Legacy = len(hash) != 0
 	}
-	var joining bool
-	if err := a.store.Reader.QueryRowContext(r.Context(), "SELECT NOT EXISTS(SELECT 1 FROM users) AND join_peer<>'' FROM local_node WHERE id=1").Scan(&joining); err != nil {
-		authFailure(w, r, "account state unavailable", err)
-		return
+	if joinPeer != "" {
+		status.JoinPhase = "ready"
+		if status.Joining {
+			status.JoinPhase = "waiting_for_approval"
+			if value, ok := g.replicaStatus.Load(joinPeer); ok {
+				contact := value.(replicaContact)
+				// A reachable peer may still refuse the pull. A schema response or a
+				// successful pull confirms that the peer let us reach the sync handler.
+				if contact.Schema > 0 || !contact.LastSuccess.IsZero() {
+					status.JoinPhase = "waiting_for_accounts"
+				}
+			}
+		}
 	}
-	email := a.email(r)
-	network.WriteJSON(w, AccountStatus{Joining: joining, Claimed: claimed, Legacy: legacy, Authenticated: email != "", Email: email})
+	status.Email = a.email(r)
+	status.Authenticated = status.Email != ""
+	network.WriteJSON(w, status)
 }
 
 func (a *gatewayAuth) claim(w http.ResponseWriter, r *http.Request) {

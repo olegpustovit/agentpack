@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -299,14 +300,106 @@ func TestResumedWorkerReclaimsItsDirectoryOnlyWhenNoWorkerOwnsIt(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "session-old"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := network.CreateSessionDirectory(root, "session-old"); err != nil {
+	if _, err := network.CreateSessionDirectory(root, "session-old", false); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("a fresh terminal must not reuse a directory: %v", err)
+	}
+	if _, err := network.CreateSessionDirectory(root, "session-old", true); err != nil {
 		t.Fatalf("reclaim: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "session-old", "worker.json"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := network.CreateSessionDirectory(root, "session-old"); err == nil {
+	if _, err := network.CreateSessionDirectory(root, "session-old", true); err == nil {
 		t.Fatal("reclaimed a directory a worker owns")
+	}
+}
+
+func TestClientTerminalStartKeepsItsClaimAfterDisconnect(t *testing.T) {
+	home := t.TempDir()
+	dir := seedFolder(t, home)
+	var g *Gateway
+	var calls atomic.Int32
+	launched := make(chan session.SessionInfo, 1)
+	ready := make(chan struct{})
+	release := sync.OnceFunc(func() { close(ready) })
+	defer release()
+	g, origin := identityGateway(t, home, func(ctx context.Context, info session.SessionInfo, _ string) (string, error) {
+		if calls.Add(1) != 1 {
+			return "", errors.New("terminal launched twice")
+		}
+		launched <- info
+		select {
+		case <-ready:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+		info.State = session.TerminalState{Interactive: true, Running: true, ExitCode: -1}
+		return info.ID, session.UpsertSession(ctx, g.store.DB, info)
+	})
+	testBrowserSession(t, g.auth, testBrowserEmail, "terminal-owner")
+	testBrowserSession(t, g.auth, "member@example.com", "terminal-member")
+	input := chatStartRequest{ID: "session-c869f1e8ca0449a5b2ee5a43fd3c1de3", Directory: dir, Harness: "claude", Mode: "default", Transport: "terminal"}
+	handler := g.Handler()
+	request := func(ctx context.Context, method, path, cookie string, options chatStartRequest) *httptest.ResponseRecorder {
+		r := httptest.NewRequestWithContext(ctx, method, origin.String()+path, bytes.NewReader(network.MustRawJSON(options)))
+		r.RemoteAddr = "127.0.0.1:8000"
+		r.Header.Set("Origin", origin.String())
+		r.AddCookie(&http.Cookie{Name: "agentpack_session", Value: cookie})
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() { first <- request(ctx, http.MethodPost, "/api/sessions", "terminal-owner", input) }()
+	select {
+	case info := <-launched:
+		if info.ID != input.ID || info.Transport != "terminal" {
+			t.Fatalf("worker launch %+v", info)
+		}
+	case result := <-first:
+		t.Fatalf("claim answered before launching: %d %s", result.Code, result.Body)
+	case <-time.After(3 * time.Second):
+		t.Fatal("terminal did not start")
+	}
+	cancel()
+	if w := request(t.Context(), http.MethodPost, "/api/sessions", "terminal-owner", input); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unfinished replay: %d %s", w.Code, w.Body)
+	}
+	if w := request(t.Context(), http.MethodPost, "/api/sessions", "terminal-member", input); w.Code != http.StatusConflict {
+		t.Fatalf("claim by another actor: %d %s", w.Code, w.Body)
+	}
+	different := input
+	different.Mode = "different"
+	if w := request(t.Context(), http.MethodPost, "/api/sessions", "terminal-owner", different); w.Code != http.StatusConflict {
+		t.Fatalf("claim with different input: %d %s", w.Code, w.Body)
+	}
+	different = input
+	different.Transport = "acp"
+	if w := request(t.Context(), http.MethodPost, "/api/sessions", "terminal-owner", different); w.Code != http.StatusConflict {
+		t.Fatalf("claim from a different transport: %d %s", w.Code, w.Body)
+	}
+	release()
+	select {
+	case result := <-first:
+		if result.Code != http.StatusOK {
+			t.Fatalf("disconnected claim: %d %s", result.Code, result.Body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("terminal claim did not finish")
+	}
+	for _, w := range []*httptest.ResponseRecorder{
+		request(t.Context(), http.MethodPost, "/api/sessions", "terminal-owner", input),
+		request(t.Context(), http.MethodGet, "/api/sessions/"+input.ID, "terminal-owner", chatStartRequest{}),
+	} {
+		var info session.SessionInfo
+		if err := json.Unmarshal(w.Body.Bytes(), &info); w.Code != http.StatusOK || err != nil || info.ID != input.ID || !info.State.Interactive {
+			t.Fatalf("recover terminal: %d %s", w.Code, w.Body)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("terminal launched %d times", calls.Load())
 	}
 }
 

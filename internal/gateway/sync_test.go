@@ -305,6 +305,12 @@ func TestStatePeerLoopWakesAndRecoversFromVersionSkew(t *testing.T) {
 		v, ok := target.replicaStatus.Load("trusted")
 		return ok && v.(replicaContact).NeedsUpdate
 	})
+	status.Store(http.StatusForbidden)
+	wake <- struct{}{}
+	wait(func() bool {
+		v, ok := target.replicaStatus.Load("trusted")
+		return ok && v.(replicaContact).NeedsTrust && v.(replicaContact).Reachable && !v.(replicaContact).NeedsUpdate
+	})
 	status.Store(0)
 	if _, err := source.auth.store.DB.Exec("INSERT INTO sessions(id,node_id,name) VALUES ('loop','source','arrived')"); err != nil {
 		t.Fatal(err)

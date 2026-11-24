@@ -52,11 +52,19 @@ func TestPendingJoinClosesClaimWindowAndInheritsAccounts(t *testing.T) {
 		handler.ServeHTTP(w, r)
 		return w
 	}
-	w := request("/api/status", false)
-	var status AccountStatus
-	if err := json.Unmarshal(w.Body.Bytes(), &status); err != nil || !status.Joining || !status.Claimed {
-		t.Fatalf("pending status: %+v %v", status, err)
+	checkStatus := func(phase string, pending bool) {
+		t.Helper()
+		w := request("/api/status", false)
+		var status AccountStatus
+		if err := json.Unmarshal(w.Body.Bytes(), &status); err != nil || !status.Claimed || status.Joining != pending || status.JoinPhase != phase || status.Authenticated || status.Email != "" {
+			t.Fatalf("expected %s: %+v %v", phase, status, err)
+		}
 	}
+	checkStatus("waiting_for_approval", true)
+	joining.replicaStatus.Store("source", replicaContact{Reachable: true, NeedsUpdate: true, Error: "peer needs update"})
+	checkStatus("waiting_for_approval", true)
+	joining.replicaStatus.Store("source", replicaContact{Reachable: true, Schema: replicationVersion})
+	checkStatus("waiting_for_accounts", true)
 	if w := request("/api/sessions", true); w.Code != 403 {
 		t.Fatalf("joining peer served application data: %d", w.Code)
 	}
@@ -103,12 +111,7 @@ func TestPendingJoinClosesClaimWindowAndInheritsAccounts(t *testing.T) {
 	if _, _, err := pullState(t.Context(), auth.store, server.Client(), endpoint, nil); err != nil {
 		t.Fatal(err)
 	}
-	w = request("/api/status", false)
-	// Decode into a fresh value: an omitted false field must not preserve the earlier true value.
-	status = AccountStatus{}
-	if err := json.Unmarshal(w.Body.Bytes(), &status); err != nil || status.Joining || !status.Claimed {
-		t.Fatalf("inherited status: %+v %v", status, err)
-	}
+	checkStatus("ready", false)
 	users, err := ListUsers(t.Context(), auth.store)
 	if err != nil || len(users) != 1 || users[0].Email != testBrowserEmail {
 		t.Fatalf("inherited accounts: %+v %v", users, err)

@@ -3,6 +3,7 @@ import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import { QueryClientProvider } from "@tanstack/react-query"
 import { RouterProvider } from "@tanstack/react-router"
+import { safeReturnTo } from "./features/auth/return-to"
 import { setUnauthorizedHandler } from "./lib/api"
 import { terminalPool } from "./features/terminal/pool"
 import { queryClient, router } from "./router"
@@ -40,9 +41,12 @@ window.addEventListener("vite:preloadError", (event) => {
 // A 401 ends the session: close every terminal socket before the login screen takes over.
 setUnauthorizedHandler(() => {
   terminalPool.disposeAll()
-  queryClient.clear()
   forgetQueries()
-  void router.navigate({ to: "/login" })
+  const { pathname, href } = router.history.location
+  // Old requests can still return 401 while the login route is loading its status.
+  if (pathname === "/login") return
+  queryClient.clear()
+  void router.navigate({ to: "/login", search: { return_to: safeReturnTo(href) }, replace: true })
 })
 
 // Secure origins only; on a plain-HTTP tailnet address registration fails and the app just loads from the network.

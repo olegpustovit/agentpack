@@ -1,33 +1,52 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useEffect, useLayoutEffect, useRef, type MouseEvent, type ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { Empty } from "@/components/kit/feedback"
-import { FieldError, PopupSelect } from "@/components/kit/forms"
 import { GroupHeader } from "@/components/kit/list"
 import { Button, buttonVariants } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { conversationEventsQuery } from "@/features/conversation/queries"
 import { isOpenRequest, reduceThread } from "@/features/conversation/reducer"
 import { ElicitationCard, PermissionCard } from "@/features/conversation/request-cards"
-import { useMachineQueries } from "@/features/machines/queries"
-import type { ProjectRow } from "@/lib/api-types"
 import { basename, harnessName, shortAge } from "@/lib/format"
 import { useNow } from "@/lib/use-now"
-import { loadStartChoices } from "./choices"
+import { lastSession } from "@/features/shell/views"
 import { lastActivity, rowKey, sessionLabel, type ListedSession } from "./group"
-import { projectsQuery, useListedSessions } from "./queries"
-import { agentIds, canStart, defaultAgent, mergeProjects, placeLabel } from "./rules"
-import { isUnread, loadSeen, openWaits, sessionGlyphState, waitingDetail } from "./session-status"
-import { useStartSession } from "./start"
+import { useListedSessions } from "./queries"
+import { isUnread, openWaits, sessionGlyphState, useSeen, waitingDetail } from "./session-status"
 import { projectDirectory, sessionGitQuery } from "./git"
 
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
 
 // The Sessions pane with nothing open: start a task, answer what waits on you, see what runs and what finished.
-export function SessionsHome() {
+export type WorkPosition = { top: number; group: string }
+
+export function SessionsHome({ draft, setDraft, onReview, rememberPosition, takePosition }: {
+  draft: string
+  setDraft: (draft: string) => void
+  onReview: () => void
+  rememberPosition: (position: WorkPosition) => void
+  takePosition: () => WorkPosition | null
+}) {
   const { sessions, queries } = useListedSessions()
-  // Read once: opening a row from here marks it seen in the sidebar, which this pane then outlives.
-  const [seen] = useState(loadSeen)
+  const seen = useSeen()
+  const scroller = useRef<HTMLDivElement>(null)
+  const last = lastSession()
+  useLayoutEffect(() => {
+    if (location.pathname !== "/sessions" && location.pathname !== "/sessions/") return
+    const view = scroller.current
+    const previous = takePosition()
+    if (!previous || !view) return
+    view.scrollTop = previous.top
+    const heading = view.querySelector<HTMLElement>(`[data-work-group="${previous.group}"] h2`)
+    heading?.focus({ preventScroll: true })
+    heading?.scrollIntoView({ block: "nearest" })
+  }, [])
+
+  function onOpenWorkItem(event: MouseEvent<HTMLDivElement>) {
+    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || !(event.target instanceof Element)) return
+    const group = event.target.closest("a[href]")?.closest<HTMLElement>("[data-work-group]")?.dataset.workGroup
+    if (group) rememberPosition({ group, top: event.currentTarget.scrollTop })
+  }
   const now = useNow(true, 60_000)
   const needsYou = sessions.filter((session) => sessionGlyphState(session) === "needsYou")
   const working = sessions.filter((session) => sessionGlyphState(session) === "running" && session.conversation_state === "working")
@@ -40,51 +59,59 @@ export function SessionsHome() {
   }
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div ref={scroller} className="h-full min-h-0 flex-1 overflow-y-auto" onClickCapture={onOpenWorkItem}>
       <div className="mx-auto flex max-w-[46rem] flex-col gap-(--s6) px-(--s6) py-(--s6)">
-        <TaskBar />
-        {needsYou.length > 0 && (
-          <Section title={`Needs you · ${needsYou.length}`} hint={`${isMac ? "⌘⇧J" : "Ctrl+Shift+J"} jumps to the next one`}>
-            {needsYou.map((session) => <WaitingItem key={rowKey(session)} session={session} now={now} />)}
-          </Section>
-        )}
-        {working.length > 0 && (
-          <Section title={`Working · ${working.length}`}>
-            {/* shortcut: no live activity line (the list has no current-step field); add it when sessions carry one. */}
-            {working.map((session) => <HomeRow key={rowKey(session)} session={session} now={now} />)}
-          </Section>
-        )}
-        {waiting.length > 0 && (
-          <Section title={`Waiting · ${waiting.length}`}>
-            {waiting.map((session) => <HomeRow key={rowKey(session)} session={session} now={now} reason={waitingDetail(openWaits(session, now), chatName, now)} />)}
-          </Section>
-        )}
-        {ready.length > 0 && (
-          <Section title={`Ready for review · ${ready.length}`}>
-            {ready.map((session) => (
-              <HomeRow key={rowKey(session)} session={session} now={now} unread>
-                <DiffStat session={session} />
-                <Link to="/sessions/$machine/$sessionId" params={{ machine: session.machine, sessionId: session.id }} search={true} className={buttonVariants({ size: "sm" })}>
-                  Review
-                </Link>
-              </HomeRow>
-            ))}
-          </Section>
-        )}
-        {quiet && <Empty title="Nothing waiting">Start a task above, or pick a session on the left.</Empty>}
+        <div className="flex flex-wrap items-center justify-between gap-(--s3)">
+          <h2 className="text-(length:--fs-lg) font-semibold">Work</h2>
+          {last && (
+            <Link to="/sessions/$machine/$sessionId" params={{ machine: last.machine, sessionId: last.sessionId }} search={last.search}
+              className={buttonVariants({ size: "sm" })}>
+              Continue last session
+            </Link>
+          )}
+        </div>
+        <form aria-label="Start a task" className="flex flex-wrap items-center gap-(--s3)" onSubmit={(event) => {
+          event.preventDefault()
+          onReview()
+        }}>
+          <textarea aria-label="Task" placeholder="Describe a task" rows={1} value={draft}
+            onChange={(event) => setDraft(event.currentTarget.value)}
+            className="min-h-(--ctl-h) min-w-40 flex-1 resize-y rounded-(--r-ctl) border-[0.5px] border-(--control-edge) bg-(--field) px-(--s3) py-(--s2) text-(length:--fs)" />
+          <Button type="submit" variant="primary">Start a task</Button>
+        </form>
+        <Section title="Needs you" count={needsYou.length} hint={needsYou.length > 0 ? `${isMac ? "⌘⇧J" : "Ctrl+Shift+J"} jumps to the next one` : undefined}>
+          {needsYou.map((session) => <WaitingItem key={rowKey(session)} session={session} now={now} />)}
+        </Section>
+        <Section title="Working" count={working.length}>
+          {working.map((session) => <HomeRow key={rowKey(session)} session={session} now={now} />)}
+        </Section>
+        <Section title="Waiting on background work" count={waiting.length}>
+          {waiting.map((session) => <HomeRow key={rowKey(session)} session={session} now={now} reason={waitingDetail(openWaits(session, now), chatName, now)} />)}
+        </Section>
+        <Section title="Ready for review" count={ready.length}>
+          {ready.map((session) => (
+            <HomeRow key={rowKey(session)} session={session} now={now} unread>
+              <DiffStat session={session} />
+              <Link to="/sessions/$machine/$sessionId" params={{ machine: session.machine, sessionId: session.id }} search={true} className={buttonVariants({ size: "sm" })}>
+                Review<span className="sr-only"> {sessionLabel(session)}</span>
+              </Link>
+            </HomeRow>
+          ))}
+        </Section>
+        {quiet && <Empty title="Nothing waiting">Start a task above or choose a session from the list.</Empty>}
       </div>
     </div>
   )
 }
 
-function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+function Section({ title, count, hint, children }: { title: string; count: number; hint?: string; children: ReactNode }) {
   return (
-    <section aria-label={title.split(" · ")[0]} className="flex flex-col">
-      <GroupHeader className="border-b-[0.5px] border-(--sep) px-0">
-        <span className="min-w-0 flex-1 truncate">{title}</span>
-        {hint && <span className="shrink-0 font-normal text-(--fg3)">{hint}</span>}
+    <section aria-label={title} data-work-group={title} className="flex flex-col">
+      <GroupHeader className="h-auto min-h-(--head-h) flex-wrap border-b-[0.5px] border-(--sep) px-0">
+        <h2 tabIndex={-1} className="min-w-0 flex-1 rounded-(--r-xs)">{title} · {count}</h2>
+        {hint && <span className="font-normal text-(--fg3)">{hint}</span>}
       </GroupHeader>
-      <ul className="flex flex-col">{children}</ul>
+      {count > 0 && <ul className="flex flex-col">{children}</ul>}
     </section>
   )
 }
@@ -92,17 +119,17 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
 function HomeRow({ session, now, unread, reason, children }: { session: ListedSession; now: number; unread?: boolean; reason?: string; children?: ReactNode }) {
   const when = lastActivity(session)
   return (
-    <li className="flex min-h-(--row-h) min-w-0 items-center gap-(--s4) border-b-[0.5px] border-(--sep-soft) py-(--s2)">
+    <li className="flex min-h-(--row-h) min-w-0 flex-wrap items-center gap-x-(--s4) gap-y-(--s1) border-b-[0.5px] border-(--sep-soft) py-(--s2)">
       <Link
         to="/sessions/$machine/$sessionId"
         params={{ machine: session.machine, sessionId: session.id }}
         search={true}
-        className="min-w-0 flex-1 truncate text-(length:--fs) text-(--fg) hover:underline data-[unread=true]:font-semibold"
+        className="min-w-0 flex-1 wrap-anywhere text-(length:--fs) text-(--fg) hover:underline data-[unread=true]:font-semibold"
         data-unread={unread ? "true" : undefined}
       >
         {sessionLabel(session)}
       </Link>
-      <span className="shrink-0 text-(length:--fs-sm) text-(--fg2)">
+      <span className="min-w-0 wrap-anywhere text-(length:--fs-sm) text-(--fg2) max-[760px]:order-last max-[760px]:basis-full">
         {[basename(projectDirectory(session)), session.machineName, reason || (when && `active ${shortAge(new Date(when), now)}`)].filter(Boolean).join(" · ")}
       </span>
       {children}
@@ -149,85 +176,5 @@ function WaitingItem({ session, now }: { session: ListedSession; now: number }) 
         </li>
       )}
     </>
-  )
-}
-
-// Project, machine and agent pickers over the projects query, defaulting to the last choices; Start opens the new session.
-// The task text is the chat's first message, sent once the agent is up, as from New session.
-function TaskBar() {
-  const [task, setTask] = useState("")
-  const { machines } = useListedSessions()
-  const projectQueries = useMachineQueries(projectsQuery)
-  const start = useStartSession()
-  const [projectKey, setProjectKey] = useState<string | null>(null)
-  const [placeKey, setPlaceKey] = useState<string | null>(null)
-  const [harness, setHarness] = useState<string | null>(null)
-
-  const rows: Record<string, ProjectRow[] | undefined> = {}
-  for (const machine of machines) rows[machine.id] = projectQueries.byMachine[machine.id]?.data
-  const projects = mergeProjects(machines, rows)
-  const project = projects.find((item) => item.key === projectKey) ?? projects.find((item) => item.places.some(canStart))
-  const place = project?.places.find((item) => item.key === placeKey) ?? project?.places.find(canStart)
-  const remembered = place ? loadStartChoices(place.row.directory) : {}
-  const usual = defaultAgent(remembered, place?.row.launches ?? [])
-  const harnessId = harness ?? usual.harness
-  const mode = harnessId === usual.harness ? usual.mode : place?.row.launches.find((launch) => launch.harness === harnessId)?.mode || "default"
-  const view = remembered.view ?? "chat"
-  const ok = Boolean(place && canStart(place))
-
-  return (
-    <form
-      aria-label="Start a task"
-      className="flex flex-col gap-(--s3)"
-      onSubmit={(event) => {
-        event.preventDefault()
-        if (place && ok) start.mutate({ machine: place.machine, directory: place.row.directory, harness: harnessId, mode, view, prompt: task })
-      }}
-    >
-      <div className="flex min-w-0 flex-wrap items-center gap-(--s3) rounded-(--r-sheet) bg-(--window) p-(--s4) shadow-(--shadow-card)">
-        {project && place ? (
-          <>
-            {view === "chat" && (
-              <Input aria-label="Task" placeholder="Describe a task" value={task} onChange={(event) => setTask(event.currentTarget.value)} className="basis-full" />
-            )}
-            <PopupSelect
-              label="Project"
-              value={project.key}
-              onValueChange={(next) => {
-                setProjectKey(next)
-                setPlaceKey(null)
-                setHarness(null)
-              }}
-              items={projects.map((item) => ({ value: item.key, label: item.name, disabled: !item.places.some(canStart) }))}
-            />
-            <PopupSelect
-              label="Machine"
-              value={place.key}
-              onValueChange={(next) => {
-                setPlaceKey(next)
-                setHarness(null)
-              }}
-              items={project.places.map((item) => ({ value: item.key, label: placeLabel(item, project.places), disabled: !canStart(item) }))}
-            />
-            <PopupSelect label="Agent" value={harnessId} onValueChange={setHarness} items={agentIds.map((id) => ({ value: id, label: harnessName(id) }))} />
-          </>
-        ) : (
-          <span className="text-(--fg2)">{projectQueries.firstLoadPending ? "Loading projects…" : "Run an agent in a folder first, for example agentpack claude. It then appears here."}</span>
-        )}
-        <div className="flex-1" />
-        <Button type="submit" variant="primary" disabled={!ok || start.isPending}>
-          {start.isPending ? "Starting…" : "Start"}
-        </Button>
-      </div>
-      {project && place && (
-        <p className="px-(--s2) text-(length:--fs-sm) text-(--fg2)">
-          Starts {harnessName(harnessId)} in <b className="font-semibold text-(--fg)">{project.name}</b> on <b className="font-semibold text-(--fg)">{place.machineName}</b>
-          {mode !== "default" && ` · ${mode}`}
-          {view === "terminal" && " · Terminal"}
-          {view === "chat" && task.trim() && " · sends the task"}
-        </p>
-      )}
-      {start.error && <FieldError>{start.error.message}</FieldError>}
-    </form>
   )
 }

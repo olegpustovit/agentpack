@@ -1,5 +1,22 @@
 # Home-workspace startup performance
 
+## Gateway launch review (2026-11-24)
+
+The gateway now checks invalid worktree selections before accepting a launch and
+uses a client-provided session ID to identify a terminal launch after a disconnect.
+On `oracle-vm` (Linux ARM64), the medians of five alternating baseline (`9802dca4`)
+and updated runs met the existing setup budgets with the 32 MiB history fixture.
+
+| Benchmark | Before (ms) | After (ms) | Budget (ms) |
+| --- | ---: | ---: | ---: |
+| `BenchmarkMaterializationHome` | 0.841 | 0.866 | <1 |
+| `BenchmarkCodexSetup/cold` | 18.393 | 19.195 | <20 |
+| `BenchmarkCodexSetup/warm` | 0.381 | 0.380 | <1 |
+
+Build the `internal/sync` test binary for Linux ARM64 with the pinned static
+library. Run it natively with `-test.run='^$'`
+`-test.bench='^Benchmark(MaterializationHome|CodexSetup)$' -test.benchtime=10x -test.cpu=2`.
+
 ## Core repair WP-D (2026-11-23)
 
 The ARM64 budget benchmarks (`BenchmarkMaterializationHome`, `BenchmarkCodexSetup/cold`

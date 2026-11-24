@@ -25,14 +25,14 @@ function viewLink(page: Page, label: "Sessions" | "Library" | "Machines" | "Usag
 // No error boundary, no not-found page and no uncaught exception.
 async function expectNoCrash(page: Page, errors: string[]) {
   await expect(page.getByRole("alert")).toHaveCount(0)
-  await expect(page.getByText("Not found", { exact: true })).toHaveCount(0)
+  await expect(page.getByRole("heading", { name: /^No page at / })).toHaveCount(0)
   expect(errors).toEqual([])
 }
 
 const sessionsNav = (page: Page) => page.getByRole("navigation", { name: "Sessions" })
 const libraryNav = (page: Page) => page.getByRole("navigation", { name: "Library" })
 const limitsGrid = (page: Page) => page.getByRole("region", { name: "Provider limits" })
-const usageHero = (page: Page) => page.getByRole("region", { name: "Usage chart" })
+const usageEmpty = (page: Page) => page.getByText("No usage in this range", { exact: true })
 const topologyHeading = (page: Page) => page.getByRole("heading", { level: 1, name: "Topology" })
 const machineList = (page: Page) => page.getByRole("link", { name: "Topology", exact: true })
 const settingsNav = (page: Page) => page.getByRole("navigation", { name: "Settings sections" })
@@ -67,13 +67,13 @@ test("on phones Back from a machine returns to the machine list", async ({ page 
   await page.setViewportSize({ width: 390, height: 844 })
   await openFleet(page)
   await page.goto("/machines/local")
-  await page.getByRole("link", { name: "Back", exact: true }).click()
+  await page.getByRole("link", { name: "Back to Machines", exact: true }).click()
   await expect(page).toHaveURL(/\/machines$/)
   await expect(machineList(page)).toBeVisible()
   await expectNoCrash(page, errors)
 })
 
-test("back and forward step through the views, with each view's URL", async ({ page }) => {
+test("back and forward step through the views, with each view's URL", async ({ page, isMobile }) => {
   const errors = trackPageErrors(page)
   await openFleet(page)
   await page.goto("/sessions")
@@ -83,9 +83,10 @@ test("back and forward step through the views, with each view's URL", async ({ p
   const trail = [
     { label: "Sessions", url: "/sessions", rendered: sessionsNav },
     { label: "Library", url: "/library", rendered: libraryNav },
-    { label: "Usage", url: "/usage", rendered: usageHero },
+    { label: "Usage", url: "/usage", rendered: usageEmpty },
     { label: "Machines", url: "/machines/topology", rendered: topologyHeading },
-    { label: "Settings", url: "/settings/general", rendered: settingsNav },
+    // Phones land on the section list; desktop opens General beside it.
+    { label: "Settings", url: isMobile ? "/settings" : "/settings/general", rendered: settingsNav },
   ] as const
 
   for (const view of trail.slice(1)) {
@@ -133,20 +134,23 @@ test("unknown limits search key is ignored", async ({ page }) => {
   await expectNoCrash(page, errors)
 })
 
-test("malformed session id in the deep link renders the terminal view", async ({ page }) => {
+test("an unknown session deep link offers to go back without attaching a terminal", async ({ page }) => {
   const errors = trackPageErrors(page)
   await openFleet(page)
-  await attachTerminal(page)
+  const terminal = await attachTerminal(page)
   // %25 reaches the router as a literal "%ZZ" id; a raw %ZZ path is a 404 from the static server before the app loads.
   await page.goto("/sessions/local/%25ZZ")
-  await expect(page.getByRole("button", { name: "Larger" })).toBeVisible()
+  await expect(page.getByText("Session not found", { exact: true })).toBeVisible()
+  await expect(page.getByRole("link", { name: "Return to sessions" })).toBeVisible()
+  expect(terminal.sockets).toHaveLength(0)
   await expectNoCrash(page, errors)
 })
 
 test("an unauthenticated deep link redirects to login", async ({ page }) => {
   await mockAPI(page, { authenticated: false })
-  await page.goto("/sessions")
-  await expect(page).toHaveURL(/\/login$/)
+  const destination = "/sessions?group=agent"
+  await page.goto(destination)
+  await expect(page).toHaveURL((url) => url.pathname === "/login" && url.searchParams.get("return_to") === destination)
 })
 
 test("views with nothing selected say what to do", async ({ page }) => {

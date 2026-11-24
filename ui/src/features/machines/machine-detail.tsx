@@ -1,12 +1,14 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
 import { Button } from "@/components/ui/button"
 import { Package, Plus, Server, SquareTerminal, Trash2 } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Inspector, InspectorHead, KeyValue, Meter, Section } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { StatusGlyph } from "@/components/kit/status-dot"
-import { ConfirmAlert, ConfirmAlertContent, Sheet, SheetContent, SheetDescription, SheetTitle, RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
+import { ConfirmAlert, ConfirmAlertContent, Menu, MenuContent, MenuItem, MenuTrigger, Sheet, SheetContent, SheetDescription, SheetTitle, RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
 import { ToolbarTitle } from "@/features/shell/toolbar-slot"
+import { useIsPhone } from "@/features/shell/use-is-phone"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useEventsConnected } from "@/features/events/use-events"
 import { AddPackageSheet } from "@/features/library/add-package-sheet"
@@ -24,15 +26,14 @@ import type { LimitSnapshot, ProjectRow, SessionInfo } from "@/lib/api-types"
 import { basename, harnessName, plural, relativeTime, shortAge } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { WorktreesSection } from "./worktrees-section"
-import { compareAgentpackVersions, machineInfoQuery, machineUpdateQuery, topologyQuery, useAgentpackVersions, useMachines, useReplicatedQueries, type Machine, type MachineAgent } from "./queries"
+import { compareAgentpackVersions, identityQuery, machineInfoQuery, machineUpdateQuery, topologyQuery, useAgentpackVersions, useDiscovering, useMachines, useReplicatedQueries, type Machine, type MachineAgent } from "./queries"
+import { dismissUpdateJob, isUpdateJobActive, startUpdateJob, updateJobLabel, useUpdateJob } from "./update-jobs"
 
 type Action = { kind: "new" | "install"; project?: ProjectRow }
 
 function projectLabel(project: ProjectRow): string {
   return project.name || basename(project.directory)
 }
-
-const UPDATE_DEADLINE_MS = 5 * 60 * 1000
 
 export function formatBytes(bytes: number): string {
   const gb = bytes / 1024 ** 3
@@ -51,18 +52,40 @@ export function runningText(sessions: SessionInfo[]): string | undefined {
 }
 
 export function MachineDetail({ id }: { id: string }) {
-  const machine = useMachines().find((item) => item.id === id)
-  if (!machine) return <Empty title="Machine not found">Choose a machine from the list.</Empty>
+  const machines = useMachines()
+  const discovering = useDiscovering()
+  const identityPending = useQuery(identityQuery).isPending
+  const machine = machines.find((item) => item.id === id)
+  if (!machine) {
+    if (discovering || identityPending) {
+      return (
+        <div className="p-(--s6)">
+          <p className="mb-(--s3) text-(length:--fs-sm) text-(--fg2)">{`Looking for ${id}…`}</p>
+          <RowSkeleton lines={2} />
+        </div>
+      )
+    }
+    return (
+      <Empty title="Not on this mesh">
+        <p>{`${id} isn't on this mesh.`}</p>
+        <p className="mt-(--s3)">
+          <Link to="/machines" className="text-(--accent) hover:underline">Machines</Link>
+        </p>
+      </Empty>
+    )
+  }
   return <MachineView machine={machine} />
 }
 
 function MachineView({ machine }: { machine: Machine }) {
+  const isPhone = useIsPhone()
   const live = useEventsConnected()
   const queryClient = useQueryClient()
   const info = useQuery({ ...machineInfoQuery(machine.id), enabled: machine.online })
   const topology = useQuery({ ...topologyQuery(live), enabled: machine.id !== LOCAL })
   const versionOf = useAgentpackVersions()
-  const updateStatus = useQuery({ ...machineUpdateQuery(machine.id), enabled: machine.online })
+  const updateJob = useUpdateJob(machine.id)
+  const updateStatus = useQuery({ ...machineUpdateQuery(machine.id), enabled: machine.online && !isUpdateJobActive(updateJob) })
   // Offline machines are disabled, so these return the last known rows from the cache.
   const projects = useQuery({ ...projectsQuery(machine.id), enabled: machine.online })
   const sessions = useReplicatedQueries(sessionsQuery).byMachine[machine.id]?.data ?? []
@@ -71,8 +94,6 @@ function MachineView({ machine }: { machine: Machine }) {
   const settings = useQuery({ ...settingsQuery, enabled: machine.id === LOCAL })
   const [action, setAction] = useState<Action | null>(null)
   const [forgetting, setForgetting] = useState<ProjectRow | null>(null)
-  // The version the machine ran when Update was pressed; the update is done once it reports another.
-  const [updatingFrom, setUpdatingFrom] = useState<string | undefined>()
   const checkAgents = useMutation({
     mutationFn: () => Promise.all([
       queryClient.fetchQuery({ ...agentsQuery(machine.id, true), staleTime: 0, retry: false }),
@@ -90,44 +111,21 @@ function MachineView({ machine }: { machine: Machine }) {
   const version = info.data?.version ?? known.version
   const outdated = !!version && !!latest && compareAgentpackVersions(version, latest) < 0
   const needsUpdate = machine.needsUpdate || (machine.id !== LOCAL && [projects.error, info.error].some(routeMissing))
-  const updating = updatingFrom !== undefined || updateStatus.data?.state === "running"
+  const updating = isUpdateJobActive(updateJob) || updateStatus.data?.state === "running"
 
   const update = useMutation({
     mutationFn: () => api<{ started: boolean; version?: string }>("/api/node/update", { machine: machine.id, method: "POST" }),
     onSuccess: (result) => {
-      hud.success(`Updating ${machine.name} to ${result.version ?? latest ?? "the latest version"}`)
-      setUpdatingFrom(version ?? "")
+      const target = result.version ?? latest ?? "the latest version"
+      hud.success(`Updating ${machine.name} to ${target}`)
+      startUpdateJob(queryClient, {
+        machineId: machine.id,
+        machineName: machine.name,
+        targetVersion: target,
+      })
     },
     onError: (error) => hud.error(`Couldn't update ${machine.name}: ${error.message}`),
   })
-
-  // While updating, re-read the version sources until the restarted gateway answers with a new one.
-  useEffect(() => {
-    if (updatingFrom === undefined) return
-    const timer = setInterval(() => {
-      for (const queryKey of [["identity"], ["topology"], machineInfoQuery(machine.id).queryKey, machineUpdateQuery(machine.id).queryKey]) {
-        void queryClient.invalidateQueries({ queryKey })
-      }
-    }, 2000)
-    // A gateway that never comes back with another version stops the polling.
-    const deadline = setTimeout(() => {
-      setUpdatingFrom(undefined)
-      hud.error(`${machine.name} hasn't reported a new version`)
-    }, UPDATE_DEADLINE_MS)
-    return () => {
-      clearInterval(timer)
-      clearTimeout(deadline)
-    }
-  }, [updatingFrom, machine.id, machine.name, queryClient])
-
-  useEffect(() => {
-    if (updatingFrom === undefined) return
-    if (updateStatus.data?.state === "failed") setUpdatingFrom(undefined)
-    else if (version && version !== updatingFrom) {
-      setUpdatingFrom(undefined)
-      hud.success(`${machine.name} is running ${version}`)
-    }
-  }, [updatingFrom, updateStatus.data?.state, version, machine.name])
 
   const forget = useMutation({
     mutationFn: (project: ProjectRow) => api<unknown>("/api/recent", { machine: machine.id, method: "DELETE", body: { directory: project.directory } }),
@@ -145,7 +143,7 @@ function MachineView({ machine }: { machine: Machine }) {
   const cached = projects.data !== undefined
 
   const updateButton = (outdated || needsUpdate || updating) && (
-    <Button size="sm" disabled={updating || update.isPending} onClick={() => update.mutate()}>
+    <Button size="sm" disabled={!machine.online || updating || update.isPending} onClick={() => update.mutate()}>
       {updating || update.isPending ? "Updating…" : latest ? `Update to ${latest}` : "Update"}
     </Button>
   )
@@ -163,14 +161,51 @@ function MachineView({ machine }: { machine: Machine }) {
         </InspectorHead>
         {!machine.online && (
           <Banner className="col-span-full">
-            {cached ? `${machine.name} is offline. Showing last known projects.` : `${machine.name} is offline. No projects are cached.`}
+            {cached
+              ? peer?.last_seen
+                ? `${machine.name} is offline. Projects as of ${relativeTime(new Date(peer.last_seen))}.`
+                : `${machine.name} is offline. Showing last known projects.`
+              : `${machine.name} is offline. No projects are cached.`}
           </Banner>
         )}
         {needsUpdate && !updating && (
           <Banner tone="warn" className="col-span-full">{`Update Agentpack on ${machine.name} to see its agents and system details.`}</Banner>
         )}
-        {updateStatus.data?.state === "failed" && (
-          <Banner tone="danger" className="col-span-full">{`Couldn't update ${machine.name}: ${updateStatus.data.error}`}</Banner>
+        {updateJob && isUpdateJobActive(updateJob) && (
+          <Banner className="col-span-full">
+            {`Updating ${machine.name} to ${updateJob.targetVersion} · ${updateJobLabel(updateJob)}`}
+          </Banner>
+        )}
+        {updateJob?.phase === "verified" && (
+          <Banner
+            className="col-span-full"
+            action={<Button type="button" size="sm" variant="ghost" onClick={() => dismissUpdateJob(machine.id)}>Dismiss</Button>}
+          >
+            {`Verified ${machine.name} is running ${updateJob.targetVersion}.`}
+          </Banner>
+        )}
+        {updateJob?.phase === "timed_out" && (
+          <Banner
+            tone="warn"
+            className="col-span-full"
+            action={(
+              <span className="flex items-center gap-(--s2)">
+                <Button type="button" size="sm" disabled={!machine.online || update.isPending} onClick={() => update.mutate()}>Retry</Button>
+                <Link to="/settings/$pane" params={{ pane: "diagnostics" }} className="text-(length:--fs-sm) text-(--accent) hover:underline">View logs</Link>
+              </span>
+            )}
+          >
+            {`${machine.name} hasn't reported a new version · Timed out.`}
+          </Banner>
+        )}
+        {(updateJob?.phase === "failed" || (!updateJob && updateStatus.data?.state === "failed")) && (
+          <Banner
+            tone="danger"
+            className="col-span-full"
+            action={<Button type="button" size="sm" disabled={!machine.online || update.isPending} onClick={() => update.mutate()}>Retry</Button>}
+          >
+            {`Couldn't update ${machine.name}: ${updateJob?.error || updateStatus.data?.error || "Update failed"}`}
+          </Banner>
         )}
         {info.error && !needsUpdate && (
           <Banner tone="danger" className="col-span-full">{`Couldn't read details from ${machine.name}: ${info.error.message}`}</Banner>
@@ -228,7 +263,56 @@ function MachineView({ machine }: { machine: Machine }) {
         <Section title={projects.data ? `Projects · ${projects.data.length}` : "Projects"} className="col-span-full">
           {machine.online && projects.isPending && <RowSkeleton lines={2} />}
           {projects.data?.length === 0 && <Empty title="No projects yet">Folders appear here after an agent runs in them.</Empty>}
-          {!!projects.data?.length && (
+          {!!projects.data?.length && isPhone && (
+            <ul aria-label="Projects" className="flex flex-col divide-y-[0.5px] divide-(--sep)">
+              {projects.data.map((project) => {
+                const usableProject = machine.online && project.available
+                const note = project.error || (project.available ? "" : project.unavailable_reason || "Unavailable")
+                const here = sessions.filter((session) => (session.definition_root || session.directory) === project.directory)
+                const runningHere = runningText(here)
+                return (
+                  <li key={project.directory} className="flex min-w-0 items-start justify-between gap-(--s3) py-(--s3)">
+                    <div className="flex min-w-0 flex-1 flex-col gap-(--s1)">
+                      <span className="truncate font-medium">{projectLabel(project)}</span>
+                      <span className="truncate text-(length:--fs-xs) text-(--fg2)" title={project.directory}>{note || project.directory}</span>
+                      <div className="flex flex-wrap items-center gap-x-(--s3) gap-y-(--s1) text-(length:--fs-xs) text-(--fg2)">
+                        {runningHere && (
+                          <span className="inline-flex items-center gap-(--s1)">
+                            <StatusGlyph state={runningHere.endsWith("needs you") ? "needsYou" : runningHere.endsWith("working") ? "running" : "idle"} />
+                            {runningHere}
+                          </span>
+                        )}
+                        <span>{plural(project.packages.length, "package")}</span>
+                        {project.mcp.length > 0 && <span>{`${project.mcp.length} MCP`}</span>}
+                        {project.last_used && <span>{shortAge(new Date(project.last_used))}</span>}
+                      </div>
+                    </div>
+                    <Menu>
+                      <MenuTrigger
+                        render={(
+                          <Button type="button" size="sm" variant="ghost" aria-label={`Actions for ${projectLabel(project)}`}>
+                            Actions
+                          </Button>
+                        )}
+                      />
+                      <MenuContent align="end">
+                        <MenuItem disabled={!usableProject} onClick={() => setAction({ kind: "new", project })}>
+                          New session…
+                        </MenuItem>
+                        <MenuItem disabled={!usableProject} onClick={() => setAction({ kind: "install", project })}>
+                          Install…
+                        </MenuItem>
+                        <MenuItem danger disabled={!machine.online} onClick={() => setForgetting(project)}>
+                          Forget
+                        </MenuItem>
+                      </MenuContent>
+                    </Menu>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+          {!!projects.data?.length && !isPhone && (
             <DataGrid aria-label="Projects">
               <DataGridHead>
                 <DataGridRow>
@@ -306,6 +390,7 @@ function MachineView({ machine }: { machine: Machine }) {
         open={action?.kind === "new"}
         initialMachine={machine.id}
         initialDirectory={action?.project?.directory}
+        onAccepted={() => setAction(null)}
         onOpenChange={(open) => { if (!open) setAction(null) }}
       />
       <AddPackageSheet
@@ -348,13 +433,14 @@ function AgentsGrid({ machine, agents, limits }: { machine: Machine; agents: Mac
   const signingInAccount = accounts?.find((account) => account.harness === signingIn)
   return (
     <>
-      <DataGrid aria-label="Agents" className="min-w-100">
+      {/* Phones drop Limits (Usage › Limits has them) so the agent name keeps a fixed column. */}
+      <DataGrid aria-label="Agents" className="min-w-100 max-[760px]:min-w-0">
         <DataGridHead>
           <DataGridRow>
-            <DataGridHeaderCell>Agent</DataGridHeaderCell>
-            <DataGridHeaderCell className="w-24">Version</DataGridHeaderCell>
-            <DataGridHeaderCell className="w-64">Account</DataGridHeaderCell>
-            <DataGridHeaderCell className="w-36">Limits</DataGridHeaderCell>
+            <DataGridHeaderCell className="w-28">Agent</DataGridHeaderCell>
+            <DataGridHeaderCell className="w-28">Version</DataGridHeaderCell>
+            <DataGridHeaderCell>Account</DataGridHeaderCell>
+            <DataGridHeaderCell className="w-36 max-[760px]:hidden">Limits</DataGridHeaderCell>
           </DataGridRow>
         </DataGridHead>
         <tbody>
@@ -367,7 +453,7 @@ function AgentsGrid({ machine, agents, limits }: { machine: Machine; agents: Mac
             const signedIn = !agent.installed || !snapshot ? undefined : needsLogin(snapshot) ? "Needs login" : usable(snapshot) ? "Yes" : undefined
             return (
               <DataGridRow key={agent.harness}>
-                <DataGridCell>{harnessName(agent.harness)}</DataGridCell>
+                <DataGridCell className="font-medium">{harnessName(agent.harness)}</DataGridCell>
                 <DataGridCell className={agent.installed ? "tabular-nums" : "text-(--fg3)"}>{agent.installed ? agent.version || "—" : "Not installed"}</DataGridCell>
                 <DataGridCell>
                   {account?.installed ? (
@@ -391,7 +477,7 @@ function AgentsGrid({ machine, agents, limits }: { machine: Machine; agents: Mac
                     <span className="flex items-center gap-(--s2)"><StatusGlyph state="needsYou" />Needs login</span>
                   ) : signedIn ?? (agent.installed && <span className="text-(--fg3)">—</span>)}
                 </DataGridCell>
-                <DataGridCell>
+                <DataGridCell className="max-[760px]:hidden">
                   {left !== undefined ? (
                     <span className="flex items-center gap-(--s2)">
                       <span className="w-16 shrink-0"><Meter value={left} label={`${harnessName(agent.harness)} limit left`} /></span>
@@ -408,7 +494,7 @@ function AgentsGrid({ machine, agents, limits }: { machine: Machine; agents: Mac
         {signingOut && (
           <ConfirmAlertContent
             title={`Sign ${harnessName(signingOut)} out on ${machine.name}?`}
-            description={`New chats with ${harnessName(signingOut)} on ${machine.name} will ask you to sign in again. Running chats keep their session until they stop.`}
+            description={`Signs ${harnessName(signingOut)} out on ${machine.name} and stops future sharing from this machine. Enrolled peers keep their own copy until signed out there. Running chats keep their session until they stop.`}
             destructiveLabel="Sign out"
             onConfirm={() => {
               const harness = signingOut
@@ -422,7 +508,7 @@ function AgentsGrid({ machine, agents, limits }: { machine: Machine; agents: Mac
         {signingIn && (
           <SheetContent>
             <SheetTitle>Sign in to {harnessName(signingIn)}</SheetTitle>
-            <SheetDescription>The sign-in runs on {machine.name}, and the login stays there.</SheetDescription>
+            <SheetDescription>{`Starts on ${machine.name}. ${harnessName(signingIn)} sign-ins are shared with every enrolled machine. Sign-in links expire if not completed in time.`}</SheetDescription>
             <SignIn machine={machine.id} machineName={machine.name} harness={signingIn} methods={signingInAccount?.methods ?? []} />
           </SheetContent>
         )}

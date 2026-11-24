@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"io"
 	"net"
@@ -131,7 +132,78 @@ func (m *Server) register(w http.ResponseWriter, r *http.Request) {
 	}{id, client})
 }
 
-var oauthConsent = template.Must(template.New("consent").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect to Agentpack</title><main class="auth-shell"><section class="auth-card"><p class="eyebrow">Agentpack connection</p><h1>Connect {{.Name}}</h1><p>This client will be able to read terminal output, type into sessions when control is released, start and stop agents, and install packages on your connected computers.</p><p>Return address: <strong>{{.Redirect}}</strong></p><form method="post" action="{{.Action}}"><input type="hidden" name="consent" value="{{.Token}}"><button class="primary" type="submit" name="decision" value="allow">Allow access</button><button type="submit" name="decision" value="deny">Cancel</button></form></section></main></html>`))
+const oauthConsentStyle = `
+  body { margin: 0; font: 1rem/1.5 system-ui, sans-serif; }
+  main { box-sizing: border-box; max-width: 38rem; margin: 2rem auto; padding: 0 1.25rem; overflow-wrap: anywhere; }
+  h1 { font-size: 1.5rem; line-height: 1.25; }
+  h2 { font-size: 1rem; }
+  dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .25rem 1rem; }
+  dt { font-weight: 600; }
+  dd { margin: 0; }
+  ul { padding-inline-start: 1.25rem; }
+  li + li { margin-block-start: .25rem; }
+  form { display: flex; flex-wrap: wrap; gap: .5rem; }
+  button { min-height: 2.75rem; padding-inline: 1rem; font: inherit; }
+`
+
+var oauthConsent = template.Must(template.New("consent").Parse(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{{if .Token}}Connect to Agentpack{{else}}Restart authorization{{end}}</title>
+  <style>` + oauthConsentStyle + `</style>
+</head>
+<body>
+<main>
+{{if .Token}}
+  <h1>Connect <bdi>{{.Name}}</bdi> to Agentpack</h1>
+  <dl>
+    <dt>Callback host</dt><dd><bdi>{{.CallbackHost}}</bdi></dd>
+    <dt>Gateway</dt><dd><bdi>{{.Gateway}}</bdi></dd>
+    <dt>Signed-in account</dt><dd><bdi>{{.Email}}</bdi></dd>
+  </dl>
+  <h2>What this connection allows</h2>
+  <ul>
+    <li>Read sessions, including chat history and terminal output.</li>
+    <li>Send messages and type into terminals when control is released.</li>
+    <li>Start and stop sessions on connected machines.</li>
+    <li>Install packages on connected machines and restart affected agents.</li>
+  </ul>
+  <p>In <a href="/settings/account">Settings › Account</a>, choose <strong>Sign out everywhere</strong> to revoke access for all connected assistants and sign out all browsers for this account.</p>
+  <form method="post" action="{{.Action}}">
+    <input type="hidden" name="consent" value="{{.Token}}">
+    <button type="submit" name="decision" value="deny">Cancel</button>
+    <button type="submit" name="decision" value="allow">Allow access</button>
+  </form>
+{{else}}
+  <h1>Authorization request expired or already used</h1>
+  <p>Restart to review the connection and decide whether to allow access.</p>
+  <p><a href="{{.Action}}">Restart authorization</a></p>
+{{end}}
+</main>
+</body>
+</html>`))
+
+type oauthConsentPage struct {
+	Name, CallbackHost, Gateway, Email, Action, Token string
+}
+
+func renderOAuthConsent(w http.ResponseWriter, r *http.Request, status int, page oauthConsentPage) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	// Browsers send Origin: null for form posts under no-referrer.
+	w.Header().Set("Referrer-Policy", "same-origin")
+	styleHash := sha256.Sum256([]byte(oauthConsentStyle))
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; style-src 'sha256-"+base64.StdEncoding.EncodeToString(styleHash[:])+"'")
+	w.WriteHeader(status)
+	if err := oauthConsent.Execute(w, page); err != nil {
+		if event := obs.From(r.Context()); event != nil {
+			event.Fail(fmt.Errorf("render OAuth consent: %w", err))
+		}
+	}
+}
 
 func (m *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	if m.limited(w, r) {
@@ -155,7 +227,8 @@ func (m *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	redirect := query.Get("redirect_uri")
-	if !redirectRegistered(client.Client.RedirectURIs, redirect) {
+	redirectURL, err := url.Parse(redirect)
+	if err != nil || !redirectRegistered(client.Client.RedirectURIs, redirect) {
 		oauthError(w, 400, "invalid_redirect_uri")
 		return
 	}
@@ -164,20 +237,21 @@ func (m *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, 400, "invalid_request")
 		return
 	}
+	action := "/oauth/authorize?" + r.URL.RawQuery
 	login, ok := m.host.BrowserLogin(r)
 	if !ok {
-		http.Redirect(w, r, "/login?return_to="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
+		http.Redirect(w, r, "/login?return_to="+url.QueryEscape(action), http.StatusSeeOther)
 		return
 	}
-	session := string(oauthKey(login))
+	sessionKey := string(oauthKey(login))
 	cookieHash := sha256.Sum256([]byte(login))
 	if r.Method == http.MethodGet {
 		token := network.RandomToken()
+		record := oauthRecord{Kind: "consent", Session: sessionKey, Query: r.URL.RawQuery, Expires: time.Now().Add(10 * time.Minute)}
 		err := state.Transaction(r.Context(), m.store.DB, func(tx *sql.Tx) error {
 			if err := oauthPrune(tx); err != nil {
 				return err
 			}
-			record := oauthRecord{Kind: "consent", Session: session, Query: r.URL.RawQuery, Expires: time.Now().Add(10 * time.Minute)}
 			if err := tx.QueryRow(`SELECT s.email,u.sessions_valid_after FROM auth_sessions s JOIN users u ON u.email=s.email WHERE s.token_hash=? AND s.expires_at>? AND u.disabled=0 AND s.created_at>=u.sessions_valid_after AND s.session_epoch=u.sessions_valid_after`, cookieHash[:], time.Now().UnixMilli()).Scan(&record.Email, &record.SessionEpoch); err != nil {
 				return err
 			}
@@ -187,10 +261,6 @@ func (m *Server) authorize(w http.ResponseWriter, r *http.Request) {
 			oauthError(w, 503, "authorization_unavailable")
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		// Browsers send Origin: null for form posts under no-referrer.
-		w.Header().Set("Referrer-Policy", "same-origin")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'")
 		name := client.Client.ClientName
 		if clientMetadataURL(query.Get("client_id")) {
 			// A metadata document names itself; only its host is vouched for by HTTPS.
@@ -201,7 +271,9 @@ func (m *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		if name == "" {
 			name = "Your AI assistant"
 		}
-		_ = oauthConsent.Execute(w, struct{ Name, Redirect, Action, Token string }{name, redirect, r.URL.RequestURI(), token})
+		renderOAuthConsent(w, r, http.StatusOK, oauthConsentPage{
+			Name: name, CallbackHost: redirectURL.Host, Gateway: session.LocalHostname(), Email: record.Email, Action: action, Token: token,
+		})
 		return
 	}
 	if r.Header.Get("Origin") != m.baseURL(r) {
@@ -216,8 +288,14 @@ func (m *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	code := network.RandomToken()
 	err = state.Transaction(r.Context(), m.store.DB, func(tx *sql.Tx) error {
 		consent, err := oauthGet(tx, r.PostForm.Get("consent"))
-		if err != nil || consent.Kind != "consent" || consent.Session != session || consent.Query != r.URL.RawQuery || oauthAccountValid(tx, consent) != nil {
+		if err != nil {
+			return err
+		}
+		if consent.Kind != "consent" || consent.Session != sessionKey || consent.Query != r.URL.RawQuery {
 			return errOAuthGrant
+		}
+		if err := oauthAccountValid(tx, consent); err != nil {
+			return err
 		}
 		if _, err := tx.Exec("DELETE FROM oauth_tokens WHERE secret_hash = ?", string(oauthKey(r.PostForm.Get("consent")))); err != nil {
 			return err
@@ -227,20 +305,26 @@ func (m *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		}
 		return oauthPut(tx, code, oauthRecord{Kind: "code", ClientID: query.Get("client_id"), Redirect: redirect, Challenge: query.Get("code_challenge"), Resource: m.baseURL(r) + "/mcp", Expires: time.Now().Add(5 * time.Minute), Email: consent.Email, SessionEpoch: consent.SessionEpoch})
 	})
+	if errors.Is(err, errOAuthGrant) {
+		renderOAuthConsent(w, r, http.StatusBadRequest, oauthConsentPage{Action: action})
+		return
+	}
 	if err != nil {
+		if event := obs.From(r.Context()); event != nil {
+			event.Fail(fmt.Errorf("record OAuth consent: %w", err))
+		}
 		oauthError(w, 400, "invalid_consent")
 		return
 	}
-	u, _ := url.Parse(redirect)
-	params := u.Query()
+	params := redirectURL.Query()
 	params.Set("state", query.Get("state"))
 	if r.PostForm.Get("decision") == "allow" {
 		params.Set("code", code)
 	} else {
 		params.Set("error", "access_denied")
 	}
-	u.RawQuery = params.Encode()
-	http.Redirect(w, r, u.String(), http.StatusSeeOther)
+	redirectURL.RawQuery = params.Encode()
+	http.Redirect(w, r, redirectURL.String(), http.StatusSeeOther)
 }
 
 func validVerifier(verifier string) bool {

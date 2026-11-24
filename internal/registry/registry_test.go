@@ -322,7 +322,7 @@ func TestRestoreRollsBackBothFilesWhenApplyFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantErr := errors.New("sync failed")
-	err = store.Restore(pack.ID, revision.ID, project, func() error { return wantErr })
+	err = store.Restore(pack.ID, revision.ID, project, "", func() error { return wantErr })
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("restore error = %v", err)
 	}

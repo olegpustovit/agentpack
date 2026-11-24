@@ -1,9 +1,10 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react"
 import { ArrowUp, AtSign, Check, ChevronDown, CornerDownLeft, Plus, Slash, Square } from "lucide-react"
-import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
+import { ConfirmAlert, ConfirmAlertContent, Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
 import { Spinner } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
+import { agentsQuery } from "@/features/agents/queries"
 import { pendingChatClaim } from "@/features/sessions/start"
 import { sessionsQuery } from "@/features/sessions/queries"
 import { agentIds } from "@/features/sessions/rules"
@@ -185,13 +186,10 @@ export function useComposer({ machine, sessionId, info, entries, reportTimings }
       if (!text) return
       const startedAt = performance.now()
       setPendingSends((pending) => [...pending.filter((item) => item.id !== id), { id, text, attachments: [], clearComposer: true, startedAt }])
-      setDraft("")
-      return () => {
-        discardSend(id)
-        setDraft((current) => current || text)
-      }
+      return () => discardSend(id)
     },
-    accepted: (result, _text, id) => {
+    accepted: (result, text, id) => {
+      if (text) setDraft((current) => current.trim() === text ? "" : current)
       if (result?.queued !== id) discardSend(id)
       void queryClient.invalidateQueries({ queryKey: conversationEventsQuery(machine, sessionId).queryKey })
       return queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
@@ -227,12 +225,13 @@ function ContextRing({ percent }: { percent: number }) {
 
 // The dock floating over the thread: queued messages, the pane's strips (children), and the message field.
 export function Composer({
-  composer, machine, sessionId, info, parent, history, chatConfig, commands, contextPercent, compact,
-  starting, resumable, needsUpdate, stopping, onStop, onFork, onSwitchTerminal, onGoalCommand,
+  composer, machine, machineName, sessionId, info, parent, history, chatConfig, commands, contextPercent, compact,
+  starting, resumable, awaitingSignIn, needsUpdate, stopping, onStop, onFork, onSwitchTerminal, onGoalCommand,
   threadScrollRef, stickToBottomRef, children,
 }: {
   composer: ReturnType<typeof useComposer>
   machine: string
+  machineName: string
   sessionId: string
   info?: SessionInfo
   parent: ThreadState
@@ -244,6 +243,7 @@ export function Composer({
   compact?: () => void
   starting: boolean
   resumable: boolean
+  awaitingSignIn: boolean
   needsUpdate: boolean
   stopping: boolean
   onStop: () => void
@@ -297,6 +297,9 @@ export function Composer({
   }, [threadScrollRef, stickToBottomRef])
 
   // The chat carries on with another agent, which gets the transcript with the next message.
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false)
+  const [confirmAgent, setConfirmAgent] = useState<string>()
+  const { data: agents } = useQuery({ ...agentsQuery(machine), enabled: agentMenuOpen })
   const switchAgent = useIntent({
     request: (harness: string, idempotencyKey) =>
       api(`/api/sessions/${encodeURIComponent(sessionId)}/harness`, { machine, method: "POST", idempotencyKey, body: { harness } }),
@@ -325,15 +328,10 @@ export function Composer({
       ),
   })
 
-  const canSend = (draft.trim().length > 0 || attachments.length > 0) && uploadingFiles.length === 0 && !needsUpdate && !(resumable && attachments.length > 0) && !(resumable && resume.isPending)
+  const canSend = (draft.trim().length > 0 || attachments.length > 0) && uploadingFiles.length === 0 && !needsUpdate && !awaitingSignIn && !(resumable && (attachments.length > 0 || resume.isPending))
   const nextQueued = parent.queue?.find((item) => !item.steer && !item.delivered)
 
   function submit(steer = false) {
-    // Enter on an empty composer sends the waiting message now.
-    if (nextQueued && !draft.trim() && attachments.length === 0 && !needsUpdate && !steerQueued.isPending) {
-      steerQueued.mutate(nextQueued.queueId)
-      return
-    }
     if (!canSend) return
     recalledPromptRef.current = null
     const text = draft.trim()
@@ -440,6 +438,16 @@ export function Composer({
         />
         {children}
         <div className="flex flex-col gap-(--s1) rounded-[12px] bg-(--field) px-(--s3) pt-(--s3) pb-(--s2) shadow-(--shadow-composer) transition-shadow focus-within:shadow-[var(--shadow-composer),0_0_0_3px_var(--accent-soft)]">
+          {(starting || resumable || resume.isPending) && (
+            <div className="flex flex-wrap items-center justify-between gap-(--s2) px-(--s3) text-(length:--fs-sm) text-(--fg2)">
+              <span role="status">
+                {starting || resume.isPending ? "Starting" : awaitingSignIn ? "Awaiting sign-in" : "Stopped"} · {agentName} on {machineName}
+              </span>
+              {resumable && !awaitingSignIn && !resume.isPending && (
+                <Button type="button" size="sm" variant="ghost" disabled={needsUpdate} onClick={() => resume.mutate("")}>Resume</Button>
+              )}
+            </div>
+          )}
           <div className="relative flex min-h-(--ctl-h) flex-col gap-(--s2)">
             {attachments.map((item, index) => (
               <div key={`${item.sha}-${index}`} className="flex items-center gap-(--s2) rounded-(--r-ctl) border-[0.5px] border-(--sep) bg-(--window) p-(--s2)">
@@ -466,7 +474,7 @@ export function Composer({
                 id="conversation-message"
                 aria-label="Message"
                 rows={1}
-                placeholder={needsUpdate ? "Update this peer to open the conversation…" : starting ? `Starting ${agentName}…` : nextQueued ? "Queue another message, or press ↵ to steer with the queued one" : parent.working ? `Queue a message for ${agentName} (⌘↵ ${steering ? "steers" : "interrupts to steer"})` : `Message ${agentName}`}
+                placeholder={needsUpdate ? "Update this peer to open the conversation…" : starting || resume.isPending ? `Starting ${agentName}…` : awaitingSignIn ? "Draft a message while you sign in…" : resumable ? "Draft a message to send when you resume…" : nextQueued ? "Queue another message, or choose Send now on a queued message" : parent.working ? `Queue a message for ${agentName} (⌘↵ ${steering ? "steers" : "interrupts to steer"})` : `Message ${agentName}`}
                 value={draft}
                 disabled={needsUpdate}
                 aria-controls={composerHints.length > 0 ? "composer-hints-list" : undefined}
@@ -512,11 +520,6 @@ export function Composer({
                       ((event.key === "ArrowUp" || event.key === "ArrowDown") && recalledPromptRef.current?.text === draft))) {
                     event.preventDefault()
                     void recallPrompt(event.key === "ArrowUp" ? -1 : 1, event.currentTarget)
-                    return
-                  }
-                  if (event.key === "Escape" && parent.working && !stopping) {
-                    event.preventDefault()
-                    onStop()
                     return
                   }
                   if (event.key === "Enter" && !event.shiftKey) {
@@ -573,7 +576,7 @@ export function Composer({
             </Button>
             <span className="min-w-0 flex-1" />
             {info?.transport === "acp" && (
-              <Menu>
+              <Menu open={agentMenuOpen} onOpenChange={setAgentMenuOpen}>
                 <MenuTrigger
                   render={
                     <Button type="button" size="sm" variant="ghost" title="Continue this chat with another agent" disabled={switchAgent.isPending || starting || needsUpdate} className="gap-(--s2)">
@@ -584,21 +587,38 @@ export function Composer({
                 />
                 <MenuContent align="end">
                   <p className="px-[11px] pt-(--s2) pb-(--s1) text-(length:--fs-xs) font-semibold text-(--fg3)">Continue with</p>
-                  {agentIds.map((id) => (
-                    <MenuItem
-                      key={id}
-                      role="menuitemradio"
-                      aria-checked={id === info.harness}
-                      icon={id === info.harness ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
-                      disabled={id === info.harness}
-                      onClick={() => switchAgent.mutate(id)}
-                    >
-                      {harnessName(id)}
-                    </MenuItem>
-                  ))}
+                  {agentIds.map((id) => {
+                    const installed = agents?.find((agent) => agent.harness === id)?.installed
+                    return (
+                      <MenuItem
+                        key={id}
+                        role="menuitemradio"
+                        aria-checked={id === info.harness}
+                        icon={id === info.harness ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
+                        disabled={id === info.harness || installed === false}
+                        onClick={() => setConfirmAgent(id)}
+                      >
+                        {harnessName(id)}{installed === false && <span className="text-(--fg2)"> · Not installed</span>}
+                      </MenuItem>
+                    )
+                  })}
                 </MenuContent>
               </Menu>
             )}
+            <ConfirmAlert open={!!confirmAgent} onOpenChange={(open) => !open && setConfirmAgent(undefined)}>
+              {confirmAgent && (
+                <ConfirmAlertContent
+                  title={`Switch to ${harnessName(confirmAgent)}?`}
+                  description={`Your next message goes to ${harnessName(confirmAgent)} with a summary of this conversation.`}
+                  destructive={false}
+                  destructiveLabel={`Switch to ${harnessName(confirmAgent)}`}
+                  onConfirm={() => {
+                    switchAgent.mutate(confirmAgent)
+                    setConfirmAgent(undefined)
+                  }}
+                />
+              )}
+            </ConfirmAlert>
             <ChatConfigControls config={chatConfig} harness={info?.harness} starting={starting} needsYou={parent.needs_you} needsUpdate={needsUpdate} />
             {contextPercent !== undefined && (
               <button
@@ -624,8 +644,8 @@ export function Composer({
                 size="icon"
                 variant="ghost"
                 disabled={stopping}
-                aria-label={stopping ? "Stopping…" : "Stop"}
-                title={stopping ? "Stopping…" : "Stop (Esc)"}
+                aria-label={stopping ? "Stopping turn…" : "Stop turn"}
+                title={stopping ? "Stopping turn…" : "Stop turn (⌘. / Ctrl+.)"}
                 onClick={onStop}
               >
                 {stopping ? <Spinner /> : <Square aria-hidden className="fill-current" />}
@@ -640,9 +660,9 @@ export function Composer({
               <button
                 type="button"
                 disabled={!canSend}
-                aria-label={parent.working ? "Queue" : "Send"}
-                title={parent.working ? "Queue for after this turn (↵)" : "Send (↵)"}
-                className="ml-(--s2) grid size-6 shrink-0 place-items-center rounded-full bg-(--accent) text-(--accent-fg) disabled:bg-(--track) disabled:text-(--fg3) [&_svg]:size-(--s4)"
+                aria-label={parent.working ? "Queue" : resumable ? "Send and resume" : "Send"}
+                title={parent.working ? "Queue for after this turn (↵)" : resumable ? `Start ${agentName} again and send (↵)` : "Send (↵)"}
+                className="ml-(--s2) grid size-6 shrink-0 place-items-center rounded-full bg-(--accent-fill) text-(--accent-fg) disabled:bg-(--track) disabled:text-(--fg3) [&_svg]:size-(--s4)"
                 onClick={() => submit()}
               >
                 <ArrowUp aria-hidden />

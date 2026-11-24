@@ -81,7 +81,7 @@ func (runner Runner) networkLibrary(home string) (gateway.LibraryOptions, error)
 			_, diff, err := store.Preview(id, revision, definition)
 			return diff, err
 		},
-		Restore: func(ctx context.Context, id, revision, directory string, restart bool) error {
+		Restore: func(ctx context.Context, id, revision, directory string, restart bool, previewDigest string) error {
 			definition, err := definitionOf(directory)
 			if err != nil {
 				return err
@@ -90,13 +90,17 @@ func (runner Runner) networkLibrary(home string) (gateway.LibraryOptions, error)
 			if err != nil {
 				return err
 			}
-			defer release()
+			defer func() {
+				if release != nil {
+					_ = release()
+				}
+			}()
 			ctx = held
 			selected, _, err := store.Preview(id, revision, definition)
 			if err != nil {
 				return err
 			}
-			if err := store.Restore(id, revision, definition, func() error {
+			if err := store.Restore(id, revision, definition, previewDigest, func() error {
 				return runner.Service.RestoreFrozenOptions(ctx, definition, packSync.SyncOptions{WorkspaceRoot: directory, Mode: selected.Mode})
 			}); err != nil {
 				return err
@@ -112,6 +116,10 @@ func (runner Runner) networkLibrary(home string) (gateway.LibraryOptions, error)
 			if !restart {
 				return nil
 			}
+			if err := release(); err != nil {
+				return err
+			}
+			release = nil
 			return runner.restartStaleSessions(ctx, definition)
 		},
 	}, nil

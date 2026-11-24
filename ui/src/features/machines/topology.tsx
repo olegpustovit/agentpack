@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button"
 import { hud } from "@/lib/hud"
 import { Badge } from "@/components/ui/badge"
-import { useMutation, useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Inspector, Section } from "@/components/kit/data"
@@ -13,6 +13,7 @@ import { sessionsQuery } from "@/features/sessions/queries"
 import { api, errorText, LOCAL } from "@/lib/api"
 import { plural } from "@/lib/format"
 import { machinesToUpdate, topologyQuery, useMachines, useReplicatedQueries } from "./queries"
+import { getUpdateJob, isUpdateJobActive, startUpdateJob } from "./update-jobs"
 import {
   DIAGRAM_W,
   GATEWAY_W,
@@ -23,6 +24,7 @@ import {
   layoutDiagram,
   machinePeers,
   reasonOf,
+  routeLabel,
   sessionCount,
   stateWord,
 } from "./topology-model"
@@ -48,6 +50,7 @@ function Node({ x, y, width, name, parts, sessions, state, dashed }: { x: number
 export function TopologyView() {
   const isPhone = useIsPhone()
   const live = useEventsConnected()
+  const queryClient = useQueryClient()
   const topology = useQuery(topologyQuery(live))
   const machines = useMachines()
   const sessions = useReplicatedQueries(sessionsQuery)
@@ -56,9 +59,10 @@ export function TopologyView() {
   const updateAll = useMutation({
     mutationFn: async () => {
       const update = async (machine: (typeof machines)[number]) => {
+        if (isUpdateJobActive(getUpdateJob(machine.id))) return
         try {
           const result = await api<{ version: string }>("/api/node/update", { machine: machine.id, method: "POST" })
-          hud.success(`Updating ${machine.name} to ${result.version}`)
+          startUpdateJob(queryClient, { machineId: machine.id, machineName: machine.name, targetVersion: result.version })
         } catch (error) {
           hud.error(`Couldn't update ${machine.name}: ${errorText(error)}`)
         }
@@ -97,7 +101,7 @@ export function TopologyView() {
       : version
   }
   const rows = [
-    { id: LOCAL, main: data.self.main, name: data.self.name, os: data.self.os, state: "Gateway", path: "—", version: versionLabel(LOCAL), sessions: gatewaySessions, reason: "This machine" },
+    { id: LOCAL, main: data.self.main, name: data.self.name, os: data.self.os, state: "Gateway", path: "—", route: "", rttMs: undefined as number | undefined, version: versionLabel(LOCAL), sessions: gatewaySessions, reason: "This machine" },
     ...peers.map((peer) => ({
       id: peer.id,
       main: peer.main,
@@ -106,6 +110,8 @@ export function TopologyView() {
       state: inventory.get(peer.id)?.needsUpdate ? "Needs update" : stateWord(peer.state),
       // Tailscale often reports no path; the column header explains the dash once.
       path: peer.state === "reachable" && (peer.connection === "direct" || peer.connection === "relay") ? edgeOf(peer).label : "—",
+      route: peer.state === "reachable" ? routeLabel(peer) : "",
+      rttMs: peer.state === "reachable" ? peer.rtt_ms : undefined,
       version: versionLabel(peer.id, peer.version),
       sessions: count(peer.id, peer.sessions),
       reason: reasonOf(peer),
@@ -115,7 +121,11 @@ export function TopologyView() {
   return (
     <div className="h-full min-h-0 overflow-y-auto">
       <Inspector>
-        {isPhone && <Link to="/machines" className="col-span-full text-(--accent)">All machines</Link>}
+        {isPhone && (
+          <Link to="/machines" className="col-span-full inline-flex min-h-11 items-center text-(--accent) hover:underline">
+            Machines list
+          </Link>
+        )}
         {topology.error && (
           <Banner tone="danger" className="col-span-full">
             {`Couldn't refresh topology: ${topology.error.message}`}
@@ -129,8 +139,7 @@ export function TopologyView() {
             </Button>
           )}
         </ToolbarSlot>
-        <h1 className="sr-only">Topology</h1>
-        {/* The diagram repeats the grid below, so assistive tech skips it, and phones show only the grid. */}
+        {/* The diagram repeats the grid below, so assistive tech skips it, and phones show only compact rows. */}
         <div className="col-span-full max-[760px]:hidden">
           <svg data-slot="topology-diagram" viewBox={`0 0 ${DIAGRAM_W} ${layout.height}`} width={DIAGRAM_W} height={layout.height} className="block h-auto max-w-full" aria-hidden="true" focusable="false">
             <g fill="none" strokeWidth={1.2}>
@@ -162,32 +171,58 @@ export function TopologyView() {
           </svg>
         </div>
         <Section title="Machines" className="col-span-full">
-          <DataGrid aria-label="Machines and connections" className="min-w-200">
-            <DataGridHead>
-              <DataGridRow>
-                <DataGridHeaderCell className="w-44">Machine</DataGridHeaderCell>
-                <DataGridHeaderCell className="w-24">OS</DataGridHeaderCell>
-                <DataGridHeaderCell className="w-32">State</DataGridHeaderCell>
-                <DataGridHeaderCell className="w-28" title="Direct or relay, as Tailscale reports it. — means Tailscale did not say.">Path</DataGridHeaderCell>
-                <DataGridHeaderCell className="w-28">Version</DataGridHeaderCell>
-                <DataGridHeaderCell className="w-24">Sessions</DataGridHeaderCell>
-                <DataGridHeaderCell>Reason</DataGridHeaderCell>
-              </DataGridRow>
-            </DataGridHead>
-            <tbody>
-              {rows.map((row) => (
-                <DataGridRow key={row.id}>
-                  <DataGridCell><span className="inline-flex items-center gap-(--s2)">{row.name}{row.main && <Badge variant="secondary">Main</Badge>}</span></DataGridCell>
-                  <DataGridCell>{row.os || "—"}</DataGridCell>
-                  <DataGridCell>{row.state}</DataGridCell>
-                  <DataGridCell>{row.path}</DataGridCell>
-                  <DataGridCell>{row.version || "—"}</DataGridCell>
-                  <DataGridCell>{row.sessions ?? "—"}</DataGridCell>
-                  <DataGridCell>{row.reason || "—"}</DataGridCell>
+          {isPhone ? (
+            <ul aria-label="Machines and connections" className="flex flex-col divide-y-[0.5px] divide-(--sep)">
+              {rows.map((row) => {
+                const details = [
+                  row.route,
+                  row.rttMs !== undefined ? `${row.rttMs} ms` : undefined,
+                  row.sessions !== undefined ? plural(row.sessions, "session") : undefined,
+                  row.version,
+                  row.reason,
+                ].filter(Boolean).join(" · ")
+                return (
+                  <li key={row.id} className="flex min-w-0 flex-col gap-(--s1) py-(--s3)">
+                    <div className="flex min-w-0 items-center justify-between gap-(--s3)">
+                      <span className="inline-flex min-w-0 items-center gap-(--s2) font-medium">
+                        <span className="truncate">{row.name}</span>
+                        {row.main && <Badge variant="secondary">Main</Badge>}
+                      </span>
+                      <span className="shrink-0 text-(length:--fs-sm) text-(--fg2)">{row.state}</span>
+                    </div>
+                    {details && <p className="text-(length:--fs-sm) text-(--fg2) break-words">{details}</p>}
+                  </li>
+                )
+              })}
+            </ul>
+          ) : (
+            <DataGrid aria-label="Machines and connections" className="min-w-200">
+              <DataGridHead>
+                <DataGridRow>
+                  <DataGridHeaderCell className="w-44">Machine</DataGridHeaderCell>
+                  <DataGridHeaderCell className="w-24">OS</DataGridHeaderCell>
+                  <DataGridHeaderCell className="w-32">State</DataGridHeaderCell>
+                  <DataGridHeaderCell className="w-28" title="Direct or relay, as Tailscale reports it. — means Tailscale did not say.">Path</DataGridHeaderCell>
+                  <DataGridHeaderCell className="w-28">Version</DataGridHeaderCell>
+                  <DataGridHeaderCell className="w-24">Sessions</DataGridHeaderCell>
+                  <DataGridHeaderCell>Reason</DataGridHeaderCell>
                 </DataGridRow>
-              ))}
-            </tbody>
-          </DataGrid>
+              </DataGridHead>
+              <tbody>
+                {rows.map((row) => (
+                  <DataGridRow key={row.id}>
+                    <DataGridCell><span className="inline-flex items-center gap-(--s2)">{row.name}{row.main && <Badge variant="secondary">Main</Badge>}</span></DataGridCell>
+                    <DataGridCell>{row.os || "—"}</DataGridCell>
+                    <DataGridCell>{row.state}</DataGridCell>
+                    <DataGridCell>{row.path}</DataGridCell>
+                    <DataGridCell>{row.version || "—"}</DataGridCell>
+                    <DataGridCell>{row.sessions ?? "—"}</DataGridCell>
+                    <DataGridCell>{row.reason || "—"}</DataGridCell>
+                  </DataGridRow>
+                ))}
+              </tbody>
+            </DataGrid>
+          )}
         </Section>
       </Inspector>
     </div>

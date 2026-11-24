@@ -1,12 +1,12 @@
 import type { ReactNode } from "react"
 import { lazy, Suspense, useEffect, useState } from "react"
-import { Link, useNavigate, useParams } from "@tanstack/react-router"
-import { ChevronLeft, PanelLeft, Settings } from "lucide-react"
+import { Link, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router"
+import { ChevronLeft, Command, PanelLeft, Settings } from "lucide-react"
 import { Announcement } from "@/components/kit/feedback"
 import { ActivityViewer } from "./activity"
 import { useDiscovering } from "@/features/machines/queries"
-import { useListedSessions } from "@/features/sessions/queries"
-import { nextNeedsYou } from "@/features/sessions/session-status"
+import { sessionsQuery, useListedSessions } from "@/features/sessions/queries"
+import { nextNeedsYou, sessionGlyphState } from "@/features/sessions/session-status"
 import { ConnectionItem } from "@/features/status/connection"
 import { AppWindow, Toolbar, ToolbarButton } from "@/components/kit/window"
 import { buttonVariants } from "@/components/ui/button"
@@ -18,22 +18,57 @@ import { queueLastChatTerminal, requestTerminal, terminalShortcut } from "@/feat
 import { useAttention } from "./attention"
 import { useIsPhone } from "./use-is-phone"
 import { useSidebar } from "./sidebar"
-import { listDetailViews, tabs, useRoutePosition, viewLink, views } from "./views"
+import { listDetailViews, routePosition, tabs, useRoutePosition, views } from "./views"
 import { ToolbarProvider, ToolbarTarget, ToolbarTitleTarget } from "./toolbar-slot"
 
 export function AppShell({ children }: { children: ReactNode }) {
   useShellShortcuts()
   useAttention()
+  useDetailHeadingFocus()
+  // The palette's starting query while open; null while closed. The toolbar's Commands button opens it too.
+  const [palette, setPalette] = useState<string | null>(null)
   return (
-      <ToolbarProvider>
-        <AppWindow>
-          <AppToolbar />
-          {children}
-          <TabBar />
-          <ShellCommands />
-        </AppWindow>
-      </ToolbarProvider>
+    <ToolbarProvider>
+      <AppWindow>
+        {/* Move focus without changing the route's URL. */}
+        <a
+          href="#main"
+          onClick={(event) => {
+            event.preventDefault()
+            document.getElementById("main")?.focus()
+          }}
+          className="fixed top-(--s2) left-(--s2) z-50 -translate-y-24 rounded-(--r-ctl) bg-(--control) px-(--s4) py-(--s2) font-medium shadow-(--shadow-ctl) focus:translate-y-0"
+        >
+          Skip to content
+        </a>
+        <AppToolbar onCommands={() => setPalette("")} />
+        <main id="main" tabIndex={-1} className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] outline-none">{children}</main>
+        <TabBar />
+        <ShellCommands palette={palette} setPalette={setPalette} />
+      </AppWindow>
+    </ToolbarProvider>
   )
+}
+
+function useDetailHeadingFocus() {
+  const router = useRouter()
+  useEffect(() => router.subscribe("onRendered", ({ pathChanged, fromLocation, toLocation }) => {
+    const { view, detail, landing } = routePosition(toLocation.pathname)
+    if (!fromLocation || !pathChanged || !detail || landing) return
+    if (view === "sessions") {
+      const sessionId = toLocation.pathname.split("/")[3]
+      const session = router.options.context.queryClient.getQueryData(sessionsQuery(false).queryKey)?.find((item) => encodeURIComponent(item.id) === sessionId)
+      // Terminal entry owns focus. Arrowing through the source list leaves its roving focus in place.
+      if (session?.transport !== "acp" || document.activeElement?.closest("[data-row-key]")) return
+    }
+    requestAnimationFrame(() => {
+      if (router.state.location.href !== toLocation.href || document.querySelector("[aria-modal=true]")) return
+      const focused = document.activeElement
+      if (focused?.closest(".xterm, textarea, input, [contenteditable=true]")) return
+      const headings = document.querySelectorAll<HTMLElement>('[data-slot="toolbar"] h1')
+      Array.from(headings).find((heading) => heading.getClientRects().length > 0)?.focus({ preventScroll: true })
+    })
+  }), [router])
 }
 
 // ⌘\ and ⌘1–4 fire even from inputs and the terminal, so they are the only global keys.
@@ -52,7 +87,7 @@ function useShellShortcuts() {
       const view = views[Number(event.key) - 1]
       if (view) {
         event.preventDefault()
-        void navigate(viewLink(view))
+        void navigate({ to: view.to })
       }
     }
     window.addEventListener("keydown", onKeyDown)
@@ -66,15 +101,13 @@ const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigat
 
 // ⌘K opens the palette; elsewhere Ctrl+K, or Ctrl+Shift+K in a terminal, where Ctrl+K is the shell's kill-line.
 // ? outside a text field lists shortcuts. ⌘⇧J opens the next session that needs you.
-function ShellCommands() {
+function ShellCommands({ palette, setPalette }: { palette: string | null; setPalette: (update: string | null | ((current: string | null) => string | null)) => void }) {
   const navigate = useNavigate()
   const { sessions } = useListedSessions()
   const params = useParams({ strict: false })
   const { view } = useRoutePosition()
   const machine = view === "machines" ? params.machine : undefined
   const openKey = params.machine && params.sessionId ? `${params.machine}:${params.sessionId}` : undefined
-  // The palette's starting query while open; null while closed.
-  const [palette, setPalette] = useState<string | null>(null)
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as Element | null
@@ -116,7 +149,7 @@ function ShellCommands() {
     }
     window.addEventListener("keydown", onKeyDown, true)
     return () => window.removeEventListener("keydown", onKeyDown, true)
-  }, [navigate, sessions, openKey, machine])
+  }, [navigate, sessions, openKey, machine, setPalette])
   if (palette === null) return null
   return (
     <Suspense fallback={null}>
@@ -125,12 +158,16 @@ function ShellCommands() {
   )
 }
 
-function AppToolbar() {
+function AppToolbar({ onCommands }: { onCommands: () => void }) {
   const { view, detail, landing } = useRoutePosition()
+  const origin = useRouterState({ select: (state) => state.location.state.sectionOrigin })
+  const subagent = useRouterState({ select: (state) => view === "sessions" && Boolean(state.location.search.sub) })
   const isPhone = useIsPhone()
   const { collapsed, toggle } = useSidebar()
   const discovering = useDiscovering()
-  const title = tabs.find((item) => item.id === view)?.label ?? "Agentpack"
+  const tab = tabs.find((item) => item.id === view)
+  const title = tab?.label ?? "Agentpack"
+  const backTo = view === "machines" ? "/machines" : tab?.to ?? "/sessions"
   const hasSidebar = listDetailViews.includes(view)
 
   return (
@@ -146,10 +183,11 @@ function AppToolbar() {
           <PanelLeft />
         </ToolbarButton>
       )}
-      {isPhone && detail && !landing && (
+      {isPhone && detail && !landing && !subagent && (
         <Link
-          to={view === "machines" ? "/machines" : tabs.find((item) => item.id === view)?.to ?? "/sessions"}
-          aria-label="Back"
+          to={backTo}
+          href={origin}
+          aria-label={`Back to ${title}`}
           className={buttonVariants({ variant: "ghost", size: "icon", className: "shrink-0" })}
         >
           <ChevronLeft />
@@ -159,7 +197,8 @@ function AppToolbar() {
         {views.map((item, index) => (
           <Link
             key={item.id}
-            {...viewLink(item)}
+            to={item.to}
+            aria-current={item.id === view ? "page" : undefined}
             title={`⌘${index + 1}`}
             className={cn(
               "flex h-full cursor-default items-center rounded-full px-(--s5) text-(length:--fs-sm) font-medium text-(--fg2)",
@@ -171,11 +210,14 @@ function AppToolbar() {
         ))}
       </nav>
       <ToolbarTitleTarget />
-      <span className="hidden min-w-24 flex-1 truncate text-(length:--fs) font-semibold peer-empty:inline">{title}</span>
+      <h1 tabIndex={-1} className="hidden min-w-24 flex-1 truncate text-(length:--fs) font-semibold peer-empty:inline">{title}</h1>
       {discovering && <Announcement>Discovering machines…</Announcement>}
       <ConnectionItem />
       <ActivityViewer />
       <ToolbarTarget />
+      <ToolbarButton aria-label="Command palette" aria-haspopup="dialog" title={isMac ? "Command palette (⌘K)" : "Command palette (Ctrl+K)"} onClick={onCommands} className="max-[760px]:ms-auto max-[760px]:size-11">
+        <Command aria-hidden />
+      </ToolbarButton>
       <Link
         to="/settings"
         aria-label="Settings"
@@ -189,7 +231,9 @@ function AppToolbar() {
 
 function TabBar() {
   const { sessions } = useListedSessions()
-  const needsYou = sessions.filter((session) => session.conversation_state === "needs_you").length
+  const { view, detail } = useRoutePosition()
+  const needsYou = sessions.filter((session) => sessionGlyphState(session) === "needsYou").length
+  if (view === "sessions" && detail) return null
   return (
     <nav
       aria-label="Tabs"
@@ -200,6 +244,7 @@ function TabBar() {
         <Link
           key={tab.id}
           to={tab.to}
+          aria-current={tab.id === view ? "page" : undefined}
           aria-label={tab.id === "sessions" && needsYou ? `${tab.label}, ${needsYou} need you` : undefined}
           className="relative flex min-w-0 flex-col items-center justify-center gap-1 pt-1 text-(--fg2) aria-[current=page]:text-(--accent)"
         >

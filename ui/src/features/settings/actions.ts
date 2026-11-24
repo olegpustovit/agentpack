@@ -81,7 +81,7 @@ export function useGatewayActions() {
     onSuccess: () => {
       queryClient.setQueryData<Settings>(settingsQuery.queryKey, (old) => old && { ...old, running: false })
       hud.success(
-        "Gateway stopped. CLI sessions keep running. Run agentpack gateway start on the gateway machine to reconnect.",
+        "Gateway stopped. CLI sessions keep running. Run ap gateway start on the gateway machine to reconnect.",
       )
     },
     onError: (error) => hud.error(`Couldn't stop the gateway: ${errorText(error)}`, () => stopGateway.mutate()),

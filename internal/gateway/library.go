@@ -31,7 +31,7 @@ type LibraryOptions struct {
 	Bootstrap  func() error
 	Save       func(context.Context, SaveAgentpackInput) (SavedAgentpack, error)
 	Preview    func(context.Context, string, string, string) (registry.DiffResult, error)
-	Restore    func(context.Context, string, string, string, bool) error
+	Restore    func(context.Context, string, string, string, bool, string) error
 	DraftState func(context.Context, registry.Draft) (registry.DraftState, error)
 }
 
@@ -143,8 +143,9 @@ func (g *Gateway) registerLibrary(mux routeRegistrar) {
 	})
 	mux.HandleFunc("POST /api/library/agentpacks/{id}/revisions/{revision}/restore", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
-			Directory string `json:"directory"`
-			Restart   *bool  `json:"restart"`
+			Directory     string `json:"directory"`
+			Restart       *bool  `json:"restart"`
+			PreviewDigest string `json:"preview_digest"`
 		}
 		if !network.ReadJSON(w, r, &input) {
 			return
@@ -153,7 +154,11 @@ func (g *Gateway) registerLibrary(mux routeRegistrar) {
 			http.Error(w, "choose a recent folder from this node", http.StatusBadRequest)
 			return
 		}
-		err := library.Restore(r.Context(), r.PathValue("id"), r.PathValue("revision"), input.Directory, input.Restart == nil || *input.Restart)
+		err := library.Restore(r.Context(), r.PathValue("id"), r.PathValue("revision"), input.Directory, input.Restart == nil || *input.Restart, input.PreviewDigest)
+		if errors.Is(err, registry.ErrPreviewChanged) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		libraryResponse(w, map[string]bool{"restored": err == nil}, err)
 	})
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { Package, ProjectMCP, ProjectPackage, ProjectRow, Revision } from "@/lib/api-types"
-import { agentpackRevisions, installedIn, mcpUses, packageRecord, packageVersions, revisionChanges, type RevisionEntry } from "./inspect"
+import { agentpackRevisions, formatRevisionChange, installedIn, mcpUses, packageRecord, packageVersions, revisionChanges, type RevisionEntry } from "./inspect"
 import type { LibraryInput } from "./model"
 
 const alpha = "github.com/acme/alpha"
@@ -97,13 +97,19 @@ describe("agentpackRevisions", () => {
 describe("revisionChanges", () => {
   const entry = (packages: Package[]): RevisionEntry => ({ revision: revision("r", "2026-01-01T00:00:00Z", []), machine: "host-a", packages })
 
-  it("reports adds, commit updates and removals by module", () => {
-    const before = entry([pkg({ module: "m/a", commit: "1" }), pkg({ module: "m/b", commit: "1", name: "B" })])
-    const after = entry([pkg({ module: "m/a", commit: "2", name: "A" }), pkg({ module: "m/c", commit: "1", name: "C" })])
-    expect(revisionChanges(after, before)).toEqual([
-      { kind: "update", name: "A" },
-      { kind: "add", name: "C" },
-      { kind: "remove", name: "B" },
+  it("reports adds, commit updates and removals by module with old and new pins", () => {
+    const before = entry([pkg({ module: "m/a", commit: "1.4.0" }), pkg({ module: "m/b", commit: "1111111aaaa", name: "B" })])
+    const after = entry([pkg({ module: "m/a", commit: "1.5.0", name: "A" }), pkg({ module: "m/c", commit: "2222222bbbb", name: "C" })])
+    const changes = revisionChanges(after, before)
+    expect(changes).toEqual([
+      { kind: "update", name: "A", from: "1.4.0", to: "1.5.0" },
+      { kind: "add", name: "C", to: "2222222bbbb" },
+      { kind: "remove", name: "B", from: "1111111aaaa" },
+    ])
+    expect(changes.map(formatRevisionChange)).toEqual([
+      "Update A 1.4.0 → 1.5.0",
+      "Add C 2222222",
+      "Remove B 1111111",
     ])
   })
 

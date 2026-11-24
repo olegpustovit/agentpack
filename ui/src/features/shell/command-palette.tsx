@@ -1,25 +1,27 @@
 import { useState, type ReactNode } from "react"
 import { Autocomplete } from "@base-ui/react/autocomplete"
-import { useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { GitFork, GitPullRequest, Plus, Search, Settings, Square, Minimize2 } from "lucide-react"
+import { Archive, GitFork, GitPullRequest, Plus, Search, Settings, Square, Minimize2 } from "lucide-react"
 import { Kbd } from "@/components/kit/feedback"
-import { menuRow, menuSurface } from "@/components/kit/overlays"
+import { ConfirmAlert, menuRow, menuSurface } from "@/components/kit/overlays"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { agentSnapshotQuery, type ConversationPage } from "@/features/conversation/queries"
 import { advertises, agentCommands } from "@/features/conversation/composer-hints"
+import { PullRequestConfirmation, usePullRequest } from "@/features/conversation/session-git"
 import { useSessionCommands } from "@/features/sessions/actions"
 import { rowKey, sessionLabel, type ListedSession } from "@/features/sessions/group"
-import { isWorktreePath } from "@/features/sessions/git"
+import { isWorktreePath, sessionGitQuery } from "@/features/sessions/git"
+import { SessionActionAlert } from "@/features/sessions/session-action-alert"
 import { useStartSession } from "@/features/sessions/start"
 import { sessionRules } from "@/features/sessions/rules"
 import { sessionGlyphState } from "@/features/sessions/session-status"
-import { api, errorText } from "@/lib/api"
+import { api, errorText, LOCAL } from "@/lib/api"
 import { basename, harnessName } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { requestTerminal } from "@/features/terminal/shortcuts"
-import { viewLink, views } from "./views"
+import { views } from "./views"
 
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
 const mod = isMac ? "⌘" : "Ctrl+"
@@ -36,9 +38,11 @@ export type PaletteEntry = {
   icon?: ReactNode
   // Listed only once something is typed, so the empty palette stays short.
   typedOnly?: boolean
+  review?: boolean
   run: () => void
 }
 export type PaletteGroup = { value: string; items: PaletteEntry[] }
+type Review = { kind: "archive" | "stop"; session: ListedSession } | { kind: "pull-request" }
 
 // Every word must appear in the label or detail. The label beginning with the query ranks first, then a
 // word of the label beginning with it, then the label containing it, then a detail-only match.
@@ -75,7 +79,7 @@ const shortcuts: [string, string][] = [
   ["Toggle the sidebar", `${mod}\\`],
   ["Filter the list", `${mod}F`],
   ["Rename a session", "F2"],
-  ["Answer a permission card", "1–9, ↵ for the first"],
+  ["Answer a permission card", "Tab, then Enter on your choice"],
   ["Send a message, start a session", `${mod}↵`],
   ["List shortcuts", "?"],
 ]
@@ -97,7 +101,29 @@ export default function CommandPalette({
   const commands = useSessionCommands()
   const startSession = useStartSession()
   const [query, setQuery] = useState(initialQuery)
+  const [review, setReview] = useState<Review>()
   const open = sessions.find((session) => rowKey(session) === openKey)
+  const machine = open?.machine ?? LOCAL
+  const sessionId = open?.id ?? ""
+  const checkGit = Boolean(open && !open.offline && !open.archived_at && isWorktreePath(open.directory))
+  const summary = useQuery({ ...sessionGitQuery(machine, sessionId), enabled: checkGit }).data
+  const details = useQuery({ ...sessionGitQuery(machine, sessionId, true), enabled: checkGit && !!summary?.deferred }).data
+  const git = summary?.deferred ? details : summary
+  const pr = usePullRequest(machine, sessionId, git?.branch)
+  const openPullRequest = git?.pr?.state === "OPEN" ? git.pr.url : pr.link?.url
+
+  function archiveSession(session: ListedSession) {
+    commands.archive(session)
+    if (rowKey(session) === openKey) void navigate({ to: "/sessions", search: true, replace: true })
+  }
+
+  function confirmSessionAction({ kind, session }: Extract<Review, { session: ListedSession }>) {
+    const current = sessions.find((item) => rowKey(item) === rowKey(session))
+    onClose()
+    if (!current || !sessionRules(current)[kind]) return
+    if (kind === "archive") archiveSession(current)
+    else void commands.stop(current)
+  }
 
   function go(session: ListedSession) {
     void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: session.machine, sessionId: session.id } })
@@ -119,7 +145,7 @@ export default function CommandPalette({
   if (open) entries.push(...sessionCommands(open))
   entries.push(
     { id: "new", group: "Go to", label: "New session…", icon: <Plus aria-hidden />, run: () => void navigate({ to: "/sessions", search: { new: "1" } }) },
-    ...views.map((view, index) => ({ id: `view:${view.id}`, group: "Go to", label: view.label, icon: <view.icon aria-hidden />, shortcut: `${mod}${index + 1}`, run: () => void navigate(viewLink(view)) })),
+    ...views.map((view, index) => ({ id: `view:${view.id}`, group: "Go to", label: view.label, icon: <view.icon aria-hidden />, shortcut: `${mod}${index + 1}`, run: () => void navigate({ to: view.to }) })),
     { id: "settings", group: "Go to", label: "Settings", icon: <Settings aria-hidden />, run: () => void navigate({ to: "/settings" }) },
     ...sessions.filter((session) => !waiting.includes(session) && !session.archived_at).map((session) => sessionEntry(session, "Sessions", true)),
   )
@@ -128,13 +154,24 @@ export default function CommandPalette({
     const agent = harnessName(session.harness)
     const live = !session.offline && session.state.running
     const chat = session.transport === "acp"
+    const rules = sessionRules(session)
     const list: PaletteEntry[] = []
     if (chat && !session.archived_at) {
       list.push({ id: "terminal", group: "This session", label: "Toggle terminal", shortcut: `${mod}J`, run: () => requestTerminal("toggle") })
       if (!session.offline) list.push({ id: "terminal-new", group: "This session", label: "New shell", shortcut: "Ctrl+Shift+`", run: () => requestTerminal("new") })
     }
-    if (sessionRules(session).stop) {
-      list.push({ id: "stop", group: "This session", label: `Stop ${agent}`, icon: <Square aria-hidden />, run: () => void commands.stop(session) })
+    if (rules.stop) {
+      list.push({ id: "stop", group: "This session", label: `Stop ${agent}…`, icon: <Square aria-hidden />, review: true, run: () => setReview({ kind: "stop", session }) })
+    }
+    if (rules.archive) {
+      list.push({
+        id: "archive",
+        group: "This session",
+        label: rules.stop ? "Archive session…" : "Archive session",
+        icon: <Archive aria-hidden />,
+        review: rules.stop,
+        run: () => rules.stop ? setReview({ kind: "archive", session }) : archiveSession(session),
+      })
     }
     if (live && chat && session.agent_session_id && session.agent_capabilities?.sessionCapabilities?.fork) {
       list.push({
@@ -148,22 +185,22 @@ export default function CommandPalette({
         }),
       })
     }
-    // Offered for a session in its own worktree, as the toolbar does; the gateway pushes then opens the PR.
-    if (!session.offline && isWorktreePath(session.directory) && !session.archived_at) {
+    if (openPullRequest) {
+      list.push({
+        id: "open-pull-request",
+        group: "This session",
+        label: pr.link && !pr.link.created ? "Open GitHub compare" : "Open pull request",
+        icon: <GitPullRequest aria-hidden />,
+        run: () => window.open(openPullRequest, "_blank", "noopener,noreferrer"),
+      })
+    } else if (checkGit && git?.available && git.worktree && !git.removed && git.branch && git.ahead > 0 && !pr.isPending) {
       list.push({
         id: "pull-request",
         group: "This session",
-        label: "Create pull request",
+        label: "Create pull request…",
         icon: <GitPullRequest aria-hidden />,
-        run: () =>
-          void api<{ url?: string; created: boolean }>(`/api/sessions/${encodeURIComponent(session.id)}/git/pr`, { machine: session.machine, method: "POST", body: {} }).then(
-            (result) => {
-              void queryClient.invalidateQueries({ queryKey: ["m", session.machine, "session-git", session.id] })
-              if (result.url) window.open(result.url, "_blank", "noopener,noreferrer")
-              else hud.success("Branch pushed")
-            },
-            (error: unknown) => hud.error(`Couldn't create a pull request for ${sessionLabel(session)}: ${errorText(error)}`),
-          ),
+        review: true,
+        run: () => setReview({ kind: "pull-request" }),
       })
     }
     // The same test the open chat applies: the agent advertised /compact, in this chat or last time.
@@ -235,10 +272,10 @@ export default function CommandPalette({
                         key={entry.id}
                         value={entry}
                         onClick={() => {
-                          onClose()
+                          if (!entry.review) onClose()
                           entry.run()
                         }}
-                        className={cn(menuRow, "flex cursor-default items-center outline-none data-highlighted:bg-(--accent) data-highlighted:text-(--accent-fg) data-highlighted:**:text-(--accent-fg)")}
+                        className={cn(menuRow, "flex cursor-default items-center outline-none data-highlighted:bg-(--accent-fill) data-highlighted:text-(--accent-fg) data-highlighted:**:text-(--accent-fg)")}
                       >
                         {entry.icon}
                         <span className="min-w-0 flex-1 truncate">
@@ -261,6 +298,12 @@ export default function CommandPalette({
             <span>? all shortcuts</span>
           </p>
         </Autocomplete.Root>
+        {review && review.kind !== "pull-request" && (
+          <SessionActionAlert kind={review.kind} rows={[review.session]} onClose={() => setReview(undefined)} onConfirm={() => confirmSessionAction(review)} />
+        )}
+        <ConfirmAlert open={review?.kind === "pull-request" && Boolean(git?.branch)} onOpenChange={(next) => { if (!next) setReview(undefined) }}>
+          {review?.kind === "pull-request" && git?.branch && <PullRequestConfirmation branch={git.branch} onConfirm={() => { onClose(); pr.mutate() }} />}
+        </ConfirmAlert>
       </DialogContent>
     </Dialog>
   )

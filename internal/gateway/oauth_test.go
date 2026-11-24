@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -345,7 +346,7 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 	}
 	const spec = "owner/repo"
 	var installed atomic.Bool
-	h.gateway.options.Install = func(_ context.Context, dir, pkg string, restart bool) error {
+	h.gateway.options.Install = func(_ context.Context, dir, pkg string, restart bool, _ string) error {
 		if dir != directory || pkg != spec || !restart {
 			return fmt.Errorf("unexpected package install: %q %q %t", dir, pkg, restart)
 		}
@@ -402,6 +403,45 @@ func TestOAuthAuthorizeWithoutSessionRedirectsToLogin(t *testing.T) {
 	response, data := h.request(t, "GET", path, "", "", nil, false)
 	if want := "/login?return_to=" + url.QueryEscape(path); response.StatusCode != 303 || response.Header.Get("Location") != want {
 		t.Fatalf("redirect: want 303 %s got %d %q %s", want, response.StatusCode, response.Header.Get("Location"), data)
+	}
+}
+
+func TestOAuthConsentShowsAccessAndRecoversFromExpiry(t *testing.T) {
+	h := newOAuthHarness(t)
+	path := h.authorizePath()
+	response, data := h.request(t, "GET", path, "", "", h.cookie, false)
+	body := string(data)
+	if response.StatusCode != http.StatusOK || strings.Count(body, "<li>") != 4 {
+		t.Fatalf("consent: %d %s", response.StatusCode, body)
+	}
+	for _, want := range []string{"Test assistant", "assistant.example", session.LocalHostname(), testBrowserEmail, "Settings › Account", "Sign out everywhere"} {
+		if !strings.Contains(body, html.EscapeString(want)) {
+			t.Fatalf("consent missing %q", want)
+		}
+	}
+	cancel, allow := strings.Index(body, `value="deny">Cancel`), strings.Index(body, `value="allow">Allow access`)
+	if cancel < 0 || allow < cancel {
+		t.Fatal("consent must put Cancel first")
+	}
+	_, after, _ := strings.Cut(body, `name="consent" value="`)
+	token, _, _ := strings.Cut(after, `"`)
+	if token == "" {
+		t.Fatal("missing consent token")
+	}
+	if _, err := h.gateway.store.DB.Exec("UPDATE oauth_tokens SET expires_at=0 WHERE kind='consent'"); err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"consent": {token}, "decision": {"allow"}}
+	response, data = h.request(t, "POST", path, form.Encode(), "application/x-www-form-urlencoded", h.cookie, true)
+	body = string(data)
+	if response.StatusCode != http.StatusBadRequest || response.Header.Get("Location") != "" ||
+		!strings.Contains(body, `href="`+html.EscapeString(path)+`">Restart authorization`) ||
+		strings.Contains(body, token) || strings.Contains(body, testBrowserEmail) {
+		t.Fatalf("expired consent: %d %s", response.StatusCode, body)
+	}
+	_, fresh := h.consent(t)
+	if fresh == token {
+		t.Fatal("restart reused the expired consent")
 	}
 }
 

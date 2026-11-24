@@ -232,14 +232,14 @@ class ThreadReducer {
         break
       }
       case "permission_request":
-        state.items.push({ kind: "permission", data: entry.payload })
+        state.items.push({ kind: "permission", seq: entry.seq, data: entry.payload })
         state.needs_you = hasOutstandingRequests(state.items)
         break
       case "permission_result":
         resolveRequest(state, "permission", "requestId", entry.payload)
         break
       case "elicitation":
-        state.items.push({ kind: "elicitation", data: entry.payload })
+        state.items.push({ kind: "elicitation", seq: entry.seq, data: entry.payload })
         state.needs_you = hasOutstandingRequests(state.items)
         break
       case "elicitation_result":

@@ -321,13 +321,30 @@ func (g *Gateway) registerMCPOAuth(mux routeRegistrar) {
 	})
 	// The authorization server redirects the browser here. The state proves which login it is; no cookie is sent on this cross-site navigation.
 	mux.HandleFunc("GET /mcp-oauth/callback", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
 		query := r.URL.Query()
 		login := g.mcpBroker.takeLoginByState(query.Get("state"))
 		if login == nil {
-			http.Error(w, "This sign-in link expired or was already used. Start again from Settings → Connections.", http.StatusBadRequest)
+			if event := obs.From(r.Context()); event != nil {
+				event.Fail(errors.New("MCP sign-in callback expired or already used"))
+			}
+			http.Redirect(w, r, "/settings/connections?callback=expired", http.StatusSeeOther)
 			return
 		}
-		if query.Get("error") != "" {
+		providerError := query.Get("error")
+		callback := ""
+		switch providerError {
+		case "access_denied":
+			callback = "denied"
+		case "canceled", "cancelled", "user_canceled", "user_cancelled":
+			callback = "canceled"
+		case "":
+			if query.Get("code") == "" {
+				callback = "canceled"
+			}
+		}
+		if providerError != "" || callback == "canceled" {
 			login.result <- nil
 		} else {
 			login.result <- &auth.AuthorizationResult{Code: query.Get("code"), State: query.Get("state"), Iss: query.Get("iss")}
@@ -336,6 +353,17 @@ func (g *Gateway) registerMCPOAuth(mux routeRegistrar) {
 		case <-login.done:
 		case <-time.After(30 * time.Second):
 		}
-		http.Redirect(w, r, login.returnTo, http.StatusSeeOther)
+		returnTo := login.returnTo
+		if target, err := url.Parse(returnTo); err == nil && target.Path == "/settings/connections" {
+			params := target.Query()
+			params.Set("oauth_login", login.id)
+			params.Del("callback")
+			if callback != "" {
+				params.Set("callback", callback)
+			}
+			target.RawQuery = params.Encode()
+			returnTo = target.String()
+		}
+		http.Redirect(w, r, returnTo, http.StatusSeeOther)
 	})
 }

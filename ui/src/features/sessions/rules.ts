@@ -24,7 +24,7 @@ export function sessionRules(session: ListedSession) {
     restart: !offline && !nonInteractive,
     // A stopped chat starts its agent again on the same conversation.
     resume: !offline && session.transport === "acp" && !session.state.running && Boolean(session.ended_at),
-    stop: !offline && session.state.running,
+    stop: !offline && !session.ended_at && session.state.running,
     reconnect: !offline && !nonInteractive,
     projectSettings: !session.offline && !pending,
     // Archive writes the replicated row, so an offline machine's sessions can go too.
@@ -47,17 +47,21 @@ export function startSessionBody(input: {
   mode: string
   view: SessionView
   agentSessionId?: string
+  prompt?: string
+  sendOnResume?: boolean
   // "new" or the path of an existing worktree of directory; absent runs in the folder itself.
   worktree?: string
   worktreeName?: string
   carry?: boolean
 }) {
+  const message = input.view === "chat" && (!input.agentSessionId || input.sendOnResume) ? input.prompt?.trim() : undefined
   return {
     directory: input.directory,
     harness: input.harness,
     mode: input.mode.trim(),
     transport: input.view === "chat" ? "acp" : "terminal",
     ...(input.agentSessionId ? { agent_session_id: input.agentSessionId } : {}),
+    ...(message ? { first_message: message } : {}),
     ...(input.worktree ? { worktree: input.worktree, ...(input.worktreeName ? { worktree_name: input.worktreeName } : {}), ...(input.carry ? { carry: true } : {}) } : {}),
   }
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -64,6 +65,15 @@ func TestGatewayLibrarySaveCaptureRestore(t *testing.T) {
 	if err != nil || len(missing.MissingObjects) != 1 || missing.NeededHolder != "build-machine" {
 		t.Fatalf("missing revision lost exact holder: %+v %v", missing, err)
 	}
+	starter, err := library.Preview(ctx, saved.Agentpack.ID, saved.Revision.ID, workspace)
+	if err != nil || starter.PreviewDigest == "" {
+		t.Fatalf("initial restore preview: %+v %v", starter, err)
+	}
+	spec := "github.com/acme/fixture@" + strings.Repeat("b", 40)
+	install, err := library.DraftState(ctx, registry.Draft{Directory: workspace, Item: spec})
+	if err != nil || install.CurrentDiff == nil || install.CurrentDiff.PreviewDigest == "" {
+		t.Fatalf("initial install preview: %+v %v", install, err)
+	}
 	// A real CLI mutation appends only when the semantic content changes.
 	if err := manifest.ReplaceModes(root, map[string]mode.Definition{"quiet": {Base: mode.BaseNone}}); err != nil {
 		t.Fatal(err)
@@ -77,10 +87,17 @@ func TestGatewayLibrarySaveCaptureRestore(t *testing.T) {
 	if err != nil || len(revisions) != 2 {
 		t.Fatalf("capture revisions: %d %v", len(revisions), err)
 	}
-	if _, err := library.Preview(ctx, saved.Agentpack.ID, saved.Revision.ID, workspace); err != nil {
-		t.Fatal(err)
+	if err := runner.installNetworkPackage(ctx, workspace, spec, false, install.CurrentDiff.PreviewDigest); !errors.Is(err, registry.ErrPreviewChanged) {
+		t.Fatalf("install with stale preview = %v", err)
 	}
-	if err := library.Restore(ctx, saved.Agentpack.ID, saved.Revision.ID, workspace, false); err != nil {
+	if err := library.Restore(ctx, saved.Agentpack.ID, saved.Revision.ID, workspace, false, starter.PreviewDigest); !errors.Is(err, registry.ErrPreviewChanged) {
+		t.Fatalf("restore with stale preview = %v", err)
+	}
+	current, err := library.Preview(ctx, saved.Agentpack.ID, saved.Revision.ID, workspace)
+	if err != nil || current.PreviewDigest == starter.PreviewDigest {
+		t.Fatalf("new restore preview: %+v %v", current, err)
+	}
+	if err := library.Restore(ctx, saved.Agentpack.ID, saved.Revision.ID, workspace, false, current.PreviewDigest); err != nil {
 		t.Fatal(err)
 	}
 	project, err := manifest.Load(root)

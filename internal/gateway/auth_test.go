@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -184,9 +185,9 @@ func TestLegacyClaimRequiresCurrentPasswordAndKeepsHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := httptest.NewRecorder()
-	auth.status(status, httptest.NewRequest("GET", "/api/status", nil))
-	var body struct{ Claimed, Legacy bool }
-	if json.Unmarshal(status.Body.Bytes(), &body) != nil || body.Claimed || !body.Legacy {
+	(&Gateway{auth: auth}).accountStatus(status, httptest.NewRequest("GET", "/api/status", nil))
+	var body AccountStatus
+	if json.Unmarshal(status.Body.Bytes(), &body) != nil || body.Claimed || !body.Legacy || body.NodeName != session.LocalHostname() || body.JoinPhase != "" {
 		t.Fatalf("legacy status %s", status.Body.String())
 	}
 	for _, current := range []string{"", "wrong-password"} {

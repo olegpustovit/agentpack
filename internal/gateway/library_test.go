@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -36,6 +37,13 @@ func TestLibraryRoutesPreserveTrustAndPersistRename(t *testing.T) {
 	origin, _ := url.Parse("http://127.0.0.1:7420")
 	called := 0
 	bootstrapped := 0
+	const previewDigest = "sha256:reviewed-project"
+	checkDigest := func(digest string) error {
+		if digest != previewDigest {
+			return errors.New("reviewed digest was not forwarded")
+		}
+		return registry.ErrPreviewChanged
+	}
 	g := &Gateway{store: auth.store, auth: auth, origin: origin, local: network.NodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{Home: home, Library: LibraryOptions{
 		Store:     store,
 		Bootstrap: func() error { bootstrapped++; return nil },
@@ -46,9 +54,15 @@ func TestLibraryRoutesPreserveTrustAndPersistRename(t *testing.T) {
 			return SavedAgentpack{Agentpack: pack, Revision: revision}, err
 		},
 		DraftState: func(_ context.Context, draft registry.Draft) (registry.DraftState, error) {
-			return registry.DraftState{Pins: map[string]registry.PackagePin{}, CurrentDiff: &registry.DiffResult{Add: []string{"github.com/example/skill"}}}, nil
+			return registry.DraftState{Pins: map[string]registry.PackagePin{}, CurrentDiff: &registry.DiffResult{Add: []string{"github.com/example/skill"}, PreviewDigest: previewDigest}}, nil
+		},
+		Restore: func(_ context.Context, _, _, _ string, _ bool, digest string) error {
+			return checkDigest(digest)
 		},
 	}}}
+	g.options.Install = func(_ context.Context, _, _ string, _ bool, digest string) error {
+		return checkDigest(digest)
+	}
 	handler := g.Handler()
 	request := func(method, path string, body any, authenticated bool) *httptest.ResponseRecorder {
 		t.Helper()
@@ -114,11 +128,21 @@ func TestLibraryRoutesPreserveTrustAndPersistRename(t *testing.T) {
 	}
 	w = request("POST", "/api/library/drafts/"+draft.ID+"/review", map[string]any{}, true)
 	var review registry.DraftReview
-	if err := json.Unmarshal(w.Body.Bytes(), &review); err != nil || w.Code != http.StatusOK || !review.Ready || review.Diff == nil {
+	if err := json.Unmarshal(w.Body.Bytes(), &review); err != nil || w.Code != http.StatusOK || !review.Ready || review.Diff == nil || review.Diff.PreviewDigest != previewDigest {
 		t.Fatal(w.Code, w.Body.String(), err)
 	}
 	if called != 1 {
 		t.Fatal("review applied a draft")
+	}
+	for _, write := range []string{"/api/packages", path + "/revisions/" + saved.Revision.ID + "/restore"} {
+		body := map[string]any{"directory": directory, "preview_digest": review.Diff.PreviewDigest, "restart": false}
+		if write == "/api/packages" {
+			body["spec"] = draft.Item
+		}
+		w = request("POST", write, body, true)
+		if w.Code != http.StatusConflict {
+			t.Fatalf("stale preview at %s: %d %s", write, w.Code, w.Body.String())
+		}
 	}
 	draft.FolderIdentity = "replaced-directory"
 	w = request("POST", "/api/library/draft-state", draft, true)

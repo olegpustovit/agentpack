@@ -57,7 +57,13 @@ func (g *Gateway) serveStartSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if input.ID != "" {
-		info, err := g.claimChatStart(r.Context(), actor, input)
+		var info session.SessionInfo
+		var err error
+		if input.Transport == "terminal" {
+			info, err = g.claimTerminalStart(r.Context(), actor, input)
+		} else {
+			info, err = g.claimChatStart(r.Context(), actor, input)
+		}
 		writeSessionStart(w, r, info, err)
 		return
 	}
@@ -315,25 +321,42 @@ type chatStartRequest struct {
 }
 
 var (
-	errChatStartClaim  = errors.New("session ID already claimed")
-	errInvalidChatID   = errors.New("invalid chat ID")
-	errResumeOwnFolder = errors.New("a resumed conversation keeps its own folder")
+	errStartClaim           = errors.New("session ID already claimed")
+	errInvalidChatID        = errors.New("invalid chat ID")
+	errInvalidTerminalID    = errors.New("invalid terminal session ID")
+	errTerminalStartUnknown = errors.New("terminal launch outcome unknown. Check this session before starting another")
+	errResumeOwnFolder      = errors.New("a resumed conversation keeps its own folder")
 )
 
-func (g *Gateway) claimChatStart(ctx context.Context, actor session.Actor, input chatStartRequest) (session.SessionInfo, error) {
-	token := strings.TrimPrefix(input.ID, "session-")
-	if input.Transport != "acp" || !network.ValidSessionID(input.ID) || len(token) != 32 || token != strings.ToLower(token) {
-		return session.SessionInfo{}, errInvalidChatID
+const insertStartClaim = `INSERT INTO session_start_requests (session_id, fingerprint)
+	SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE id=?) ON CONFLICT(session_id) DO NOTHING`
+
+func clientSessionToken(id string) string {
+	token, prefixed := strings.CutPrefix(id, "session-")
+	if !prefixed || !network.ValidSessionID(id) || len(token) != 32 || token != strings.ToLower(token) {
+		return ""
 	}
 	if _, err := hex.DecodeString(token); err != nil {
-		return session.SessionInfo{}, errInvalidChatID
+		return ""
 	}
-	fingerprint := sha256.Sum256(network.MustRawJSON(struct {
+	return token
+}
+
+func startFingerprint(actor session.Actor, input chatStartRequest) [sha256.Size]byte {
+	return sha256.Sum256(network.MustRawJSON(struct {
 		Actor session.Actor
 		Input chatStartRequest
 		Fork  string `json:",omitempty"`
 	}{actor, input, input.forkSessionID}))
-	if info, err := readChatStartClaim(ctx, g.store.Reader, input.ID, fingerprint[:]); !errors.Is(err, sql.ErrNoRows) {
+}
+
+func (g *Gateway) claimChatStart(ctx context.Context, actor session.Actor, input chatStartRequest) (session.SessionInfo, error) {
+	token := clientSessionToken(input.ID)
+	if input.Transport != "acp" || token == "" {
+		return session.SessionInfo{}, errInvalidChatID
+	}
+	fingerprint := startFingerprint(actor, input)
+	if info, err := readStartClaim(ctx, g.store.Reader, input.ID, fingerprint[:]); !errors.Is(err, sql.ErrNoRows) {
 		return info, err
 	}
 	info := session.SessionInfo{
@@ -352,7 +375,11 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor session.Actor, input
 	if err := network.AuthorizeACPResume(ctx, g.store, actor, source); err != nil {
 		return session.SessionInfo{}, err
 	}
-	if main, _, err := worktreeMain(ctx, g.options.Home, info.Directory); input.Worktree == "" && err == nil && g.startableDirectory(ctx, actor, main) {
+	if input.Worktree != "" {
+		if err := g.preflightSessionWorktree(ctx, actor, input); err != nil {
+			return session.SessionInfo{}, err
+		}
+	} else if main, _, err := worktreeMain(ctx, g.options.Home, info.Directory); err == nil && g.startableDirectory(ctx, actor, main) {
 		info.WorktreeOf = main
 		if info.DefinitionRoot == "" {
 			info.DefinitionRoot = g.definitionRootFor(ctx, main)
@@ -375,7 +402,7 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor session.Actor, input
 	}
 	inserted := false
 	err = state.Transaction(ctx, g.store.DB, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, session.InsertSessionSQL+" ON CONFLICT(id) DO NOTHING", args...)
+		result, err := tx.ExecContext(ctx, insertStartClaim, info.ID, fingerprint[:], info.ID)
 		if err != nil {
 			return err
 		}
@@ -384,7 +411,7 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor session.Actor, input
 			return err
 		}
 		inserted = true
-		if _, err := tx.ExecContext(ctx, "INSERT INTO session_start_requests VALUES (?,?)", info.ID, fingerprint[:]); err != nil {
+		if _, err := tx.ExecContext(ctx, session.InsertSessionSQL, args...); err != nil {
 			return err
 		}
 		if prompt := strings.TrimSpace(input.FirstMessage); prompt != "" {
@@ -396,9 +423,9 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor session.Actor, input
 		return session.SessionInfo{}, err
 	}
 	if !inserted {
-		existing, err := readChatStartClaim(ctx, g.store.Reader, input.ID, fingerprint[:])
+		existing, err := readStartClaim(ctx, g.store.Reader, input.ID, fingerprint[:])
 		if errors.Is(err, sql.ErrNoRows) {
-			err = errChatStartClaim
+			err = errStartClaim
 		}
 		return existing, err
 	}
@@ -406,15 +433,97 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor session.Actor, input
 	return info, nil
 }
 
-func readChatStartClaim(ctx context.Context, db *sql.DB, id string, fingerprint []byte) (session.SessionInfo, error) {
+func readStartClaim(ctx context.Context, db *sql.DB, id string, fingerprint []byte) (session.SessionInfo, error) {
 	var existing []byte
 	if err := db.QueryRowContext(ctx, "SELECT fingerprint FROM session_start_requests WHERE session_id=?", id).Scan(&existing); err != nil {
 		return session.SessionInfo{}, err
 	}
 	if !bytes.Equal(existing, fingerprint) {
-		return session.SessionInfo{}, errChatStartClaim
+		return session.SessionInfo{}, errStartClaim
 	}
 	return session.StoredSession(ctx, db, id)
+}
+
+func (g *Gateway) terminalStartClaim(ctx context.Context, actor session.Actor, id string, fingerprint []byte) (session.SessionInfo, error) {
+	info, err := readStartClaim(ctx, g.store.Reader, id, fingerprint)
+	if errors.Is(err, session.ErrSessionNotFound) {
+		return info, errTerminalStartUnknown
+	}
+	if err != nil {
+		return info, err
+	}
+	local, err := g.nodeID(ctx)
+	if err != nil {
+		return session.SessionInfo{}, err
+	}
+	if info.NodeID != local || info.Transport != "terminal" || !actor.CanWriteSession(info) {
+		return session.SessionInfo{}, errStartClaim
+	}
+	if !info.State.Interactive {
+		return session.SessionInfo{}, errTerminalStartUnknown
+	}
+	info.Reachable = true
+	return info, nil
+}
+
+// Claim before creating a worktree or launching a worker. Once admitted, a dropped response
+// cannot cause a second worker for the same request, even if no terminal row was published yet.
+func (g *Gateway) claimTerminalStart(ctx context.Context, actor session.Actor, input chatStartRequest) (session.SessionInfo, error) {
+	if clientSessionToken(input.ID) == "" {
+		return session.SessionInfo{}, errInvalidTerminalID
+	}
+	fingerprint := startFingerprint(actor, input)
+	if info, err := g.terminalStartClaim(ctx, actor, input.ID, fingerprint[:]); !errors.Is(err, sql.ErrNoRows) {
+		return info, err
+	}
+	resume := network.CmpOr(input.AgentSessionID, input.Resume)
+	if input.Worktree != "" && resume != "" {
+		return session.SessionInfo{}, errResumeOwnFolder
+	}
+	if err := g.preflightSessionWorktree(ctx, actor, input); err != nil {
+		return session.SessionInfo{}, err
+	}
+	if !g.beginBackground(&g.starting) {
+		return session.SessionInfo{}, errTerminalStartUnknown
+	}
+	defer g.starting.Done()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sessionStartTimeout)
+	defer cancel()
+	claim, err := g.store.DB.ExecContext(ctx, insertStartClaim, input.ID, fingerprint[:], input.ID)
+	if err != nil {
+		return session.SessionInfo{}, fmt.Errorf("claim terminal start: %w", err)
+	}
+	inserted, err := claim.RowsAffected()
+	if err != nil {
+		return session.SessionInfo{}, err
+	}
+	if inserted == 0 {
+		info, err := g.terminalStartClaim(ctx, actor, input.ID, fingerprint[:])
+		if errors.Is(err, sql.ErrNoRows) {
+			err = errStartClaim
+		}
+		return info, err
+	}
+	directory, definitionRoot := input.Directory, ""
+	if input.Worktree != "" {
+		main := filepath.Clean(input.Directory)
+		directory, err = g.newSessionWorktree(ctx, actor, main, input.Worktree, input.WorktreeName, input.Carry)
+		if err != nil {
+			return session.SessionInfo{}, &sessionWorktreeError{err}
+		}
+		definitionRoot = g.definitionRootFor(ctx, main)
+	}
+	launched, err := g.startSession(ctx, actor, session.SessionInfo{
+		ID: input.ID, Directory: directory, DefinitionRoot: definitionRoot, Harness: input.Harness, Mode: input.Mode,
+		Transport: input.Transport, AgentSessionID: resume, ParentID: input.ParentID,
+	}, "")
+	if err != nil {
+		return session.SessionInfo{}, err
+	}
+	if launched.ID != input.ID {
+		return session.SessionInfo{}, errors.New("terminal worker did not use its claimed session ID")
+	}
+	return g.terminalStartClaim(ctx, actor, input.ID, fingerprint[:])
 }
 
 // launchSession starts a terminal session synchronously. A chat answers at once: its row is written
@@ -437,9 +546,9 @@ func (g *Gateway) launchSession(ctx context.Context, info session.SessionInfo, f
 	return info, nil
 }
 
-// startInBackground prepares the worker for a starting chat. A failure ends the row with the reason.
-// A cold start may need the npm tree's five-minute download budget before the ACP handshake.
-const chatStartTimeout = 7 * time.Minute
+// Bound the work that can outlive a dropped launch response. A cold chat launch may need the npm
+// tree's five-minute download budget before the ACP handshake.
+const sessionStartTimeout = 7 * time.Minute
 
 const interruptedStartGrace = 2 * time.Minute
 
@@ -452,7 +561,7 @@ func (g *Gateway) startInBackground(ctx context.Context, info session.SessionInf
 	obs.Go("gateway.start_session", func() {
 		defer g.starting.Done()
 		defer g.startingChats.Delete(info.ID)
-		startCtx, cancel := context.WithTimeout(background, chatStartTimeout)
+		startCtx, cancel := context.WithTimeout(background, sessionStartTimeout)
 		defer cancel()
 		var err error
 		if request != nil && request.Worktree != "" {

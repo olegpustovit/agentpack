@@ -44,12 +44,13 @@ var loginURL = regexp.MustCompile(`https?://[^\s"'<>\x07\x1b]+`)
 
 // loginStep is what the person needs to sign in. URL and Code are shown, never logged.
 type loginStep struct {
-	ID    string `json:"id"`
-	URL   string `json:"url,omitempty"`
-	Code  string `json:"code,omitempty"`
-	Input string `json:"input,omitempty"`
-	State string `json:"state"` // "waiting", "done" or "failed"
-	Error string `json:"error,omitempty"`
+	ID        string    `json:"id"`
+	URL       string    `json:"url,omitempty"`
+	Code      string    `json:"code,omitempty"`
+	Input     string    `json:"input,omitempty"`
+	State     string    `json:"state"` // "waiting", "done" or "failed"
+	Error     string    `json:"error,omitempty"`
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
 }
 
 // loginAttempt runs one agent's login command in a terminal until it succeeds, fails, is cancelled
@@ -93,8 +94,9 @@ func startLogin(flow harness.LoginFlow) (*loginAttempt, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), loginLifetime)
+	expiresAt, _ := ctx.Deadline()
 	attempt := &loginAttempt{flow: flow, session: session, attach: attach, cancel: cancel, grace: loginStopGrace, verifyEvery: loginVerifyInterval, found: make(chan struct{}), done: make(chan struct{}),
-		step: loginStep{ID: "login-" + rand.Text(), Input: flow.Input, State: "waiting"}}
+		step: loginStep{ID: "login-" + rand.Text(), Input: flow.Input, State: "waiting", ExpiresAt: expiresAt.UTC()}}
 	go attempt.run(ctx, replay.Data)
 	return attempt, nil
 }

@@ -25,6 +25,7 @@ export type LoginStep = {
   input?: "code" | "url"
   state: "waiting" | "done" | "failed"
   error?: string
+  expiresAt?: string
 }
 
 export function readAgents(value: unknown): AgentAccount[] {
@@ -58,6 +59,7 @@ export function readStep(value: unknown): LoginStep {
     input: input === "code" || input === "url" ? input : undefined,
     state: state === "done" || state === "failed" ? state : "waiting",
     error: optional(step.error, "login.error", string) || undefined,
+    expiresAt: optional(step.expires_at, "login.expires_at", string) || undefined,
   }
 }
 

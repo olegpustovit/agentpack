@@ -258,7 +258,7 @@ test("boolean ACP config options send a JSON boolean", async ({ page }) => {
   expect(posted).toEqual({ key: "verbose", value: true })
 })
 
-test("permission shortcuts answer only from the focused card or when no control has focus", async ({ page }) => {
+test("only a named choice can answer a permission request", async ({ page }) => {
   const answers: Record<string, unknown>[] = []
   await page.route("**/api/sessions/*/conversation/permission", (route) => {
     answers.push(route.request().postDataJSON() as Record<string, unknown>)
@@ -271,6 +271,11 @@ test("permission shortcuts answer only from the focused card or when no control 
   expect(answers).toHaveLength(0)
   await card.focus()
   await page.keyboard.press("1")
+  await page.keyboard.press("Enter")
+  await page.keyboard.press("Space")
+  expect(answers).toHaveLength(0)
+  await card.getByRole("button", { name: "Allow once" }).focus()
+  await page.keyboard.press("Enter")
   await expect.poll(() => answers.length).toBe(1)
   expect(answers[0]).toMatchObject({ request_id: "p1", option_id: "allow" })
 })
@@ -291,7 +296,71 @@ test("resolved permission and elicitation cards show their result without answer
   await expect(elicitation.getByRole("button")).toHaveCount(0)
 })
 
-test("a working activity row keeps its title and counts readable", async ({ page }) => {
+test("remembered permissions retain the agent's choices and show native review guidance", async ({ page }) => {
+  const options = [
+    { id: "once", kind: "allow_once", label: "Grant for this turn with strict auto review" },
+    { id: "session", kind: "allow_always", label: "Allow for this session" },
+    { id: "remember", kind: "allow_always", label: "Always allow" },
+    { id: "cancel", kind: "reject_once", label: "No, and tell Codex what to do differently" },
+  ]
+  const entries: object[] = [{
+    seq: 1, ts: 1, kind: "permission_request", payload: { requestId: "remember-1", tool: "execute", summary: "Run the test suite", options },
+  }]
+  await page.route("**/api/sessions/chat-one/conversation**", (route) => route.fulfill({
+    body: entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n", contentType: "application/x-ndjson",
+  }))
+  await page.route("**/api/sessions/chat-one/conversation/config-options", (route) => route.fulfill({ json: [] }))
+  await page.route("**/api/sessions/chat-one/conversation/permission", (route) => {
+    expect(route.request().postDataJSON()).toEqual({ request_id: "remember-1", option_id: "remember" })
+    entries.push({ seq: 2, ts: 2, kind: "permission_result", payload: { requestId: "remember-1", optionId: "remember" } })
+    return route.fulfill({ json: { accepted: true } })
+  })
+  await page.goto("/sessions/local/chat-one")
+  for (const { label } of options) {
+    await expect(page.getByRole("button", { name: label, exact: true })).toBeVisible()
+  }
+  await page.getByRole("button", { name: "Always allow", exact: true }).click()
+  await expect(page.getByText(/Answered: Always allow/)).toBeVisible()
+  await page.reload()
+  await page.getByText("Review remembered permission", { exact: true }).click()
+  await expect(page.getByText(/run \/permissions in Claude Code/)).toBeVisible()
+  await expect(page.getByRole("link", { name: "Claude Code permissions" })).toHaveAttribute("href", "https://code.claude.com/docs/en/permissions#manage-permissions")
+  await expect(page.getByRole("link", { name: "Codex command rules" })).toHaveAttribute("href", "https://developers.openai.com/codex/rules")
+})
+
+test("the phone request dock preserves a draft and reports an answer from another viewer", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.route("**/api/config", (route) => route.fulfill({ json: { conversation_events: true } }))
+  await page.addInitScript(() => {
+    class Feed extends EventTarget {
+      static CLOSED = 2
+      readyState = 1
+      constructor(url: URL | string) {
+        super()
+        if (String(url).includes("session=chat-one")) Reflect.set(window, "chatFeed", this)
+      }
+      close() {}
+    }
+    Object.defineProperty(window, "EventSource", { value: Feed })
+  })
+  await page.goto("/sessions/local/chat-one")
+  const dock = page.getByRole("region", { name: "Requests from the agent" })
+  const composer = page.getByRole("textbox", { name: "Message" })
+  await composer.fill("My draft")
+  await expect(dock).toContainText("Request 1 of 2")
+  await dock.getByRole("button", { name: "Next request" }).click()
+  await expect(dock).toContainText("Request 2 of 2")
+  await dock.getByRole("button", { name: "Previous request" }).click()
+  await expect(composer).toHaveValue("My draft")
+  await page.waitForFunction(() => Boolean(Reflect.get(window, "chatFeed")))
+  await page.evaluate(() => Reflect.get(window, "chatFeed").dispatchEvent(new MessageEvent("conversation", {
+    data: JSON.stringify({ seq: 99, ts: 1099, kind: "permission_result", payload: { requestId: "p1", optionId: "allow" } }),
+  })))
+  await expect(dock).toContainText("Answered elsewhere")
+  await expect(dock.getByRole("button", { name: "Allow once" })).toHaveCount(0)
+})
+
+test("a working activity row without a thought aligns counts next to the chevron", async ({ page }) => {
   const now = Date.now()
   const entries = [
     { seq: 1, ts: now, kind: "prompt", payload: { text: { text: "Check the queue" } } },
@@ -305,10 +374,34 @@ test("a working activity row keeps its title and counts readable", async ({ page
   await page.goto("/sessions/local/chat-one")
   await expect(page.locator('[data-slot="thread-working"]')).toBeVisible()
   const summary = page.locator('[data-slot="tool-group"] > summary')
-  const title = summary.getByText("Worked", { exact: true })
-  await expect(title).toBeVisible()
-  await expect(title).not.toHaveCSS("color", "rgba(0, 0, 0, 0)")
-  await expect(summary).toContainText("1 read · 1 search")
+  const counts = summary.getByText("1 read · 1 search")
+  await expect(counts).toBeVisible()
+  const [chevron, label] = await Promise.all([summary.locator("svg").boundingBox(), counts.boundingBox()])
+  expect(label!.x - (chevron!.x + chevron!.width)).toBeLessThanOrEqual(8)
+  await summary.press("Enter")
+  await expect(summary).toHaveAttribute("aria-expanded", "true")
+})
+
+test("a long thought title leaves the activity counts readable beside the chevron", async ({ page }) => {
+  const entries = [
+    { seq: 1, ts: 1000, kind: "agent_thought_chunk", payload: { text: { text: "Checking whether the hourly bucketing and the heatmap both use the viewer's local day boundary on a UTC runner, which would split one hour across two days" } } },
+    { seq: 2, ts: 2000, kind: "tool_call", payload: { toolCallId: "one", title: "bun run test", kind: "execute", status: "completed", rawInput: { command: "bun run test" } } },
+  ]
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n", contentType: "application/x-ndjson" }))
+  await page.goto("/sessions/local/chat-one")
+  const summary = page.locator('[data-slot="tool-group"] > summary')
+  const counts = summary.getByText("1 command")
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 844 })
+    for (const colorScheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme })
+      await expect(counts).toBeVisible()
+      const [chevron, label] = await Promise.all([summary.locator("svg").boundingBox(), summary.locator("span").first().boundingBox()])
+      expect(label!.x - (chevron!.x + chevron!.width)).toBeLessThanOrEqual(8)
+      expect((await counts.boundingBox())!.width).toBeGreaterThan(40)
+    }
+  }
 })
 
 test("history keeps diff and terminal output collapsed until opened", async ({ page }) => {
@@ -469,19 +562,21 @@ test("escape closes message context menu without posting permission", async ({ p
   const card = page.locator('[data-slot="permission-card"]').first()
   await card.focus()
   await page.keyboard.press("Escape")
+  // Enter on the card itself never answers (CHT-01).
+  await page.keyboard.press("Enter")
   expect(permissionPosts).toBe(0)
   await expect(page.getByRole("button", { name: "Allow once" })).toBeVisible()
 })
 
-test("phone layout keeps tabs and opens the session inspector on demand", async ({ page }) => {
+test("phone chat detail uses Back and opens the session inspector on demand", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto("/sessions/local/chat-one")
   await expect(page.getByText("I'll update the reattach path")).toBeVisible()
   const tabs = page.getByRole("navigation", { name: "Tabs" })
-  await expect(tabs).toBeVisible()
+  await expect(tabs).toBeHidden()
+  await expect(page.getByRole("link", { name: /Back to Sessions/i })).toBeVisible()
   await expect(page.getByRole("button", { name: "Chat", exact: true })).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Terminal", exact: true })).toHaveCount(0)
-  await expect(tabs.getByRole("link")).toHaveCount(5)
   const inspector = page.locator('[data-slot="conversation-inspector"]')
   await expect(inspector).toBeHidden()
   await page.getByRole("button", { name: "Show session details" }).click()
@@ -620,6 +715,7 @@ test("phone: a subagent's sidebar row opens it full-screen", async ({ page }) =>
   await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: subagentsBody, contentType: "application/x-ndjson" }))
   await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
   await page.goto("/sessions")
+  await page.getByRole("button", { name: "All sessions" }).click()
   await page.locator('[data-subagent-row="sub-review"]').click()
   await expect(page).toHaveURL(/sub=sub-review/)
   await expect(page.getByText("Running the cancel tests.")).toBeVisible()
@@ -644,7 +740,7 @@ test("Enter queues while the agent works and ⌘Enter steers", async ({ page }) 
   })
   await page.goto("/sessions/local/chat-one")
   await expect(page.locator('[data-slot="prompt-queue"]')).toContainText("Then add tests")
-  await expect(page.getByRole("button", { name: "Steer now" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Send now" })).toBeVisible()
   const message = page.getByRole("textbox", { name: "Message" })
   await message.fill("queue me")
   await message.press("Enter")
@@ -663,12 +759,15 @@ test("Enter queues while the agent works and ⌘Enter steers", async ({ page }) 
     await response
     return route.fulfill({ status: 409, body: "Cannot steer" })
   })
+  // An empty Enter never steers (CHT-02); only the queued item's own button does.
   await message.fill("")
   await message.press("Enter")
+  expect(steered).toBe("")
+  await page.getByRole("button", { name: "Send now" }).click()
   await expect(page.getByText("Steering next:", { exact: true })).toBeVisible()
   await expect.poll(() => steered).toContain("/queue/q1/steer")
   release()
-  await expect(page.getByRole("button", { name: "Steer now" })).toBeEnabled()
+  await expect(page.getByRole("button", { name: "Send now" })).toBeEnabled()
   expect(posts).toHaveLength(2)
 })
 
@@ -680,6 +779,9 @@ test("the composer continues a chat with another agent", async ({ page }) => {
   })
   await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: "", contentType: "application/x-ndjson" }))
   await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+  await page.route("**/api/agents", (route) => route.fulfill({
+    json: { agents: [{ harness: "grok", installed: false, signed_in: false }] },
+  }))
   await page.route("**/api/sessions/chat-one/harness", (route) => {
     body = route.request().postDataJSON()
     return route.fulfill({ json: { ...session, id: "chat-one", transport: "acp", harness: "codex" } })
@@ -687,8 +789,38 @@ test("the composer continues a chat with another agent", async ({ page }) => {
   await page.goto("/sessions/local/chat-one")
   await page.getByRole("button", { name: "Claude", exact: true }).click()
   await expect(page.getByRole("menuitemradio", { name: "Claude" })).toBeDisabled()
+  await expect(page.getByRole("menuitemradio", { name: /Grok · Not installed/ })).toBeDisabled()
   await page.getByRole("menuitemradio", { name: "Codex" }).click()
+  const review = page.getByRole("alertdialog", { name: "Switch to Codex?" })
+  await expect(review).toContainText("Your next message goes to Codex with a summary of this conversation.")
+  expect(body).toBeUndefined()
+  await review.getByRole("button", { name: "Switch to Codex" }).click()
   await expect.poll(() => body).toEqual({ harness: "codex" })
+})
+
+test("creating a pull request confirms the push and leaves a link after reload", async ({ page }) => {
+  const url = "https://github.com/example/gateway/compare/main...fix/login-loop"
+  let pushes = 0
+  await page.route("**/api/sessions/chat-one/git", (route) => route.fulfill({
+    json: { available: true, worktree: true, branch: "fix/login-loop", ahead: 1 },
+  }))
+  await page.route("**/api/sessions/chat-one/git/pr", (route) => {
+    pushes++
+    return route.fulfill({ json: { pushed: true, created: false, url } })
+  })
+  await page.goto("/sessions/local/chat-one")
+  const create = page.getByRole("button", { name: "Create pull request", exact: true })
+  await create.click()
+  const confirm = page.getByRole("alertdialog", { name: "Create pull request?" })
+  await expect(confirm).toContainText("Pushes branch fix/login-loop to origin.")
+  expect(pushes).toBe(0)
+  await confirm.getByRole("button", { name: "Create pull request" }).click()
+  const link = page.getByRole("link", { name: "Open GitHub compare", exact: true })
+  await expect(link).toHaveAttribute("href", url)
+  expect(pushes).toBe(1)
+  await page.reload()
+  await expect(link).toHaveAttribute("href", url)
+  expect(pushes).toBe(1)
 })
 
 test("a starting chat shows the last agent choices before its worker is ready", async ({ page }) => {
@@ -767,9 +899,10 @@ test("the replicated session row shows a turn before its log arrives", async ({ 
     return route.fulfill({ json: {} })
   })
   await page.goto("/sessions/local/chat-one")
-  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible()
-  // Esc stops the turn even when the composer isn't focused.
+  await expect(page.getByRole("button", { name: "Stop turn", exact: true })).toBeVisible()
+  // ⌘. / Ctrl+. stops the turn even when the composer isn't focused; Escape no longer does (CHT-02).
   await page.locator("body").press("Escape")
+  await page.locator("body").press("ControlOrMeta+Period")
   await expect.poll(() => cancels).toBe(1)
 })
 
@@ -787,6 +920,17 @@ test("a stopped chat shows why it stopped, not an update banner", async ({ page 
   await page.goto("/sessions/local/chat-one")
   await expect(page.getByText("Antigravity is not signed in on gigacomp.")).toBeVisible()
   await expect(page.getByText(/needs an update/)).toHaveCount(0)
+})
+
+test("archived chat shows saved history without resume or terminal controls", async ({ page }) => {
+  await page.route("**/api/sessions", (route) => route.fulfill({
+    json: [{ ...session, id: "chat-one", transport: "acp", archived_at: "2026-11-24T20:00:00Z", ended_at: session.started_at, state: { ...session.state, running: false } }],
+  }))
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByText("Archived · read-only", { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole("textbox", { name: "Message" })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Terminal", exact: true })).toHaveCount(0)
 })
 
 test("expired Claude sign-in on a running chat leaves the restart to the gateway", async ({ page }) => {
@@ -867,7 +1011,8 @@ test("a chat whose agent isn't signed in signs it in and then starts", async ({ 
   await card.getByRole("button", { name: "Continue" }).click()
   await expect.poll(() => pasted).toEqual({ input: "https://antigravity.google/oauth-callback?code=abc" })
   await page.clock.runFor(2500)
-  await expect.poll(() => resumed).toEqual({ text: "hello agy" })
+  await expect.poll(() => resumed).toEqual({ text: "" })
+  await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("hello agy")
 })
 
 test("a message to a stopped chat resumes that chat", async ({ page }) => {
@@ -884,12 +1029,15 @@ test("a message to a stopped chat resumes that chat", async ({ page }) => {
   })
   await page.goto("/sessions/local/chat-one")
   const composer = page.getByRole("textbox", { name: "Message" })
+  await expect(page.getByText(/^Stopped · /)).toBeVisible()
+  await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible()
   await composer.fill("continue")
   await page.keyboard.press("Enter")
-  await expect(composer).toHaveValue("")
-  await expect(page.getByText("continue", { exact: true })).toBeVisible()
+  await expect(composer).toHaveValue("continue")
+  await expect(page.getByLabel("Conversation", { exact: true }).getByText("continue", { exact: true })).toBeVisible()
   release()
   await expect.poll(() => resumed).toEqual({ text: "continue" })
+  await expect(composer).toHaveValue("")
   await expect(page).toHaveURL(/\/sessions\/local\/chat-one/)
   await expect(page.getByPlaceholder(/Starting/)).toBeVisible()
 })
@@ -904,7 +1052,11 @@ test("an Oh My Pi chat switches to a role's model and thinking from the model me
   await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({
     json: {
       configOptions: [
-        { type: "select", id: "model", name: "Model", category: "model", currentValue: "anthropic/opus", options: [{ value: "anthropic/opus", name: "Claude Opus" }, { value: "anthropic/haiku", name: "Claude Haiku" }] },
+        { type: "select", id: "model", name: "Model", category: "model", currentValue: "anthropic/opus", options: [
+          { value: "anthropic/opus", name: "Claude Opus" },
+          { value: "anthropic/haiku", name: "Claude Haiku" },
+          { value: "openai/gpt", name: "GPT", disabledReason: "Provider sign-in required" },
+        ] },
         { type: "select", id: "thinking", name: "Thinking", category: "thought_level", currentValue: "high", options: [{ value: "low", name: "Low" }, { value: "high", name: "High" }] },
       ],
     },
@@ -915,8 +1067,9 @@ test("an Oh My Pi chat switches to a role's model and thinking from the model me
     return route.fulfill({ json: { accepted: true } })
   })
   await page.goto("/sessions/local/chat-one")
-  await page.getByRole("button", { name: "Model and effort" }).click()
+  await page.getByRole("button", { name: "Model and effort", exact: true }).click()
   await expect(page.getByRole("menuitem", { name: /Thinking/ })).toHaveCount(0)
+  await expect(page.getByRole("menuitemradio", { name: /GPT · Provider sign-in required/ })).toBeDisabled()
   await page.getByRole("menuitem", { name: /^Fast/ }).click()
   await expect.poll(() => posted).toEqual([{ key: "model", value: "anthropic/haiku" }, { key: "thinking", value: "low" }])
 })
@@ -1250,4 +1403,43 @@ test("⌘J opens the chat terminal and hides it without disconnecting", async ({
   await page.keyboard.press("ControlOrMeta+j")
   await expect(terminal).toBeFocused()
   expect(conns).toHaveLength(1)
+})
+
+test("chat terminal tabs move focus and selection with the keyboard", async ({ page }) => {
+  let closed: string | undefined
+  await page.route("**/api/sessions/chat-one/shells", (route) => route.fulfill({
+    json: [
+      { ...session, id: "shell-1", transport: "shell", harness: "shell", parent_id: "chat-one", directory: "/work/app", state: { ...session.state, shell_command: "running" } },
+      { ...session, id: "shell-2", transport: "shell", harness: "shell", parent_id: "chat-one", directory: "/var/logs", state: { ...session.state, shell_command: "idle" } },
+    ],
+  }))
+  await page.route("**/api/sessions/*/stop", (route) => {
+    closed = new URL(route.request().url()).pathname.split("/")[3]
+    return route.fulfill({ json: { stopped: true } })
+  })
+  await stubWorker(page)
+  await page.goto("/sessions/local/chat-one")
+  await page.getByRole("button", { name: "Terminal", exact: true }).click()
+  const tabs = page.getByRole("tablist", { name: "Terminals" })
+  const logs = tabs.getByRole("tab", { name: "logs" })
+  const app = tabs.getByRole("tab", { name: "app" })
+  await expect(logs).toHaveAttribute("aria-selected", "true")
+  await logs.press("Home")
+  await expect(app).toBeFocused()
+  await expect(app).toHaveAttribute("aria-selected", "true")
+  await expect(page.getByRole("tabpanel", { name: "app" })).toHaveAttribute("id", (await app.getAttribute("aria-controls"))!)
+  await page.getByRole("button", { name: "Close app terminal" }).click()
+  const confirm = page.getByRole("alertdialog", { name: "Close app terminal?" })
+  await expect(confirm).toBeVisible()
+  expect(closed).toBeUndefined()
+  await confirm.getByRole("button", { name: "Cancel" }).click()
+  await app.press("ArrowRight")
+  await expect(logs).toBeFocused()
+  await expect(logs).toHaveAttribute("aria-selected", "true")
+  await expect(page.getByRole("tabpanel", { name: "logs" })).toContainText("/var/logs")
+  await expect(page.getByRole("tabpanel", { name: "logs" }).locator('[aria-busy="false"]')).toBeAttached()
+  await page.getByRole("button", { name: "Close logs terminal" }).click()
+  await expect.poll(() => closed).toBe("shell-2")
+  await page.getByRole("button", { name: "Hide terminal" }).click()
+  await expect(page.getByRole("textbox", { name: "Message" })).toBeFocused()
 })

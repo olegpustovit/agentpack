@@ -49,6 +49,8 @@ func (g *Gateway) registerGatewayLifecycle(mux routeRegistrar) {
 
 type AccountStatus struct {
 	Joining       bool   `json:"joining,omitempty"`
+	JoinPhase     string `json:"join_phase,omitempty"`
+	NodeName      string `json:"node_name,omitempty"`
 	Claimed       bool   `json:"claimed"`
 	Legacy        bool   `json:"legacy"`
 	Authenticated bool   `json:"authenticated"`

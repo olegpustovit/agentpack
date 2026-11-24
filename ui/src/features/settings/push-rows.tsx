@@ -15,7 +15,7 @@ function pushError(error: unknown): string {
 }
 
 // "Push to this device": notifications that arrive with every gateway tab closed.
-export function PushRows() {
+export function PushRows({ permission, onPermissionChange }: { permission: NotificationPermission | "unsupported"; onPermissionChange: (permission: NotificationPermission) => void }) {
   const blocker = pushBlocker()
   const [subscription, setSubscription] = useState<PushSubscription | null | undefined>(undefined)
   useEffect(() => {
@@ -49,22 +49,25 @@ export function PushRows() {
         id="push-device"
         checked={change.isPending ? Boolean(change.variables?.on) : on}
         disabled={Boolean(blocker) || subscription === undefined || change.isPending}
-        onCheckedChange={(next) => change.mutate({ on: next, permission: next ? Notification.requestPermission() : undefined })}
+        onCheckedChange={(next) => change.mutate({
+          on: next,
+          permission: next ? Notification.requestPermission().then((result) => { onPermissionChange(result); return result }) : undefined,
+        })}
       />
       <span className="text-(length:--fs-sm) text-(--fg2)">
         {blocker ? "Unavailable" : on ? "On. Arrives even with every tab closed" : "Off"}
       </span>
-      {subscription && (
+      {subscription && !blocker && (
         <Button variant="ghost" disabled={test.isPending} onClick={() => test.mutate(subscription)}>
-          Send a test
+          Send push test
         </Button>
       )}
-      {blocker && (
+      {blocker && permission !== "denied" && !(permission === "unsupported" && blocker === "unsupported") && (
         <p data-slot="push-blocker" className="m-0 basis-full max-w-[60ch] text-(length:--fs-xs) text-(--fg2)">
           {pushBlockerText[blocker]}
         </p>
       )}
-      {failure && <FieldError className="basis-full">{pushError(failure)}</FieldError>}
+      {failure && permission !== "denied" && <FieldError className="basis-full">{pushError(failure)}</FieldError>}
     </Row>
   )
 }

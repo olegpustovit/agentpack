@@ -55,9 +55,9 @@ type WorkerRecord struct {
 	Secret  string              `json:"secret"`
 }
 
-// CreateSessionDirectory claims id (chosen by the gateway for an instant start) or a fresh one.
-func CreateSessionDirectory(root, id string) (string, error) {
-	claimed := id != ""
+// CreateSessionDirectory claims id or a fresh one. Only chat resumes can reuse a stopped worker directory.
+func CreateSessionDirectory(root, id string, reuse bool) (string, error) {
+	reuse = reuse && id != ""
 	if id == "" {
 		id = NewSessionID()
 	} else if !ValidSessionID(id) {
@@ -67,7 +67,7 @@ func CreateSessionDirectory(root, id string) (string, error) {
 	err := os.Mkdir(directory, 0700)
 	// A resumed chat reuses its directory (it keeps the chat's images); the gateway's claim on the row
 	// guarantees no other worker owns it, and an endpoint file would mean one still does.
-	if errors.Is(err, fs.ErrExist) && claimed {
+	if errors.Is(err, fs.ErrExist) && reuse {
 		if _, statErr := os.Lstat(filepath.Join(directory, "worker.json")); errors.Is(statErr, fs.ErrNotExist) {
 			err = nil
 		}
@@ -114,12 +114,13 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if err := paths.EnsurePrivateDirectory(root); err != nil {
 		return 1, fmt.Errorf("create worker root: %w", err)
 	}
-	// Only an instant start arrives with its ID; other launches always get a fresh one.
+	// A chat claim may resume an existing directory. A claimed terminal needs a fresh directory.
 	claimed := ""
-	if launch.Session.ConversationState == "starting" {
+	reuse := launch.Session.ConversationState == "starting"
+	if reuse || launch.Transport == "terminal" {
 		claimed = launch.Session.ID
 	}
-	directory, err := CreateSessionDirectory(root, claimed)
+	directory, err := CreateSessionDirectory(root, claimed, reuse)
 	if err != nil {
 		return 1, fmt.Errorf("create worker directory: %w", err)
 	}

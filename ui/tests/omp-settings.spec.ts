@@ -6,6 +6,7 @@ const settings = {
   schema: [
     { key: "git.enabled", tab: "interaction", group: "Git", label: "Enable Git Integration", description: "Show git branch, status, and PR information.", type: "boolean", default: true },
     { key: "steeringMode", tab: "interaction", group: "Input", label: "Steering Mode", description: "How to process queued messages while agent is working", type: "enum", values: ["all", "one-at-a-time"], default: "one-at-a-time" },
+    { key: "maxHistory", tab: "interaction", group: "Input", label: "Maximum history", description: "Turns retained for recall", type: "number", default: 10 },
     { key: "defaultThinkingLevel", tab: "model", group: "Thinking", label: "Thinking Level", description: "Reasoning depth for thinking-capable models", type: "enum", values: ["low", "medium", "high", "xhigh"], default: "high" },
     { key: "cycleOrder", tab: "model", group: "Prompt", label: "Cycle Order", description: "", type: "array", default: [] },
   ],
@@ -61,7 +62,15 @@ test("a role and a switch save network-wide", async ({ page }) => {
   await expect(page.getByRole("row", { name: /Default/ })).toContainText("Claude Sonnet 5.5")
 
   await page.getByRole("group", { name: "Oh My Pi settings" }).getByRole("button", { name: "Interaction" }).click()
-  await page.getByRole("switch", { name: "Enable Git Integration" }).click()
+  const setting = page.getByRole("switch", { name: "Enable Git Integration" })
+  await expect(setting.locator("../../..")).toContainText("Inherited On")
+  await setting.click()
+  expect(writes).toHaveLength(1)
+  const save = setting.locator("..").getByRole("button", { name: "Save", exact: true })
+  await save.click()
+  await expect(setting.locator("../../..")).toContainText("Mesh override Off")
+  await expect(setting.locator("../../..")).toContainText("Effective Off")
+  await expect(setting.locator("../../..")).toContainText("Saved")
 
   await expect.poll(() => writes).toEqual([
     { request: "PUT /api/omp/settings/modelRoles.default", body: { value: "anthropic/claude-sonnet-5-5:medium" } },
@@ -72,5 +81,27 @@ test("a role and a switch save network-wide", async ({ page }) => {
 test("a peer without the models route reads as Needs update", async ({ page }) => {
   await mockOmp(page)
   await page.goto("/settings/omp")
-  await expect(page.getByRole("row", { name: /Default/ })).toContainText("Needs update on laptop")
+  const row = page.getByRole("row", { name: /Default/ })
+  await expect(row).toContainText("Needs update on laptop")
+  await page.setViewportSize({ width: 320, height: 568 })
+  const [role, model, thinking] = await row.getByRole("cell").all()
+  const name = (await role!.boundingBox())!
+  const choice = (await model!.boundingBox())!
+  const level = (await thinking!.boundingBox())!
+  expect(name.y + name.height).toBeLessThan(choice.y)
+  expect(choice.y + choice.height).toBeLessThan(level.y)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
+})
+
+test("invalid numbers remain visible with an error after blur and send no changes", async ({ page }) => {
+  const writes = await mockOmp(page)
+  await page.goto("/settings/omp")
+  await page.getByRole("group", { name: "Oh My Pi settings" }).getByRole("button", { name: "Interaction" }).click()
+  const number = page.getByLabel("Maximum history")
+  await number.fill("many")
+  await number.press("Tab")
+  await expect(number).toHaveValue("many")
+  await expect(number).toHaveAccessibleDescription("Enter a valid number.")
+  await expect(number.locator("..").getByRole("button", { name: "Save", exact: true })).toBeDisabled()
+  expect(writes).toHaveLength(0)
 })

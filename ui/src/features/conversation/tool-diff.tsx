@@ -106,7 +106,7 @@ function DiffLine({
             type="button"
             aria-label={`Comment on line ${lineNo}`}
             data-slot="diff-comment-add"
-            className="absolute inset-y-0 left-0 flex w-(--s5) items-center justify-center rounded-(--r-row) bg-(--accent) text-(length:--fs-xs) text-white opacity-0 outline-none group-hover:opacity-100 focus-visible:opacity-100"
+            className="absolute inset-y-0 left-0 flex w-(--s5) items-center justify-center rounded-(--r-row) bg-(--accent-fill) text-(length:--fs-xs) text-white opacity-0 outline-none group-hover:opacity-100 focus-visible:opacity-100"
             onClick={onComment}
           >
             +

@@ -10,13 +10,13 @@ The Folio kit for the gateway web UI: a tinted **canvas** for navigation (toolba
 2. **Semantic** — Each color resolves per `color-scheme` via `light-dark()` (no duplicated dark override blocks):
    - **Surfaces:** `--canvas` (`--n-50` / `--n-1000`) holds the toolbar and sidebar; `--page` (`--n-0` / `--n-900`) is the one raised work surface (`--r-page` 12 px, `--e-page`); `--raised` (`--n-0` / `--n-850`) for popovers, menus, and sheets; translucent `--sunken` for tracks, search, and code; `--control-fill` and `--field-fill`.
    - **Text & lines:** `--text-1`, `--text-2`, `--text-3` (AA ≥ 5.0:1 at 11 px on both surfaces); `--line` and `--line-soft` (0.5 px hairlines only); `--hover`, `--press`.
-   - **Accents & status:** `--accent`, `--on-accent`, `--accent-tint`, `--ok`, `--warn`, `--danger`, `--idle`, plus legible word tones (`--ok-word`, `--warn-word`, `--danger-word`) and diff fills (`--add*`, `--del*`).
+   - **Accents & status:** `--accent` (text, links, bars), `--accent-fill` (any fill under `--on-accent` text; ≥ 4.5:1 in both schemes), `--on-accent`, `--accent-tint`, `--control-edge` (checkbox and field boundaries; ≥ 3:1), `--ok`, `--warn`, `--danger`, `--idle`, plus legible word tones (`--ok-word`, `--warn-word`, `--danger-word`) and diff fills (`--add*`, `--del*`).
    - **Elevation:** `--e-ctl`, `--e-page`, `--e-pop`, `--e-sheet` (0.5 px rim + contact shadow). Blur stays on menus (`--menu`) only — never on surfaces content scrolls under.
    - **Geometry & rhythm:** Space steps `--s1…--s9` (2, 4, 6, 8, 12, 16, 20, 24, 32 px), `--gutter` 8 px, dialog `--dlg-pad` 20 px and `--dlg-gap` 16 px. Concentric radii: `--r-xs` 4, `--r-row` 6, `--r-ctl` 7, `--r-pop` 10, `--r-page` 12, `--r-sheet` 16, `--r-pill` 999 px.
    - **Charts:** `--series-1…--series-6` (Claude 1, Codex 2, Grok 3, Cursor 4, OMP 5, other 6 = `--fg3`). Bars are thin and rounded, average is a dashed `--fg3` rule, axis sits on the right; the Usage heatmap uses a neutral graphite ramp.
 3. **Density & safe areas** — Compact defaults switch to touch under `@media (max-width: 760px), (pointer: coarse)` or `:root[data-density=touch]`. `--safe-t/b/l/r` read `env(safe-area-inset-*, 0px)`. At `≤ 760 px` the window flattens to one full-bleed surface (`--canvas: var(--page)`) with a faint `--chrome` tint on the toolbar and tab bar.
 
-**Legacy aliases & shadcn mapping:** Legacy names (`--window`, `--chrome`, `--sidebar`, `--control`, `--field`, `--track`, `--fg*`, `--sep*`, `--fs*`, `--shadow-*`) alias layer 2 so existing components keep working until migrated. shadcn tokens map onto the kit tokens; because `--accent` collides, `@theme inline` points `--color-accent` at `--accent-ui` (`--accent-soft`) and `--color-primary` at `--primary` (`--accent`). All base rules live inside `@layer base` so utilities always win.
+**Legacy aliases & shadcn mapping:** Legacy names (`--window`, `--chrome`, `--sidebar`, `--control`, `--field`, `--track`, `--fg*`, `--sep*`, `--fs*`, `--shadow-*`) alias layer 2 so existing components keep working until migrated. shadcn tokens map onto the kit tokens; because `--accent` collides, `@theme inline` points `--color-accent` at `--accent-ui` (`--accent-soft`) and `--color-primary` at `--primary` (`--accent-fill`). All base rules live inside `@layer base` so utilities always win.
 
 ## Metrics
 
@@ -39,7 +39,7 @@ Separators are 0.5 px. Panes scroll independently; there is no page scroll and n
 - **Inset & spacing:** `--dlg-pad` 20 px on every edge and column (plus `--safe-b` on phone); `--dlg-gap` 16 px between sections; title → description 4 px (CSS adjacent rule on `[data-slot=dialog-title] + [data-slot=dialog-description]`).
 - **Widths:** S 360 px (`w-90`, e.g. Rename), M 480 px (`w-120`, default), L 640 px (`w-160`, Project settings), XL 900 px (New session). Phone renders full-width bottom sheets capped at `100dvh − --safe-t − --s4`.
 - **Footer (`SheetActions`):** Pinned sticky to the bottom with a 0.5 px hairline (`pinned={false}` when a sheet provides its own footer), optional left status line, Cancel + primary right (`min-w-20`); 44 px full-width buttons on phone clearing `--safe-b`. No close `✕`.
-- **Alerts (`ConfirmAlert`):** 300 px (`w-75`) centered on `--raised` + `--e-sheet`. macOS button order on desktop: Cancel left (focused), filled red destructive action right. On phone: stacked 44 px buttons, destructive first.
+- **Alerts (`ConfirmAlert`):** 300 px (`w-75`) centered on `--raised` + `--e-sheet`. Cancel receives initial focus and comes first in both the desktop button row and the phone stack of 44 px buttons.
 
 ## Kit components
 
@@ -50,10 +50,10 @@ Components live in `ui/src/components/kit/` (shell pieces in `ui/src/features/sh
 | `AppWindow` | CSS grid | 3 rows: toolbar, content, phone tab bar on `--canvas`. No bottom status bar |
 | `ListDetail` | `ResizablePanelGroup` | Desktop wraps content in one raised `[data-slot=page]` (`bg-(--page)`, `--r-page`, `--e-page`, inset by `--gutter`). Phone switches pane by route |
 | `Toolbar`, `ToolbarButton` | `Button` | Unified with `--canvas`, pads for `--safe-*` and Chrome/Edge `display-mode: window-controls-overlay` (`app-region: drag` / `no-drag`). Leading: sidebar toggle, capsule view switcher, title (`--t-title`). Trailing: connection indicator, activity viewer, route tools, settings gear |
-| `ConnectionItem` | `Popover` | Hidden while healthy. Appears in the toolbar with a dashed ring only when the gateway is unreachable or a machine is offline; opens the machine list with Refresh and View topology |
-| `ActivityViewer` | `Button` + lazy `Popover` | Toolbar activity capsule replacing toasts. Success shows in place for 4 s then folds into a history icon (last 20 outcomes, log popover lazy-loaded on first open). Failures persist with Retry and Dismiss (full-width row under the title on phone) |
-| `SourceList`, `SourceRow`, `GroupHeader` | plain + roving tabindex | Row is `<Link>` or button. Selected row rises to `--page` with `--e-ctl` when unfocused and `--accent` when the list is focused. Trailing `⋯` visible on hover or selection. Finder-style marking (⌘/Ctrl-click, Shift-click, Esc clears). `NotifyOffer` sits on the Needs-you header |
-| `TabBar` | `<nav>` | Phone only (`≤ 760 px`), 5 tabs, height `calc(--tab-h + --safe-b)`. Sessions tab carries an amber Needs-you badge |
+| `ConnectionItem` | `Popover` | Appears when the gateway is unreachable, a machine is offline, or live updates pause. The menu shows the last live update and offers Reconnect alongside the machine list |
+| `ActivityViewer` | `Button` + lazy `Popover` | Success shows for 4 s then folds into a history icon. The history keeps the last 20 successes below unresolved failures, with Retry and Dismiss |
+| `SourceList`, `SourceRow`, `GroupHeader` | plain + roving tabindex | Row is `<Link>` or button. Selected row rises to `--page` with `--e-ctl` when unfocused and `--accent-fill` when the list is focused. Trailing `⋯` visible on hover or selection. Finder-style marking (⌘/Ctrl-click, Shift-click, Esc clears). `NotifyOffer` sits on the Needs-you header |
+| `TabBar` | `<nav>` | Phone only (`≤ 760 px`), 5 tabs, height `calc(--tab-h + --safe-b)`. Sessions tab carries an amber Needs-you badge. Session details use the full height below the toolbar |
 | `SegmentedControl` | `ToggleGroup` | `--ctl-h` track (`--sunken`), `--ctl-h-sm` thumb (`--control-fill` + `--e-ctl`) |
 | `SearchField` | `Input` | `--sunken` fill, inset icon, `⌘F` focuses it |
 | `Field`, `FieldGrid` | `Input`, `Select` | 120 px right-aligned labels, 12 px row gap (16 px stacked on phone) |

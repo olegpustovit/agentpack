@@ -219,6 +219,9 @@ func TestMCPCredentialOAuthLoginBridgeAndSingleRefresh(t *testing.T) {
 	if browser.Request.URL.Path != "/settings/connections" {
 		t.Fatalf("browser ended at %s", browser.Request.URL)
 	}
+	if got := browser.Request.URL.Query().Get("oauth_login"); got != started.Login {
+		t.Fatal("Connections could not retrieve the login outcome")
+	}
 	var status map[string]string
 	localCall(t, home, http.MethodGet, "/api/mcp/logins/"+started.Login, nil, &status)
 	if status["status"] != "connected" {

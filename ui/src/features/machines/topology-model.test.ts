@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { TopologyPeer } from "@/lib/api-types"
-import { edgeOf, layoutDiagram, machinePeers, reasonOf, ROW_H, sessionCount, stateWord } from "./topology-model"
+import { edgeOf, layoutDiagram, machinePeers, reasonOf, routeLabel, ROW_H, sessionCount, stateWord } from "./topology-model"
 
 function peer(name: string, state: string, connection = "", relay = ""): TopologyPeer {
   return { id: name, name, os: "linux", state, connection, relay, sessions: 0 }
@@ -20,6 +20,14 @@ describe("edgeOf", () => {
 
   it("does not call a path with unknown connection direct", () => {
     expect(edgeOf(peer("c", "reachable"))).toEqual({ label: "path unknown", dashed: false })
+  })
+})
+
+describe("routeLabel", () => {
+  it("formats compact human-readable route labels for phone rows", () => {
+    expect(routeLabel(peer("a", "reachable", "relay", "fra"))).toBe("Relay via fra")
+    expect(routeLabel(peer("b", "reachable", "direct"))).toBe("Direct")
+    expect(routeLabel(peer("c", "reachable"))).toBe("")
   })
 })
 

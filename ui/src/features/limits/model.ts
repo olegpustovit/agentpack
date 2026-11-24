@@ -1,5 +1,6 @@
 import { useMachines, useReplicatedQueries } from "@/features/machines/queries"
 import type { LimitSnapshot, LimitWindow } from "@/lib/api-types"
+import { relativeTime } from "@/lib/format"
 import { limitsQuery } from "./queries"
 
 export type LimitReport = { id: string; name: string; snapshot: LimitSnapshot }
@@ -10,6 +11,8 @@ export type ProviderGroup = {
   others: LimitReport[]
   usable: boolean
 }
+
+export const STALE_LIMIT_MS = 3_600_000
 
 // Go sends a nil slice as null, so an empty snapshot can arrive without windows.
 export function windowsOf(snapshot: LimitSnapshot): LimitWindow[] {
@@ -26,24 +29,44 @@ export function usable(snapshot: LimitSnapshot): boolean {
   return snapshot.state === "available" && windowsOf(snapshot).length > 0
 }
 
+export function resetPassed(window: LimitWindow, now: number): boolean {
+  const at = Date.parse(window.reset_at ?? "")
+  return !Number.isNaN(at) && at <= now
+}
+
+export function isWindowStale(window: LimitWindow, observedMs: number, now: number): boolean {
+  return resetPassed(window, now) || (observedMs > 0 && now - observedMs > STALE_LIMIT_MS)
+}
+
+function hasCurrentWindow(snapshot: LimitSnapshot, now: number): boolean {
+  return windowsOf(snapshot).some((window) => !resetPassed(window, now))
+}
+
 // The CLI is absent on that machine, which says nothing about the provider. Matched on text because
 // peers on older versions report it the same way, with no separate state.
 function missing(report: LimitReport): boolean {
   return report.snapshot.error?.endsWith("CLI not found") === true
 }
 
-// One account per provider: prefer a usable machine, then one whose CLI answered with an error, then
-// one that has the CLI at all. Windows are never summed across machines, so the others stay under a disclosure.
-export function selectReport(reports: LimitReport[]): LimitReport {
+// One account per provider: prefer a fresh non-expired usable report by observed_at, then any usable report,
+// then one whose CLI answered with an error, then one that has the CLI at all.
+export function selectReport(reports: LimitReport[], now = Date.now()): LimitReport {
+  const available = reports.filter((report) => usable(report.snapshot))
+  if (available.length > 0) {
+    return [...available].sort((a, b) => {
+      const freshDiff = Number(hasCurrentWindow(b.snapshot, now)) - Number(hasCurrentWindow(a.snapshot, now))
+      if (freshDiff !== 0) return freshDiff
+      return observedAt([b.snapshot], 0) - observedAt([a.snapshot], 0)
+    })[0]!
+  }
   return (
-    reports.find((report) => usable(report.snapshot)) ??
     reports.find((report) => report.snapshot.state === "error" && !missing(report)) ??
     reports.find((report) => !missing(report)) ??
     reports[0]!
   )
 }
 
-export function providerGroups(reports: LimitReport[]): ProviderGroup[] {
+export function providerGroups(reports: LimitReport[], now = Date.now()): ProviderGroup[] {
   const byProvider = new Map<string, LimitReport[]>()
   for (const report of reports) {
     const provider = report.snapshot.harness
@@ -51,9 +74,33 @@ export function providerGroups(reports: LimitReport[]): ProviderGroup[] {
   }
   // A provider whose CLI no machine has is not a limit worth a card.
   return [...byProvider].filter(([, list]) => list.some((report) => !missing(report))).map(([provider, list]) => {
-    const selected = selectReport(list)
+    const selected = selectReport(list, now)
     return { provider, selected, others: list.filter((report) => report !== selected && !missing(report)), usable: usable(selected.snapshot) }
   })
+}
+
+// When another machine reports a materially different remaining %, surface both reports with their ages.
+export function disagreementSummary(group: ProviderGroup, now: number): string | undefined {
+  if (!group.usable || group.others.length === 0) return undefined
+  const selectedWindows = windowsOf(group.selected.snapshot)
+  const selectedObserved = observedAt([group.selected.snapshot], 0)
+  for (const other of group.others) {
+    if (!usable(other.snapshot)) continue
+    const otherObserved = observedAt([other.snapshot], 0)
+    for (const selWin of selectedWindows) {
+      const otherWin = windowsOf(other.snapshot).find((candidate) => candidate.id === selWin.id)
+      if (!otherWin) continue
+      const selLeft = remainingPercent(selWin)
+      const otherLeft = remainingPercent(otherWin)
+      if (selLeft === undefined || otherLeft === undefined) continue
+      if (Math.abs(selLeft - otherLeft) >= 15) {
+        const selAge = selectedObserved > 0 ? ` (${relativeTime(new Date(selectedObserved), Math.max(now, selectedObserved))})` : ""
+        const otherAge = otherObserved > 0 ? ` (${relativeTime(new Date(otherObserved), Math.max(now, otherObserved))})` : ""
+        return `${group.selected.name} reports ${Math.round(selLeft)}% left${selAge}; ${other.name} reported ${Math.round(otherLeft)}%${otherAge}.`
+      }
+    }
+  }
+  return undefined
 }
 
 // Null when the provider reports neither field; clamped so the meter and label agree.
@@ -78,6 +125,17 @@ export function resetText(window: LimitWindow, now: number): { text: string; ref
   const remaining = at - now
   if (remaining <= 0) return { text: "refreshing…", refreshing: true }
   return { text: `resets in ${untilText(remaining)}`, refreshing: false }
+}
+
+// Absolute local time for a future reset, paired beside the relative countdown.
+export function absoluteResetTime(window: LimitWindow, now: number): string {
+  const at = Date.parse(window.reset_at ?? "")
+  if (Number.isNaN(at) || at <= now) return ""
+  const target = new Date(at)
+  const sameDay = target.toDateString() === new Date(now).toDateString()
+  return sameDay
+    ? target.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    : target.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
 }
 
 // Providers report a missing login as an error message; there is no separate auth state.

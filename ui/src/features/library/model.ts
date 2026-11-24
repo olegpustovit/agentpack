@@ -1,4 +1,5 @@
 import type { AgentpackWithRevisions, Package, ProjectMCP, ProjectRow, Revision } from "@/lib/api-types"
+import { plural } from "@/lib/format"
 
 export type LibraryType = "skill" | "plugin" | "mcp" | "agentpack"
 export type LibraryFilter = "all" | LibraryType
@@ -281,4 +282,18 @@ export function arrangeLibrary(
         ? [{ key: "all", items: shown }]
         : []
   return { counts, groups }
+}
+
+export type UpdateCheckSummary = { label: string; hasFailures: boolean }
+
+// 'Up to date' is only shown after a complete check with zero source failures.
+export function updateCheckSummary({ checked, failed, updates }: { checked: number; failed: number; updates: number }): UpdateCheckSummary {
+  if (failed > 0) {
+    const parts = [`Checked ${checked}`]
+    if (updates > 0) parts.push(plural(updates, "update"))
+    parts.push(`${failed} failed`, "Retry failed")
+    return { label: parts.join(" · "), hasFailures: true }
+  }
+  if (checked === 0) return { label: "Nothing to check", hasFailures: false }
+  return { label: updates > 0 ? plural(updates, "update") : "Up to date", hasFailures: false }
 }

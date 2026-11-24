@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { averageOf, bucketOf, bucketize, fmt, metrics, windowOf, type UsageHour } from "./model"
+import { averageOf, bucketOf, bucketize, comparisonWindowLabel, costCoverage, exactRangeLabel, fmt, metrics, reportsCost, usageDataState, windowOf, type UsageHour } from "./model"
 
 // New York: 4 h behind UTC until DST ends on Sunday, Nov 1 2026, 5 h after.
 const zone = process.env.TZ
@@ -77,4 +77,31 @@ it("names the sessions metric for what it counts: sessions whose first turn fall
   const row = { sessions: 1, turns: 3 } as UsageHour
   expect(metrics.sessions.label).toBe("New sessions")
   expect(metrics.sessions.value(row)).toBe(1)
+})
+
+describe("unreported cost", () => {
+  it("keeps unreported apart from zero and names partial coverage", () => {
+    expect(reportsCost([{ cost_micros: -1 }, { cost_micros: -1 }])).toBe(false)
+    expect(reportsCost([{ cost_micros: -1 }, { cost_micros: 0 }])).toBe(true)
+    expect(costCoverage([{ cost_micros: 5 }, { cost_micros: -1 }, { cost_micros: 0 }])).toBe("2 of 3 sessions report cost")
+    expect(costCoverage([{ cost_micros: 5 }])).toBe("")
+  })
+})
+
+describe("usageDataState and range labels", () => {
+  it("distinguishes error, loading, partial, empty, and ready", () => {
+    expect(usageDataState({ pending: false, error: true, hasData: false, incompleteCount: 0 })).toBe("error")
+    expect(usageDataState({ pending: true, error: false, hasData: false, incompleteCount: 0 })).toBe("loading")
+    expect(usageDataState({ pending: false, error: false, hasData: false, incompleteCount: 1 })).toBe("partial")
+    expect(usageDataState({ pending: false, error: false, hasData: false, incompleteCount: 0 })).toBe("empty")
+    expect(usageDataState({ pending: false, error: false, hasData: true, incompleteCount: 0 })).toBe("ready")
+  })
+
+  it("formats exact inclusive dates with timezone and comparison window", () => {
+    const wednesday = at("2026-11-04T15:00:00Z")
+    const week = windowOf("week", 0, wednesday)
+    const prev = windowOf("week", 1, wednesday)
+    expect(exactRangeLabel(week)).toMatch(/Nov 2 – Nov 8, 2026 \(/)
+    expect(comparisonWindowLabel(prev)).toBe("Oct 26 – Nov 1")
+  })
 })

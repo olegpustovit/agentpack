@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams, useRouter, useSearch } from "@tanstack/re
 import { Folder, Laptop, Plus, RefreshCw, Server } from "lucide-react"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
-import { ConfirmAlert, ConfirmAlertContent, RowContextMenu, RowContextMenuCheckboxItem, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
+import { RowContextMenu, RowContextMenuCheckboxItem, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
 import { ContextMenuSeparator } from "@/components/ui/context-menu"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useEventsConnected } from "@/features/events/use-events"
@@ -17,26 +17,24 @@ import { LOCAL } from "@/lib/api"
 import { basename, harnessName, plural } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useSessionCommands } from "./actions"
-import { groupSessions, matchesSession, nestHelpers, rowKey, sessionLabel, treeSessions, type GroupMode, type ListedSession, type SessionSubhead } from "./group"
+import { groupSessions, matchesSession, nestHelpers, rowKey, treeSessions, type GroupMode, type ListedSession, type SessionSubhead } from "./group"
 import { NotifyOffer } from "@/features/shell/attention"
-import { NewSessionSheet } from "./new-session-sheet"
 import { loadStartChoices } from "./choices"
 import { agentIds, defaultAgent, sessionRules } from "./rules"
 import { useListedSessions } from "./queries"
 import { useStartSession } from "./start"
-import { isUnread, loadSeen, saveSeen, sessionGlyphState } from "./session-status"
+import { isUnread, sessionGlyphState, useSeen } from "./session-status"
 import { SessionRow, SubagentRow, type GroupActions, type RowActions } from "./session-row"
 import { RowSheet, type SheetState } from "./session-sheets"
+import { SessionActionAlert } from "./session-action-alert"
 
 // Selection follows the arrow keys at once. The route follows 150 ms after the last press, so
 // holding a key opens one terminal. `from` is the route the cursor was set under; a route change
 // drops it without an effect.
 type Cursor = { key: string; from: string | undefined }
-type Confirm = { kind: "stop" | "restart"; rows: ListedSession[] }
+type Confirm = { kind: "stop" | "restart" | "archive"; rows: ListedSession[] }
 
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
-
-// Computers that could run a gateway. Phones and TVs on the tailnet never will, so they are not missing.
 
 // Rewrites query keys on a full href and keeps the path, hash and every other key.
 function withSearch(href: string, patch: Record<string, string | undefined>): string {
@@ -77,7 +75,7 @@ export function SessionList() {
     })
   })
   const [cursor, setCursor] = useState<Cursor | null>(null)
-  const [seen, setSeen] = useState(loadSeen)
+  const seen = useSeen()
   const pending = useRef<number | undefined>(undefined)
   // Rows marked with ⌘- or Shift-click, as in Finder; a plain click, an arrow key or Esc clears them.
   const [marked, setMarked] = useState<ReadonlySet<string>>(new Set())
@@ -105,18 +103,6 @@ export function SessionList() {
 
   useEffect(() => () => window.clearTimeout(pending.current), [])
 
-  // Opening a row marks it seen; activity that lands while it stays open counts too.
-  const openUsed = rows.find((row) => rowKey(row) === routeKey)?.last_used
-  useEffect(() => {
-    if (!routeKey) return
-    const at = Math.max(Date.now(), openUsed ? Date.parse(openUsed) || 0 : 0)
-    setSeen((current) => {
-      const next = { ...current, [routeKey]: at }
-      saveSeen(next)
-      return next
-    })
-  }, [routeKey, openUsed])
-
   function openRow(row: ListedSession, replace = false) {
     void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: row.machine, sessionId: row.id }, search: true, replace })
   }
@@ -139,13 +125,13 @@ export function SessionList() {
       if (row && sessionRules(row).rename) setSheet({ kind: "rename", row })
       return
     }
-    // ⌘⌫ archives the marked rows, or the focused one, as Finder moves to Trash. No confirmation.
+    // ⌘⌫ archives the marked rows, or the focused one, as Finder moves to Trash. Confirms only when it would stop an agent.
     if ((event.key === "Backspace" || event.key === "Delete") && (isMac ? event.metaKey : event.ctrlKey)) {
       const targets = (marked.size > 0 ? markedRows : rows[current] ? [rows[current]] : []).filter((row) => sessionRules(row).archive)
       if (targets.length === 0) return
       event.preventDefault()
       setMarked(new Set())
-      archiveRows(targets)
+      requestArchive(targets)
       return
     }
     if (event.key === "Escape" && marked.size > 0) {
@@ -211,7 +197,7 @@ export function SessionList() {
     stopCount: stoppable.length,
     archiveCount: archivable.length,
     stop: () => setConfirm({ kind: "stop", rows: stoppable }),
-    archive: () => { setMarked(new Set()); archiveRows(archivable) },
+    archive: () => { setMarked(new Set()); requestArchive(archivable) },
     ids: markedRows.map((row) => row.id),
   } : undefined
 
@@ -222,6 +208,12 @@ export function SessionList() {
     void Promise.all(targets.map((row) => commands.stop(row))).finally(() =>
       setStopping((current) => new Set([...current].filter((key) => !keys.includes(key)))),
     )
+  }
+
+  // Archiving stops running agents first, so that case is reviewed (SES-03); idle rows archive at once.
+  function requestArchive(targets: ListedSession[]) {
+    if (targets.some((row) => sessionRules(row).stop)) setConfirm({ kind: "archive", rows: targets })
+    else archiveRows(targets)
   }
 
   function archiveRows(targets: ListedSession[]) {
@@ -245,7 +237,7 @@ export function SessionList() {
         if (!selected) openRow(row)
       },
       stop: () => setConfirm({ kind: "stop", rows: [row] }),
-      archive: () => archiveRows([row]),
+      archive: () => requestArchive([row]),
       // A pooled session on the open row must dial again; navigating to the row it already shows does nothing.
       reconnect: () => {
         terminalPool.reconnect(row.machine, row.id)
@@ -294,22 +286,6 @@ export function SessionList() {
     void navigate({ href: withSearch(router.state.location.href, { group: next }), replace: true })
   }
 
-  function closeNewSession(open: boolean) {
-    if (!open) void navigate({ href: withSearch(router.state.location.href, { new: undefined, machine: undefined, folder: undefined }), replace: true })
-  }
-
-  const newSession = (
-    <Link
-      to="."
-      search={(prev: Record<string, unknown>) => ({ ...prev, new: "1", machine: undefined, folder: undefined })}
-      aria-label="New session"
-      title="New session"
-      className={cn(buttonVariants({ variant: "ghost", size: "icon" }))}
-    >
-      <Plus aria-hidden />
-    </Link>
-  )
-
   const refreshButton = (
     <Button variant="ghost" size="icon" aria-label="Refresh sessions" title="Refresh sessions" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
       <RefreshCw aria-hidden className={cn(refresh.isPending && "animate-spin motion-reduce:animate-none")} />
@@ -319,7 +295,15 @@ export function SessionList() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {!routeKey && <ToolbarTitle title="Sessions" subtitle={`${plural(sessions.length, "session")} on ${plural(machines.length, "machine")}`} />}
-      {isPhone && <ToolbarSlot>{refreshButton}{newSession}</ToolbarSlot>}
+      {isPhone && <ToolbarSlot>{refreshButton}<NewSessionLink /></ToolbarSlot>}
+      {!isPhone && (
+        <div className="px-(--s2) pt-(--s3)">
+          <Link to="/sessions" search={{ q: search.q, group: search.group, tab: "work" }} activeOptions={{ exact: true, includeSearch: false }}
+            className="flex min-h-(--row-h) items-center rounded-(--r-row) px-(--s3) font-medium hover:bg-(--hover) aria-[current=page]:bg-(--page) aria-[current=page]:shadow-(--e-ctl)">
+            Work
+          </Link>
+        </div>
+      )}
       <div className="flex shrink-0 flex-col gap-(--s3) p-(--s3)">
         <div className="flex items-center gap-(--s2)">
           <SearchField
@@ -329,7 +313,7 @@ export function SessionList() {
             onChange={(event) => void navigate({ href: withSearch(router.state.location.href, { q: event.target.value || undefined }), replace: true })}
           />
           {!isPhone && refreshButton}
-          {!isPhone && newSession}
+          {!isPhone && <NewSessionLink />}
         </div>
         <SegmentedControl value={[groupMode]} onValueChange={chooseGroup} aria-label="Group sessions by" className="w-full">
           <SegmentedControlItem value="machine" className="flex-1">Machine</SegmentedControlItem>
@@ -397,49 +381,36 @@ export function SessionList() {
       </nav>
 
       <RowSheet sheet={sheet} onClose={() => setSheet(null)} />
-      <ConfirmAlert open={confirm !== null} onOpenChange={(open) => { if (!open) setConfirm(null) }}>
-        {confirm && <SessionConfirm
-          confirm={confirm}
+      {confirm && (
+        <SessionActionAlert
+          {...confirm}
+          onClose={() => setConfirm(null)}
           onConfirm={() => {
             const { kind, rows: targets } = confirm
             setConfirm(null)
             setMarked(new Set())
             if (kind === "stop") stopRows(targets)
+            else if (kind === "archive") archiveRows(targets)
             else for (const row of targets) void commands.restart(row)
           }}
-        />}
-      </ConfirmAlert>
-      <NewSessionSheet open={search.new === "1"} initialMachine={search.machine} initialDirectory={search.folder} onOpenChange={closeNewSession} />
+        />
+      )}
     </div>
   )
 }
 
-function SessionConfirm({ confirm, onConfirm }: { confirm: Confirm; onConfirm: () => void }) {
-  const { kind, rows } = confirm
-  const verb = { stop: "Stop", restart: "Restart" }[kind]
-  const row = rows[0]
-  if (rows.length > 1 || !row) {
-    const machines = new Set(rows.map((each) => each.machineName)).size
-    return (
-      <ConfirmAlertContent
-        title={`${verb} ${plural(rows.length, "agent")}?`}
-        description={`On ${plural(machines, "machine")}. The sessions stay in the list so you can resume them; use Archive to remove them.`}
-        destructiveLabel={`${verb} ${rows.length} agents`}
-        onConfirm={onConfirm}
-      />
-    )
-  }
+export function NewSessionLink() {
   return (
-    <ConfirmAlertContent
-      title={`${verb} “${sessionLabel(row)}”?`}
-      description={
-        kind === "stop"
-          ? `In ${basename(row.directory) || "this folder"} on ${row.machineName}. The session stays in the list so you can resume it; Archive removes it.`
-          : `In ${basename(row.directory) || "this folder"} on ${row.machineName}. Its current turn may end unless the agent can resume.`
-      }
-      destructiveLabel={{ stop: "Stop agent", restart: "Restart agent" }[kind]}
-      onConfirm={onConfirm}
-    />
+    <Link
+      to="."
+      search={(prev: Record<string, unknown>) => ({ ...prev, new: "1", machine: undefined, folder: undefined })}
+      replace
+      aria-label="New session"
+      title="New session"
+      className={buttonVariants({ variant: "ghost", size: "icon" })}
+    >
+      <Plus aria-hidden />
+    </Link>
   )
 }
 

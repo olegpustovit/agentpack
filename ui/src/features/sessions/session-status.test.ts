@@ -25,7 +25,9 @@ describe("session status", () => {
   it("shows a stopped chat as stopped even with a stale needs_you", () => {
     const session = { ...base, conversation_state: "needs_you", state: { ...base.state, running: false } }
     expect(sessionGlyphState(session)).toBe("stopped")
-    expect(sessionStatusWord(session, false)).toBe("Stopped")
+    expect(sessionStatusWord(session, false)).toBe("Stopped · request expired")
+    expect(nextNeedsYou([session], undefined)).toBeUndefined()
+    expect(sessionGlyphState({ ...base, conversation_state: "needs_you", ended_at: "2026-11-24T20:00:00Z" })).toBe("stopped")
   })
 
   it("shows a chat that is still starting as starting, until its row ends", () => {

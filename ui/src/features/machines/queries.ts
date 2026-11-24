@@ -20,10 +20,17 @@ export const latestAgentpackVersionQuery = queryOptions({
   retry: false,
 })
 
+export type MachineUpdateStatus = {
+  state: "idle" | "running" | "failed"
+  error: string
+  phase?: "requested" | "downloading" | "restarting"
+  version?: string
+}
+
 export const machineUpdateQuery = (machine: string) =>
   queryOptions({
     queryKey: ["m", machine, "update"],
-    queryFn: () => api<{ state: "idle" | "running" | "failed"; error: string }>("/api/node/update", { machine }),
+    queryFn: () => api<MachineUpdateStatus>("/api/node/update", { machine }),
     staleTime: 0,
     refetchInterval: (query) => query.state.data?.state === "running" ? 2000 : false,
   })

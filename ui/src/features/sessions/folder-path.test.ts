@@ -8,6 +8,8 @@ test("splits a browse path so only the directory goes to the gateway", () => {
   expect(splitFolderPath("C:\\Us")).toEqual({ dir: "C:\\", segment: "Us" })
   expect(isFolderPath("project")).toBe(false)
   expect(isFolderPath("C:\\Us")).toBe(true)
+  expect(isFolderPath("C:/Users")).toBe(true)
+  expect(isFolderPath("\\\\host\\share")).toBe(true)
 })
 
 test("matches the last segment by prefix and reveals hidden folders with a dot", () => {
@@ -15,6 +17,7 @@ test("matches the last segment by prefix and reveals hidden folders with a dot",
   expect(matchingFolders(entries, "pro")).toEqual([entries[0]])
   expect(matchingFolders(entries, "")).toEqual([entries[0], entries[2]])
   expect(matchingFolders(entries, ".p")).toEqual([entries[1]])
+  expect(matchingFolders(entries, "", true)).toEqual(entries)
 })
 
 test("Backspace on a trailing separator moves up one segment without crossing the root", () => {

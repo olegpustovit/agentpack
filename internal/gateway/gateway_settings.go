@@ -15,7 +15,12 @@ func (g *Gateway) registerSettings(mux routeRegistrar) {
 			fail(w, r, err)
 			return
 		}
-		network.WriteJSON(w, map[string]any{"running": true, "platform": runtime.GOOS, "sharing_enabled": config.Enabled, "allowed_peers": config.Allow, "public": g.publicStatus(r.Context())})
+		canManage, err := g.isOwner(r.Context())
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		network.WriteJSON(w, map[string]any{"running": true, "platform": runtime.GOOS, "sharing_enabled": config.Enabled, "allowed_peers": config.Allow, "public": g.publicStatus(r.Context()), "can_manage": canManage})
 	})
 	mux.HandleFunc("POST /api/settings/public", g.setPublic)
 	mux.HandleFunc("POST /api/settings/sharing", func(w http.ResponseWriter, r *http.Request) {

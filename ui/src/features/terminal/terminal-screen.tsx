@@ -1,4 +1,5 @@
 import type { RefObject } from "react"
+import { Link } from "@tanstack/react-router"
 import { RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
 import { ContextMenuSeparator } from "@/components/ui/context-menu"
 import type { TerminalSession } from "./terminal-session"
@@ -15,6 +16,8 @@ export function TerminalScreen({ stageRef, busy, terminal }: { stageRef: RefObje
         <ContextMenuSeparator />
         <RowContextMenuItem onClick={() => terminal.selectAll()}>Select All</RowContextMenuItem>
         <RowContextMenuItem onClick={() => terminal.clearSelection()}>Clear Selection</RowContextMenuItem>
+        <ContextMenuSeparator />
+        <RowContextMenuItem render={<Link to="/settings/$pane" params={{ pane: "accessibility" }} />}>Terminal accessibility</RowContextMenuItem>
       </RowContextMenuContent>
     </RowContextMenu>
   )

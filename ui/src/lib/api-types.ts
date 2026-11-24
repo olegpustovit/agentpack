@@ -1,6 +1,14 @@
 // Hand-written from the Go JSON structs. Keep field names in step with the json tags.
 
-export type Status = { joining?: boolean; claimed: boolean; legacy: boolean; authenticated: boolean; email: string }
+export type Status = {
+  joining?: boolean
+  join_phase?: "waiting_for_approval" | "waiting_for_accounts" | "ready"
+  node_name?: string
+  claimed: boolean
+  legacy: boolean
+  authenticated: boolean
+  email: string
+}
 
 export type Identity = {
   node: { id: string; name: string; os: string; version: string; schema_version?: number; main?: boolean }
@@ -210,6 +218,7 @@ export type LimitsResponse = { limits: LimitSnapshot[] }
 export type Settings = {
   running: boolean
   platform: string
+  can_manage?: boolean
   sharing_enabled: boolean
   allowed_peers?: string[]
   public?: PublicAccess
@@ -298,5 +307,5 @@ export type PeerReplica = { node: string; mesh?: boolean }
 
 export type ReplicationPeers = {
   peers: PeerReplica[]
-  contacts: Record<string, { at: string; last_sync?: string; error?: string; needs_update?: boolean; schema_version?: number; version?: number; lag?: number }>
+  contacts: Record<string, { at: string; last_sync?: string; reachable?: boolean; error?: string; needs_update?: boolean; needs_trust?: boolean; schema_version?: number; version?: number; lag?: number }>
 }

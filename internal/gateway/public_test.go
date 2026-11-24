@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"html"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,11 +13,13 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"tailscale.com/ipn"
 
 	"github.com/olegpustovit/agentpack/internal/gateway/mcp"
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -112,9 +115,28 @@ func TestPublicURLKeepsLocalOriginAndForwardedHeadersNeedLoopback(t *testing.T) 
 func TestPublicAccessOffPageRemembersCandidate(t *testing.T) {
 	g := publicGateway(t, "")
 	handler := g.Handler()
-	w := serve(handler, "GET", "http://127.0.0.1:7420/", "127.0.0.1:5000", map[string]string{"X-Forwarded-Host": "agentpack.example.com", "X-Forwarded-Proto": "https"})
-	if w.Code != 403 || !strings.Contains(w.Body.String(), "Public access is off") {
-		t.Fatalf("off page: %d %s", w.Code, w.Body.String())
+	w := serve(handler, "GET", "http://127.0.0.1:7420/sessions/local/chat?q=private-query", "127.0.0.1:5000", map[string]string{
+		"X-Forwarded-Host": "agentpack.example.com", "X-Forwarded-Proto": "https", "Cookie": "__Host-agentpack_session=private-cookie",
+	})
+	body := w.Body.String()
+	trace := w.Header().Get("X-Agentpack-Trace")
+	if w.Code != 403 || len(trace) != 32 || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("off page: %d %q %s", w.Code, trace, body)
+	}
+	for _, want := range []string{"Public access is off", "gateway owner", `<a href="">Retry</a>`, "<code>ap</code>", "tailnet", html.EscapeString(session.LocalHostname()), "Request ID", trace} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("off page missing %q", want)
+		}
+	}
+	_, timeAttribute, _ := strings.Cut(body, `<time datetime="`)
+	stamp, _, _ := strings.Cut(timeAttribute, `"`)
+	if _, err := time.Parse(time.RFC3339, stamp); err != nil {
+		t.Fatalf("off page time: %v", err)
+	}
+	for _, private := range []string{"private-query", "private-cookie", "/sessions/local/chat", testBrowserEmail, g.local.Secret, "agentpack.example.com"} {
+		if strings.Contains(body, private) {
+			t.Fatalf("off page leaked %q", private)
+		}
 	}
 	if status := g.publicStatus(t.Context()); status.Enabled || status.Candidate != testPublicOrigin {
 		t.Fatalf("candidate: %+v", status)
@@ -226,6 +248,15 @@ func TestPublicAccessVerifiesItselfBeforeEnabling(t *testing.T) {
 				return (&net.Dialer{}).DialContext(ctx, network, proxy.Listener.Addr().String())
 			}
 			g.public.client = client
+			if test.failed == "" {
+				code, checked := setPublicRequest(t, g, "owner-token", `{"check_only":true,"enabled":true,"origin":"`+testPublicOrigin+`"}`)
+				if code != 200 || len(checked) != 5 || checked[4]["verified_origin"] != testPublicOrigin {
+					t.Fatalf("check public without enabling: %d %v", code, checked)
+				}
+				if current, _ := g.public.current(); current != nil {
+					t.Fatal("checking the public address enabled it")
+				}
+			}
 			code, lines := setPublicRequest(t, g, "owner-token", `{"enabled":true,"origin":"`+testPublicOrigin+`"}`)
 			if code != 200 || len(lines) == 0 {
 				t.Fatalf("set public: %d %v", code, lines)

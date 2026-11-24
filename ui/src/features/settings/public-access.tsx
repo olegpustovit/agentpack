@@ -30,72 +30,107 @@ export function PublicAccessBanner({ access }: { access: PublicAccess | undefine
   if (!access || access.enabled || !access.candidate) return null
   return (
     <Banner className="mb-(--s5) rounded-(--r-pop) border-b-0 bg-(--accent-soft)">
-      Detected <b>{publicHost(access.candidate)}</b> forwarding to this gateway through a proxy. Turn on Public access
-      only if that is your own domain.
+      Detected <b>{publicHost(access.candidate)}</b> forwarding to this gateway. Check the address if you own the domain.
     </Banner>
   )
 }
 
-// One switch: the gateway verifies the detected address reaches itself before serving it.
-export function PublicAccessRows({ access }: { access: PublicAccess }) {
+export function PublicAccessRows({ access, canManage }: { access: PublicAccess; canManage: boolean }) {
   const queryClient = useQueryClient()
   const [results, setResults] = useState<CheckResult[] | null>(null)
+  const [verified, setVerified] = useState<{ requested: string; origin: string }>()
   // A catch-all proxy can't tell us the address, so the owner types it; the checks still verify it.
   const [typed, setTyped] = useState("")
   const typedHost = typed.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "")
   const origin = access.candidate ?? (access.catch_all && typedHost ? `https://${typedHost}` : undefined)
-  const change = useMutation<PublicAccess | undefined, Error, boolean>({
-    mutationFn: async (enabled) => {
-      setResults(enabled ? [] : null)
+  const change = useMutation({
+    mutationFn: async ({ action, address }: { action: "check" | "enable" | "disable"; address?: string }) => {
+      setVerified(undefined)
+      setResults(action === "disable" ? null : [])
       let status: PublicAccess | undefined
+      let verifiedOrigin: string | undefined
       let failure = ""
-      await apiLines("/api/settings/public", { enabled, origin }, (line) => {
+      let failedCheck = false
+      await apiLines("/api/settings/public", {
+        enabled: action !== "disable",
+        origin: address,
+        ...(action === "check" ? { check_only: true } : {}),
+      }, (line) => {
         if (!line || typeof line !== "object") return
-        if ("check" in line) setResults((old) => [...(old ?? []), line as CheckResult])
+        if ("check" in line) {
+          const check = line as CheckResult
+          if (!check.ok) failedCheck = true
+          setResults((old) => [...(old ?? []), check])
+        }
         if ("public" in line) status = line.public as PublicAccess
+        if ("verified_origin" in line && typeof line.verified_origin === "string") verifiedOrigin = line.verified_origin
         if ("error" in line && typeof line.error === "string") failure = line.error
       })
       if (failure) throw new Error(failure)
-      return status
+      if ((action !== "check" || !verifiedOrigin) && !status && !failedCheck) {
+        throw new Error("The gateway did not finish. Check the address and try again.")
+      }
+      return { status, verified: action === "check" && address && verifiedOrigin ? { requested: address, origin: verifiedOrigin } : undefined }
     },
-    onSuccess: (status) => {
+    onSuccess: ({ status, verified: checked }) => {
+      setVerified(checked)
       if (status) queryClient.setQueryData<Settings>(settingsQuery.queryKey, (old) => old && { ...old, public: status })
     },
   })
-  const checking = change.isPending && change.variables
-  const on = access.enabled || checking
+  const checking = change.isPending && change.variables?.action !== "disable"
+  const checked = verified?.requested === origin ? verified : undefined
+  const unavailable = change.isPending || access.pinned || !canManage
   const label = checking
-    ? "Checking…"
+    ? `Checking ${origin ? publicHost(origin) : "the address"}… Access is off`
     : access.enabled
-      ? `On · ${access.origin}${access.pinned ? " · set by AGENTPACK_PUBLIC_URL" : ""}`
-      : "Off. Only this machine and your tailnet can reach it"
+      ? `On · ${access.origin}`
+      : checked
+        ? `Off · ${publicHost(checked.origin)} passed its checks`
+        : "Off. Only this machine and your tailnet can reach it"
   return (
     <>
       <Row label="Public access" htmlFor="public-access">
         <Switch
           id="public-access"
-          checked={Boolean(on)}
-          disabled={change.isPending || access.pinned || (!access.enabled && !origin)}
-          onCheckedChange={(next) => change.mutate(next)}
+          checked={access.enabled}
+          disabled={unavailable || !access.enabled}
+          onCheckedChange={(next) => { if (!next) change.mutate({ action: "disable" }) }}
         />
-        <span className="text-(length:--fs-sm) text-(--fg2)">{label}</span>
+        <span role="status" className="min-w-0 break-all text-(length:--fs-sm) text-(--fg2)">{label}</span>
         {access.catch_all && !access.enabled && (
           <Input
             aria-label="Public address"
             placeholder="agentpack.example.com"
             value={typed}
-            disabled={change.isPending}
-            onChange={(event) => setTyped(event.currentTarget.value)}
-            className="w-64"
+            disabled={unavailable}
+            onChange={(event) => {
+              setTyped(event.currentTarget.value)
+              setVerified(undefined)
+              setResults(null)
+              change.reset()
+            }}
+            className="w-64 max-w-full"
           />
         )}
-        <div className="basis-full" />
-        {results ? (
-          <ul className="grid gap-(--s2) text-(length:--fs-sm)" aria-label="Public access checks">
+        {!access.enabled && origin && canManage && !access.pinned && !checked && (
+          <Button disabled={unavailable} onClick={() => change.mutate({ action: "check", address: origin })}>
+            {checking ? "Checking…" : "Check address"}
+          </Button>
+        )}
+        {access.pinned && <p className="basis-full text-(length:--fs-sm) text-(--fg2)"><code>AGENTPACK_PUBLIC_URL</code> manages this setting.</p>}
+        {!canManage && !access.pinned && <p className="basis-full text-(length:--fs-sm) text-(--fg2)">Only the gateway owner can change public access.</p>}
+        {checked && !access.enabled && (
+          <>
+            <p className="basis-full text-(length:--fs-sm) text-(--fg2)">Enable access to make the sign-in page and MCP endpoint at {publicHost(checked.origin)} reachable from the internet. Gateway data and MCP operations still require sign-in.</p>
+            <Button variant="primary" disabled={unavailable} onClick={() => change.mutate({ action: "enable", address: checked.origin })}>Enable access</Button>
+          </>
+        )}
+        {results && (
+          <ul className="grid basis-full gap-(--s2) text-(length:--fs-sm)" aria-label="Public access checks">
             {checks.map(([id, title]) => {
               const result = results.find((item) => item.check === id)
               const failedEarlier = !result && results.some((item) => !item.ok)
-              if (failedEarlier) return null
+              if (failedEarlier || !checking && !result) return null
               return (
                 <li key={id} className="flex items-center gap-(--s3)">
                   {!result ? (
@@ -111,16 +146,15 @@ export function PublicAccessRows({ access }: { access: PublicAccess }) {
               )
             })}
           </ul>
-        ) : (
-          !access.enabled && (
+        )}
+        {!results && !access.enabled && !checked && (
             <p className="m-0 max-w-[60ch] text-(length:--fs-xs) text-(--fg2)">
               {access.candidate
-                ? "Anyone on the internet can reach the sign-in page and the MCP endpoint. Every request still needs your login."
+                ? "Check the detected address before opening the sign-in page and MCP endpoint to the internet."
                 : access.catch_all
                   ? "Your proxy forwards any host name, so the address isn't suggested. Type your own; it is checked before anything opens."
                   : "Put an HTTPS proxy or Tailscale Funnel in front of this gateway and open its address once; it appears here."}
             </p>
-          )
         )}
         {change.error && <FieldError className="basis-full">{errorText(change.error)}</FieldError>}
       </Row>

@@ -11,7 +11,7 @@ class ArchiveUnavailableError extends ApiError {
 }
 
 export function archiveUnavailableMessage(error: unknown): string | undefined {
-  if (error instanceof ArchiveUnavailableError) return `Cold storage on ${error.main} is unavailable right now`
+  if (error instanceof ArchiveUnavailableError) return `Archived history on ${error.main} is unavailable right now`
 }
 
 // truncated: older entries exist that this response left out.

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test"
-import { conversationImage, mockAPI, projectRow } from "./helpers"
+import { attachTerminal, conversationImage, mockAPI, projectRow } from "./helpers"
 
 const identity = { node: { id: "n1", name: "host-a", os: "linux", version: "0" }, auth: "password", tailscale_user: "" }
 const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
@@ -181,12 +181,13 @@ test("New session browses and starts in an unlisted folder using the keyboard", 
     route.request().method() === "POST" ? route.fulfill({ json: { ...sessions[0], id: "created", directory: "/home/viewer/projects" } }) : route.fallback(),
   )
   await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "old", name: "Old gateway", online: true }] }))
-  await page.route((url) => url.pathname.startsWith("/api/folders") && url.searchParams.get("node") === "old",
+  await page.route((url) => url.pathname === "/api/folders" && url.searchParams.get("node") === "old",
     (route) => route.fulfill({ status: 404, body: "404 page not found" }),
   )
   await page.goto("/sessions?new=1&machine=old")
-  const field = page.getByPlaceholder("Search projects, or type a path")
-  await field.fill("~/")
+  const browse = page.getByRole("button", { name: "Browse folders" })
+  await browse.click()
+  const field = page.getByRole("textbox", { name: "Folder path" })
   await expect(page.getByRole("alert")).toHaveText("Update Agentpack on Old gateway to browse its folders")
   await field.press("Escape")
   await expect(page.getByRole("navigation", { name: "Projects" })).toBeVisible()
@@ -195,14 +196,13 @@ test("New session browses and starts in an unlisted folder using the keyboard", 
   const allMachines = page.getByRole("option", { name: /^All machines/ })
   await expect(allMachines).toHaveText(/All machines\s*1$/)
   await allMachines.click()
-  await field.fill("~/pro")
-  await expect(machine.locator('[data-slot="select-value"]')).toHaveText("host-a")
+  await page.getByRole("textbox", { name: "Search projects" }).fill("~/pro")
+  await expect(browse).toBeDisabled()
+  await expect(page.getByRole("navigation", { name: "Projects" })).toBeVisible()
   await machine.click()
-  await expect(allMachines).toHaveCount(0)
-  const olderPeer = page.getByRole("option", { name: /^Old gateway/ })
-  await expect(olderPeer).toBeDisabled()
-  await expect(olderPeer).toContainText("needs update")
   await page.getByRole("option", { name: /^host-a/ }).click()
+  await browse.click()
+  await field.fill("~/pro")
   await expect(page.getByRole("navigation", { name: "Folders" }).getByRole("button", { name: "projects" })).toBeVisible()
   await field.press("Tab")
   await expect(field).toHaveValue("~/projects/")
@@ -230,7 +230,8 @@ test("New session creates and selects a folder on the chosen machine", async ({ 
     route.request().method() === "POST" ? route.fulfill({ json: { ...sessions[0], id: "created", directory: path } }) : route.fallback(),
   )
   await page.goto("/sessions?new=1&machine=mac-air")
-  const field = page.getByPlaceholder("Search projects, or type a path")
+  await page.getByRole("button", { name: "Browse folders" }).click()
+  const field = page.getByRole("textbox", { name: "Folder path" })
   await field.fill("~/projects/new-project")
   const created = page.waitForRequest((req) => req.method() === "POST" && new URL(req.url()).pathname === "/api/folders")
   await page.getByRole("button", { name: "Create folder “new-project”" }).click()
@@ -366,7 +367,7 @@ test("a session opens project settings and saves packages, MCP and the login tog
     return route.fulfill({ status: 204 })
   })
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.goto("/sessions")
+  await page.goto("/sessions?tab=all")
   const row = page.getByRole("navigation", { name: "Sessions" }).getByRole("link", { name: /build/ })
   await row.click({ button: "right" })
   await expect(page.getByRole("menuitem", { name: /Save agentpack|Install package/ })).toHaveCount(0)
@@ -397,12 +398,15 @@ test("a session opens project settings and saves packages, MCP and the login tog
   }])
 })
 
-test("a project sign-in selects the returned login for Save", async ({ page, context }) => {
+test("a blocked project sign-in offers a link and keeps the reviewed edits for Save", async ({ page, context }) => {
+  await page.clock.install()
+  await page.addInitScript(() => { window.open = () => null })
   const directory = sessions[0]!.directory
   const url = "https://mcp.linear.app/mcp"
   const module = "github.com/acme/linear"
   let connected = false
   await page.route((url) => url.pathname === "/api/projects", (route) => route.fulfill({ json: [projectRow(directory, [], {
+    packages: [{ module: "github.com/acme/old", name: "old-kit", direct: true, kind: "skill" }],
     mcp: [{ name: "linear", source: "plugin", launcher: "remote", module, url }],
   })] }))
   await page.route("**/api/mcp/credentials", (route) => route.fulfill({ json: { credentials: [
@@ -427,12 +431,25 @@ test("a project sign-in selects the returned login for Save", async ({ page, con
   await page.getByRole("navigation", { name: "Sessions" }).getByRole("link", { name: /build/ }).click({ button: "right" })
   await page.getByRole("menuitem", { name: "Project settings…" }).click()
   const settings = page.getByRole("dialog", { name: "Project settings" })
+  await settings.getByRole("button", { name: "Remove old-kit" }).click()
+  await settings.getByLabel("Or add by source").fill("github.com/acme/lint-kit")
   await settings.getByRole("button", { name: "Sign in…" }).click()
+  const changes = settings.getByRole("region", { name: "Changes" })
+  await expect(changes.getByRole("listitem")).toHaveText(["Add github.com/acme/lint-kit", "Remove old-kit", "Sign in to linear"])
+  await expect(settings.getByText("Waiting for linear sign-in…")).toBeVisible()
+  const opened = context.waitForEvent("page")
+  await settings.getByRole("link", { name: "Open sign-in link" }).click()
+  const tab = await opened
+  await tab.waitForLoadState()
+  await page.clock.runFor(1_010)
   await expect(settings.getByRole("combobox", { name: "linear login" })).toContainText("TrustMind")
   expect(saved).toHaveLength(0)
   await settings.getByRole("button", { name: "Save", exact: true }).click()
   await expect(settings).toBeHidden()
-  expect(saved).toEqual([expect.objectContaining({ plugin_logins: { linear: { module, url, credential: "new" } } })])
+  expect(saved).toEqual([expect.objectContaining({
+    add: ["github.com/acme/lint-kit"], remove: ["github.com/acme/old"],
+    plugin_logins: { linear: { module, url, credential: "new" } },
+  })])
 })
 
 test("+ opens the composer while the chat claim is still in flight", async ({ page }) => {
@@ -627,8 +644,14 @@ test("⌘/Ctrl- and Shift-click mark rows; the menu then acts on all of them", a
   await rows.last().click({ button: "right" })
   // Only s1 is running, so the stop counts one; both can be archived.
   await expect(page.getByRole("menuitem", { name: "Stop agent…" })).toBeEnabled()
-  // Archive asks nothing: it is the Trash of the session list.
+  // Archiving a running session names what stops (SES-03); stopped ones would archive at once.
   await page.getByRole("menuitem", { name: /^Archive 2 sessions/ }).click()
+  const alert = page.getByRole("alertdialog")
+  await expect(alert.getByRole("button", { name: "Cancel" })).toBeFocused()
+  await expect(alert).toContainText("Stops Claude on host-a · build")
+  await expect(alert).toContainText("Hides Codex on host-a")
+  expect(archived).toEqual([])
+  await alert.getByRole("button", { name: "Stop and archive" }).click()
   await expect(page.getByRole("alertdialog")).toHaveCount(0)
   await expect.poll(() => archived.sort()).toEqual(["s1", "s2"])
   await expect(page.locator("[data-marked]")).toHaveCount(0)
@@ -661,6 +684,69 @@ test("archive hides the row immediately and restores it if the request fails", a
   await expect(rows).toHaveCount(1)
   releaseRetry()
   await expect(rows).toHaveCount(2)
+})
+
+test("the palette reviews Stop agent before making a request", async ({ page }) => {
+  const stopped: string[] = []
+  const archived: unknown[] = []
+  await attachTerminal(page)
+  await page.route("**/api/sessions/*/stop", (route) => {
+    stopped.push(new URL(route.request().url()).pathname)
+    reply = [{ ...sessions[0], state: terminal(false), ended_at: new Date().toISOString() }, sessions[1]]
+    return route.fulfill({ json: { stopped: true } })
+  })
+  await page.route("**/api/sessions/s1", (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback()
+    archived.push(route.request().postDataJSON())
+    return route.fulfill({ json: {} })
+  })
+  await page.goto("/sessions/local/s1")
+  await page.getByRole("button", { name: "Command palette" }).click()
+  await page.getByRole("combobox", { name: "Search sessions and commands" }).fill("Stop Claude")
+  await page.getByRole("option", { name: "Stop Claude" }).click()
+  const alert = page.getByRole("alertdialog")
+  await expect(alert).toContainText("Stops Claude on host-a · build")
+  await expect(alert.getByRole("button", { name: "Cancel" })).toBeFocused()
+  expect(stopped).toEqual([])
+  await alert.getByRole("button", { name: "Stop agent" }).click()
+  await expect.poll(() => stopped).toEqual(["/api/sessions/s1/stop"])
+  await expect(page).toHaveURL(/\/sessions\/local\/s1$/)
+  await expect(page.locator('[data-row-key="local:s1"]')).toBeVisible()
+  expect(archived).toEqual([])
+})
+
+test("the palette names what Archive stops and hides before sending either request", async ({ page }) => {
+  const requests: { action: string; body?: unknown }[] = []
+  await attachTerminal(page)
+  await page.route("**/api/sessions/s1/stop", (route) => {
+    requests.push({ action: "stop" })
+    return route.fulfill({ json: { stopped: true } })
+  })
+  await page.route("**/api/sessions/s1", (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback()
+    requests.push({ action: "archive", body: route.request().postDataJSON() })
+    reply = [sessions[1]]
+    return route.fulfill({ json: {} })
+  })
+  await page.goto("/sessions/local/s1?group=machine")
+  await page.getByRole("button", { name: "Command palette" }).click()
+  await page.getByRole("combobox", { name: "Search sessions and commands" }).fill("Archive session")
+  const archive = page.getByRole("option", { name: "Archive session…", exact: true })
+  await archive.click()
+  const alert = page.getByRole("alertdialog")
+  const cancel = alert.getByRole("button", { name: "Cancel" })
+  await expect(alert).toContainText("Stops Claude on host-a · build")
+  await expect(alert).toContainText("Archived sessions leave the list")
+  await expect(cancel).toBeFocused()
+  expect(requests).toEqual([])
+  await cancel.click()
+  await expect(alert).toBeHidden()
+  expect(requests).toEqual([])
+  await archive.click()
+  await alert.getByRole("button", { name: "Stop and archive" }).click()
+  await expect.poll(() => requests).toEqual([{ action: "stop" }, { action: "archive", body: { hidden: true } }])
+  await expect(page).toHaveURL(/\/sessions\?group=machine$/)
+  await expect(page.locator('[data-row-key="local:s1"]')).toHaveCount(0)
 })
 
 test("a chat's row menu switches agentpack tools, and its helpers list under it", async ({ page }) => {
@@ -740,4 +826,319 @@ test("New worktree reads Needs update on a gateway without worktrees", async ({ 
   const posted = page.waitForRequest((request) => request.method() === "POST" && /\/api\/sessions$/.test(request.url()))
   await page.getByRole("button", { name: "Start session" }).click()
   expect((await posted).postDataJSON()).not.toHaveProperty("worktree")
+})
+
+test("phone Work returns to the review group and clears its unread row", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 650 })
+  await page.addInitScript(() => localStorage.setItem("agentpack.sessions.seen", '{"":0}'))
+  const working = Array.from({ length: 14 }, (_, index) => ({
+    ...sessions[0], id: `work-${index}`, name: `Work ${index + 1}`, transport: "acp", conversation_state: "working",
+  }))
+  const review = { ...sessions[0], id: "review", name: "Docs sweep", transport: "acp", conversation_state: "idle" }
+  const expired = { ...sessions[1], id: "expired", name: "Lint cleanup", transport: "acp", conversation_state: "needs_you" }
+  reply = [...working, review, expired]
+  await page.goto("/sessions")
+  await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible()
+  await expect(page.getByRole("region", { name: "Needs you" })).toContainText("Needs you · 0")
+  await expect(page.getByRole("navigation", { name: "Tabs" }).getByRole("link", { name: "Sessions", exact: true })).toBeVisible()
+  const group = page.getByRole("region", { name: "Ready for review" })
+  await group.getByRole("link", { name: "Review Docs sweep" }).click()
+  await expect(page).toHaveURL(/\/sessions\/local\/review$/)
+  await page.getByRole("link", { name: "Back to Sessions" }).click()
+  await expect(group.getByRole("heading")).toBeFocused()
+  await expect(group.getByRole("heading")).toBeInViewport()
+  await expect(group.getByRole("link", { name: "Docs sweep" })).toHaveCount(0)
+  await page.getByRole("button", { name: "All sessions", exact: true }).click()
+  const list = page.getByRole("navigation", { name: "Sessions" })
+  await expect(list.getByRole("link", { name: /Lint cleanup/ })).toContainText("Stopped · request expired")
+})
+
+test("a phone deep link marks a chat seen while the list is unmounted", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.addInitScript(() => localStorage.setItem("agentpack.sessions.seen", '{"":0}'))
+  reply = [{ ...sessions[0], id: "unread", name: "Unread report", transport: "acp", conversation_state: "idle" }]
+  await page.goto("/sessions/local/unread")
+  await expect(page.getByRole("heading", { name: "Unread report", level: 1 })).toBeVisible()
+  await page.getByRole("link", { name: "Back to Sessions" }).click()
+  await expect(page.getByRole("region", { name: "Ready for review" })).toContainText("Ready for review · 0")
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("agentpack.sessions.seen") ?? "{}")["local:unread"])).toBeGreaterThan(0)
+})
+
+test("a 320 px launch keeps conversation mode in view and wraps the full target", async ({ page }) => {
+  const directory = `/work/${"unbroken-project-path".repeat(6)}/site`
+  await page.setViewportSize({ width: 320, height: 568 })
+  await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow(directory)] }))
+  await page.goto("/sessions?new=1")
+  const dialog = page.getByRole("dialog", { name: "New session" })
+  const summary = dialog.getByRole("status", { name: "Launch summary" })
+  await expect(summary).toContainText(directory)
+  await expect(summary).toContainText("host-a")
+  await expect(summary).toContainText("default")
+  await expect(dialog.getByRole("group", { name: "Conversation mode" })).toBeInViewport({ ratio: 1 })
+  expect(await summary.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
+  await expect(dialog.getByRole("button", { name: "Start session" })).toBeInViewport()
+})
+
+test("Resume omits the draft and Resume and send queues the previewed text", async ({ page }) => {
+  const directory = sessions[0]!.directory
+  await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow(directory)] }))
+  await page.route("**/api/agent-sessions**", (route) => route.fulfill({ json: { sessions: [{ id: "native-1", title: "Review logs", cwd: directory }] } }))
+  const bodies: Record<string, unknown>[] = []
+  await page.route(/\/api\/sessions(\?.*)?$/, (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    const body = route.request().postDataJSON()
+    bodies.push(body)
+    const info = { ...sessions[0], id: body.id, transport: "acp", conversation_state: "idle" }
+    reply = [info]
+    return route.fulfill({ json: info })
+  })
+
+  await page.goto("/sessions?new=1")
+  const sheet = page.getByRole("dialog", { name: "New session" })
+  const first = sheet.getByRole("textbox", { name: "First message" })
+  const message = "Review the logs\nthen summarize"
+  await first.fill(message)
+  const setupResume = async () => {
+    await sheet.getByRole("group", { name: "Conversation mode" }).getByRole("button", { name: "Resume" }).click()
+    await sheet.getByRole("radio", { name: "Review logs" }).check()
+    await expect(sheet.getByRole("textbox", { name: "Unsent draft" })).toHaveValue(message)
+  }
+  await setupResume()
+  await sheet.locator('[data-slot="sheet-actions"]').getByRole("button", { name: "Resume", exact: true }).click()
+  await expect(sheet).toBeHidden()
+  expect(bodies[0]).toMatchObject({ agent_session_id: "native-1", directory })
+  expect(bodies[0]).not.toHaveProperty("first_message")
+
+  await page.goBack()
+  await expect(page.getByRole("textbox", { name: "Task", exact: true })).toHaveValue(message)
+  await page.getByRole("link", { name: "New session", exact: true }).click()
+  await setupResume()
+  await expect(sheet.locator("pre")).toHaveText(message)
+  await sheet.getByRole("button", { name: "Resume and send", exact: true }).click()
+  await expect(sheet).toBeHidden()
+  expect(bodies[1]).toMatchObject({ agent_session_id: "native-1", first_message: message })
+})
+
+test("reviewed launch keeps the form until accepted and focuses a rejected worktree", async ({ page }) => {
+  const directory = sessions[0]!.directory
+  const existing = "/home/oleg/.local/share/agentpack/worktrees/0123456789abcdef/fix-login"
+  await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow(directory, [], { git: { head: "abc", branch: "main", dirty: 0 } })] }))
+  await page.route("**/api/worktrees", (route) => route.fulfill({ json: { git: true, worktrees: [
+    { path: existing, branch: "fix/login-loop", main: directory, sessions: [] },
+  ] } }))
+  let release!: () => void
+  const wait = new Promise<void>((resolve) => { release = resolve })
+  await page.route(/\/api\/sessions(\?.*)?$/, async (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    expect(route.request().postDataJSON()).toMatchObject({ directory, worktree: existing, first_message: "Keep this draft" })
+    await wait
+    await route.fulfill({ status: 422, json: { field: "worktree", error: "This worktree was removed. Choose another." } })
+  })
+  await page.goto("/sessions?new=1")
+  const sheet = page.getByRole("dialog", { name: "New session" })
+  const draft = sheet.getByRole("textbox", { name: "First message" })
+  await draft.fill("Keep this draft")
+  await sheet.getByRole("button", { name: "Continue branch fix/login-loop (existing)" }).click()
+  await expect(sheet.getByRole("button", { name: "New worktree", exact: true })).toHaveAttribute("aria-pressed", "false")
+  await expect(sheet.getByRole("status", { name: "Launch summary" })).toContainText(existing)
+  const beforeLaunch = page.url()
+  await sheet.getByRole("button", { name: "Start session" }).click()
+  await expect(sheet.getByText("Starting session on host-a…")).toBeVisible()
+  await expect(page).toHaveURL(beforeLaunch)
+  release()
+  const worktree = sheet.getByRole("group", { name: "Worktree", exact: true })
+  await expect(worktree.getByRole("alert")).toHaveText("This worktree was removed. Choose another.")
+  await expect(worktree).toBeFocused()
+  await expect(draft).toHaveValue("Keep this draft")
+  await expect(sheet.getByRole("status", { name: "Launch summary" })).toContainText(existing)
+})
+
+test("an interrupted chat launch checks the claimed ID without posting again", async ({ page }) => {
+  await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow(sessions[0]!.directory)] }))
+  const launchIDs: string[] = []
+  await page.route(/\/api\/sessions(\?.*)?$/, (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    launchIDs.push(route.request().postDataJSON().id)
+    return route.abort("failed")
+  })
+  await page.route("**/api/sessions/session-*", (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").at(-1)
+    if (route.request().method() !== "GET" || id !== launchIDs[0]) return route.fallback()
+    return route.fulfill({ json: { ...sessions[0], id, transport: "acp", conversation_state: "starting", state: terminal(false) } })
+  })
+  await page.goto("/sessions?new=1")
+  const sheet = page.getByRole("dialog", { name: "New session" })
+  await sheet.getByRole("button", { name: "Start session" }).click()
+  await expect(sheet.getByRole("alert")).toContainText("Launch outcome unknown")
+  await expect(sheet.getByRole("button", { name: "Start session" })).toHaveCount(0)
+  await sheet.getByRole("button", { name: "Check sessions on host-a" }).click()
+  expect(launchIDs).toHaveLength(1)
+  expect(launchIDs[0]).toMatch(/^session-[a-f0-9]{32}$/)
+  await expect(page).toHaveURL(`/sessions/local/${launchIDs[0]}`)
+  await expect(sheet).toBeHidden()
+})
+
+test("launch checks installation and signs in on the chosen machine without losing the draft", async ({ page }) => {
+  const machine = "birch"
+  const directory = "/srv/teams/web"
+  let signedIn = false
+  await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: machine, name: machine, online: true }] }))
+  await page.route((url) => url.pathname === "/api/projects" && url.searchParams.get("node") === machine,
+    (route) => route.fulfill({ json: [projectRow(directory)] }))
+  await page.route("**/api/agents?node=birch", (route) => route.fulfill({ json: { agents: [
+    { harness: "codex", installed: true, signed_in: signedIn, methods: [{ id: "chatgpt", label: "ChatGPT account" }] },
+    { harness: "agent", installed: false, signed_in: false },
+  ] } }))
+  await page.route("**/api/agents/codex/login?node=birch", (route) => {
+    expect(route.request().postDataJSON()).toEqual({ method: "chatgpt" })
+    return route.fulfill({ json: { id: "agent-sign-in", state: "waiting" } })
+  })
+  await page.route("**/api/agents/codex/login/agent-sign-in?node=birch", (route) => {
+    signedIn = true
+    return route.fulfill({ json: { id: "agent-sign-in", state: "done" } })
+  })
+  await page.goto(`/sessions?new=1&machine=${machine}&folder=${encodeURIComponent(directory)}`)
+  const sheet = page.getByRole("dialog", { name: "New session" })
+  const draft = sheet.getByRole("textbox", { name: "First message" })
+  await expect(sheet.getByRole("button", { name: "Cursor CLI · not installed on birch" })).toBeDisabled()
+  await draft.fill("Keep the draft across login")
+  await sheet.getByRole("button", { name: "Sign in…", exact: true }).click()
+  const signIn = page.getByRole("dialog", { name: "Sign in to Codex" })
+  await signIn.getByRole("button", { name: "Sign in with ChatGPT account" }).click()
+  await expect(signIn.getByRole("status")).toHaveText("Signed in to Codex on birch")
+  await signIn.getByRole("button", { name: "Back to setup" }).click()
+  await expect(draft).toHaveValue("Keep the draft across login")
+  await expect(sheet.getByRole("button", { name: "Start session" })).toBeEnabled()
+})
+
+test("folder recovery stays on the selected machine and can reveal hidden folders", async ({ page }) => {
+  const calls: URL[] = []
+  await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "birch", name: "birch", online: true }] }))
+  await page.route((url) => url.pathname === "/api/folders", (route) => {
+    const url = new URL(route.request().url())
+    calls.push(url)
+    const path = url.searchParams.get("path")
+    if (path === "/srv/missing/") return route.fulfill({ status: 404, body: "Folder not found." })
+    const directory = path === "/srv/" ? "/srv" : "/home/viewer"
+    return route.fulfill({ json: { path: directory, parent: "/", row: projectRow(directory), entries: [{ name: ".private", hidden: true, pack: false }], truncated: false } })
+  })
+  await page.goto("/sessions?new=1&machine=birch")
+  await page.getByRole("button", { name: "Browse folders" }).click()
+  const path = page.getByRole("textbox", { name: "Folder path" })
+  await path.fill("/srv/missing/")
+  await expect(page.getByRole("alert")).toHaveText("No folder /srv/missing/ on birch.")
+  await page.getByRole("button", { name: "Go up" }).click()
+  await expect(path).toHaveValue("/srv/")
+  const folders = page.getByRole("navigation", { name: "Folders" })
+  await expect(folders.getByText("birch › /srv", { exact: true })).toBeVisible()
+  await expect(folders.getByRole("button", { name: ".private", exact: true })).toHaveCount(0)
+  await folders.getByRole("checkbox", { name: "Show hidden folders" }).check()
+  await expect(folders.getByRole("button", { name: ".private", exact: true })).toBeVisible()
+  expect(calls.every((url) => url.searchParams.get("node") === "birch")).toBe(true)
+})
+
+test("offline session details keep the title and saved history without a terminal socket", async ({ page }) => {
+  await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "birch", name: "birch", online: false }] }))
+  const base = { ...sessions[0], node_id: "birch", reachable: false, last_sync: twoHoursAgo }
+  reply = [
+    { ...base, id: "remote-terminal", name: "Build output" },
+    { ...base, id: "remote-chat", name: "Review output", transport: "acp", conversation_state: "idle" },
+  ]
+  await page.route((url) => url.pathname === "/api/sessions/remote-chat/conversation", (route) => route.fulfill({
+    body: '{"seq":1,"ts":1,"kind":"prompt","payload":{"text":{"text":"Read our saved review"}}}\n',
+    contentType: "application/x-ndjson",
+  }))
+  const terminal = await attachTerminal(page)
+  await page.goto("/sessions/birch/remote-terminal")
+  await expect(page.getByRole("heading", { name: "Build output", level: 1 })).toBeVisible()
+  await expect(page.getByText(/birch · Last seen .*Offline/)).toBeVisible()
+  await page.getByRole("link", { name: /Review output/ }).click()
+  await expect(page.getByText("Read our saved review")).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Review output", level: 1 })).toBeVisible()
+  await expect(page.getByRole("textbox", { name: /message/i })).toHaveCount(0)
+  expect(terminal.sockets).toHaveLength(0)
+})
+
+test("a terminal claim opens only after lookup shows an interactive session", async ({ page }) => {
+  const directory = sessions[0]!.directory
+  await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow(directory)] }))
+  let claim = ""
+  let posts = 0
+  let lookups = 0
+  await page.route(/\/api\/sessions(\?.*)?$/, (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    posts++
+    const body = route.request().postDataJSON()
+    expect(body).toMatchObject({ directory, transport: "terminal" })
+    claim = body.id
+    return route.abort("failed")
+  })
+  await page.route("**/api/sessions/session-*", (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").at(-1)
+    if (id !== claim || route.request().method() !== "GET") return route.fallback()
+    lookups++
+    return route.fulfill({ json: { ...sessions[0], id, transport: "terminal", state: { ...terminal(true), interactive: lookups > 1 } } })
+  })
+  const worker = await attachTerminal(page)
+  await page.goto("/sessions?new=1")
+  const sheet = page.getByRole("dialog", { name: "New session" })
+  await sheet.getByRole("button", { name: "Terminal", exact: true }).click()
+  await sheet.getByRole("button", { name: "Start session" }).click()
+  const check = sheet.getByRole("button", { name: "Check sessions on host-a" })
+  await check.click()
+  await expect(sheet.getByText("No matching session yet.", { exact: false })).toBeVisible()
+  expect(claim).toMatch(/^session-[a-f0-9]{32}$/)
+  expect(worker.sockets).toHaveLength(0)
+  await check.click()
+  await expect(sheet).toBeHidden()
+  await expect(page).toHaveURL(`/sessions/local/${claim}`)
+  await expect(page.locator(".xterm-screen")).toBeVisible()
+  expect(posts).toBe(1)
+})
+
+test("an older peer rejects a terminal launch ID with an update hint and keeps setup", async ({ page }) => {
+  await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow(sessions[0]!.directory)] }))
+  let posts = 0
+  await page.route(/\/api\/sessions(\?.*)?$/, (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    posts++
+    return route.fulfill({ status: 400, body: "invalid chat ID" })
+  })
+  await page.goto("/sessions?new=1")
+  const sheet = page.getByRole("dialog", { name: "New session" })
+  await sheet.getByRole("textbox", { name: "First message" }).fill("Stay in this setup")
+  await sheet.getByRole("button", { name: "Terminal", exact: true }).click()
+  await sheet.getByRole("button", { name: "Start session" }).click()
+  await expect(sheet.getByRole("alert")).toContainText("Needs update")
+  await sheet.getByRole("button", { name: "Chat", exact: true }).click()
+  await expect(sheet.getByRole("textbox", { name: "First message" })).toHaveValue("Stay in this setup")
+  expect(posts).toBe(1)
+})
+
+test("reconnecting an MCP login leaves the New session draft in place", async ({ page }) => {
+  const url = "https://mcp.linear.app/mcp"
+  const directory = sessions[0]!.directory
+  await page.addInitScript(() => { window.open = () => null })
+  await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow(directory, [], {
+    mcp: [{ name: "linear", launcher: "remote", source: "manifest", url }],
+  })] }))
+  await page.route("**/api/mcp/credentials", (route) => route.fulfill({ json: { credentials: [
+    { id: "linear-login", match: url, kind: "oauth", label: "Work", status: "needs_login" },
+  ] } }))
+  await page.route("**/api/mcp/logins", (route) => route.fulfill({ json: {
+    login: "oauth-1", authorize_url: new URL("/test-mcp-reconnect", page.url()).href,
+  } }))
+  await page.route("**/api/mcp/logins/oauth-1", (route) => route.fulfill({ json: { status: "pending" } }))
+  await page.goto("/sessions?new=1")
+  const sheet = page.getByRole("dialog", { name: "New session" })
+  const draft = sheet.getByRole("textbox", { name: "First message" })
+  await draft.fill("Check the login loop")
+  const launchHref = page.url()
+  await sheet.getByRole("button", { name: "Reconnect…", exact: true }).click()
+  await expect(sheet.getByText("Waiting for linear sign-in…")).toBeVisible()
+  await expect(sheet.getByRole("link", { name: "Open sign-in link" })).toHaveAttribute("target", "_blank")
+  await expect(page).toHaveURL(launchHref)
+  await sheet.getByRole("button", { name: "Cancel sign-in" }).click()
+  await expect(draft).toHaveValue("Check the login loop")
+  await expect(sheet.getByRole("status", { name: "Launch summary" })).toContainText(directory)
 })

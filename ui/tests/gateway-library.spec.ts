@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test"
-import { mockAPI, projectRow, session } from "./helpers"
+import { mockAPI, projectRow } from "./helpers"
 
 const peer = { id: "peer-1", name: "Build server", online: true }
 
@@ -50,15 +50,18 @@ test("existing package installation remains available from More", async ({ page 
   await page.goto("/library")
   await page.getByRole("button", { name: "Add package…" }).click()
   await page.getByRole("combobox", { name: "Project" }).click()
-  await page.getByRole("option", { name: /other$/ }).click()
+  await page.getByRole("option", { name: /other.*\/work\/other/ }).click()
   await page.getByLabel("Package", { exact: true }).fill("acme/skill")
-  await page.getByRole("button", { name: "Add package", exact: true }).click()
-  await expect(page.getByText("Added acme/skill")).toBeVisible()
+  const dialog = page.getByRole("dialog")
+  await dialog.getByRole("button", { name: "Review packages", exact: true }).click()
+  await dialog.getByRole("button", { name: "Install 1 package", exact: true }).click()
+  await expect(dialog.getByText("Installed", { exact: true })).toBeVisible()
+  await dialog.getByRole("button", { name: "Done", exact: true }).click()
   expect(requests.some((value) => value.path === "/api/packages" && value.method === "POST" && value.body && typeof value.body === "object" && "spec" in value.body && value.body.spec === "acme/skill" && "directory" in value.body && value.body.directory === "/work/other")).toBeTruthy()
 })
 
 test("save, rename, preview and restore an agentpack in the Library", async ({ page }) => {
-  const requests = await mockAPI(page)
+  await mockAPI(page)
   await mockLibraryBase(page)
   const pack = { id: "pack-1", name: "Project setup", revisions: ["rev-1"], heads: ["rev-1"] }
   const revision = { id: "rev-1", agentpack_id: pack.id, manifest: 'name = "project"\n', lock: "", package_ids: [], project: "/work/my-project", created_at: "2026-10-20T10:00:00Z", label: "Initial", mode: "default" }
@@ -81,7 +84,7 @@ test("save, rename, preview and restore an agentpack in the Library", async ({ p
     pack.name = body.name
     return route.fulfill({ json: pack })
   })
-  await page.route(/restore-preview\?/, (route) => route.fulfill({ json: { add: ["github.com/acme/new"], update: [], remove: [], mode: "default" } }))
+  await page.route(/restore-preview\?/, (route) => route.fulfill({ json: { add: ["github.com/acme/new"], update: [], remove: [], mode: "default", preview_digest: "restore-current" } }))
   await page.route(/\/revisions\/rev-1\/restore(\?.*)?$/, (route) => {
     restoreBody = route.request().postDataJSON()
     return route.fulfill({ json: { restored: true } })
@@ -105,10 +108,10 @@ test("save, rename, preview and restore an agentpack in the Library", async ({ p
   await page.getByRole("button", { name: "Restore…", exact: true }).click()
   await page.getByRole("radio").first().check()
   await expect(page.getByText("Add github.com/acme/new")).toBeVisible()
-  await page.getByRole("checkbox", { name: /Restart affected agents after restore/ }).click()
+  await expect(page.getByRole("checkbox", { name: /Restart affected agents after restore/ })).not.toBeChecked()
   await page.getByRole("button", { name: "Restore", exact: true }).click()
   await expect(page.getByText("Restored Renamed setup in my-project")).toBeVisible()
-  expect(restoreBody).toEqual({ directory: "/work/my-project", restart: false })
+  expect(restoreBody).toEqual({ directory: "/work/my-project", restart: false, preview_digest: "restore-current" })
 })
 
 test("offline package rows save drafts and require a fresh review before apply", async ({ page }) => {
@@ -117,6 +120,7 @@ test("offline package rows save drafts and require a fresh review before apply",
   await mockLibraryBase(page)
   let online = true
   let ready = false
+  let digest: string | undefined
   let drafts: Record<string, unknown>[] = []
   let discarded = false
   const packageRequests: { body: unknown; node: string | null }[] = []
@@ -138,7 +142,7 @@ test("offline package rows save drafts and require a fresh review before apply",
   })
   await page.route("**/api/library/drafts/draft-1/review", (route) =>
     route.fulfill({
-      json: { draft: drafts[0], ready, pins_match: true, folder_match: true, reason: ready ? "Ready to install the exact pin." : "Build server is offline.", diff: { add: [], update: [item.module], remove: [], mode: "default" } },
+      json: { draft: drafts[0], ready, pins_match: false, folder_match: true, reason: ready ? "Destination pins changed." : "Build server is offline.", diff: { add: [], update: [item.module], remove: [], mode: "default", preview_digest: digest } },
     }),
   )
   await page.route("**/api/library/drafts/draft-1", (route) => {
@@ -150,6 +154,10 @@ test("offline package rows save drafts and require a fresh review before apply",
     const url = new URL(route.request().url())
     if (route.request().method() === "GET") return route.fulfill({ json: [] })
     packageRequests.push({ body: route.request().postDataJSON(), node: url.searchParams.get("node") })
+    if (packageRequests.length === 1) {
+      digest = "install-next"
+      return route.fulfill({ status: 409, json: { error: "Changed since preview" } })
+    }
     return route.fulfill({ json: { installed: true } })
   })
 
@@ -162,25 +170,108 @@ test("offline package rows save drafts and require a fresh review before apply",
   await page.locator("label").filter({ hasText: "Offline · install as draft" }).click()
   await page.getByRole("button", { name: "Save 1 draft" }).click()
   await page.getByRole("button", { name: "Done", exact: true }).click()
-  // Phones show one pane at a time, and Pending installs lives in the list pane, so reopen the list.
+  // Phones show one pane at a time, and Pending changes lives in the list pane, so reopen the list.
   await page.goto("/library")
-  await expect(page.getByRole("region", { name: "Pending installs" })).toBeVisible()
-  expect(drafts[0]).toMatchObject({ item: `${item.module}@${item.commit}`, node: "peer-1", directory: "/srv/project", folder_identity: "folder-fingerprint", expected_pins: { [item.module]: { commit: item.commit, cache_key: "cache-key", content_hash: item.content_hash } } })
+  const pending = page.getByRole("region", { name: "Pending changes" })
+  await expect(pending).toBeVisible()
+  await expect(pending).toContainText("Reconnecting never applies a draft.")
+  await expect(pending).toContainText("Offline")
+  expect(drafts[0]).toMatchObject({ item: `${item.module}@${item.commit}`, node: "peer-1", directory: "/srv/project", folder_identity: "folder-fingerprint", expected_pins: {} })
 
-  await page.getByRole("button", { name: "Review…" }).click()
+  await pending.getByRole("button", { name: "Review again" }).click()
   await expect(page.getByText("Build server is offline.", { exact: true })).toBeVisible()
   await page.keyboard.press("Escape")
 
   online = true
   ready = true
   await refreshMachines(page)
-  await page.getByRole("button", { name: "Review…" }).click()
-  await expect(page.getByText("Ready to install the exact pin.")).toBeVisible()
-  await page.getByRole("checkbox", { name: /Restart affected agents after install/ }).click()
+  await pending.getByRole("button", { name: "Review again" }).click()
+  await expect(page.getByText("Destination pins changed since the draft was saved.")).toBeVisible()
+  const dialog = page.getByRole("dialog")
+  await expect(dialog).toContainText("Needs update")
+  await expect(dialog.getByRole("button", { name: "Install", exact: true })).toBeDisabled()
+  expect(packageRequests).toHaveLength(0)
+  digest = "install-current"
+  await dialog.getByRole("button", { name: "Review again" }).click()
+  await expect(page.getByRole("checkbox", { name: /Restart affected agents after install/ })).not.toBeChecked()
   await page.getByRole("button", { name: "Install", exact: true }).click()
   await expect.poll(() => packageRequests.length).toBe(1)
-  expect(packageRequests[0]).toMatchObject({ node: "peer-1", body: { directory: "/srv/project", spec: `${item.module}@${item.commit}`, restart: false } })
+  await expect(dialog).toContainText("Changed since you reviewed")
+  expect(discarded).toBe(false)
+  await dialog.getByRole("button", { name: "Confirm install", exact: true }).click()
   await expect.poll(() => discarded).toBe(true)
+  expect(packageRequests).toEqual(
+    ["install-current", "install-next"].map((preview_digest) => ({
+      node: "peer-1", body: { directory: "/srv/project", spec: `${item.module}@${item.commit}`, restart: false, preview_digest },
+    })),
+  )
+})
+
+test("LIB-06 and LIB-11: pending changes show pack name, and a changed draft recheck requires confirming again before writing", async ({ page }) => {
+  await mockAPI(page)
+  const pack = { id: "pack-1", name: "Project setup", revisions: ["rev-1"], heads: ["rev-1"] }
+  const revision = { id: "rev-1", agentpack_id: pack.id, manifest: "", lock: "", package_ids: [], project: "/srv/project", created_at: "2026-10-20T10:00:00Z", label: "Stable", mode: "default" }
+  const draft = {
+    id: "draft-1",
+    item: pack.id,
+    pack_id: pack.id,
+    revision: revision.id,
+    node: peer.id,
+    directory: "/srv/project",
+    reason: "Machine offline",
+    folder_identity: "folder-1",
+    expected_pins: {},
+    created_at: "2026-10-28T12:00:00Z",
+  }
+  let reviewCount = 0
+  let restoreCalls = 0
+  await page.route("**/api/nodes*", (route) => route.fulfill({ json: [{ ...peer, online: true }] }))
+  await page.route("**/api/projects**", (route) =>
+    route.fulfill({ json: new URL(route.request().url()).searchParams.get("node") === peer.id ? [projectRow("/srv/project", [{ harness: "claude" }])] : [] }),
+  )
+  await page.route("**/api/library/packages**", (route) => route.fulfill({ json: [] }))
+  await page.route(/\/api\/library\/agentpacks(\?.*)?$/, (route) => route.fulfill({ json: [{ agentpack: pack, revisions: [revision] }] }))
+  await page.route(/\/api\/library\/drafts(\?.*)?$/, (route) => route.fulfill({ json: [draft] }))
+  await page.route("**/api/library/drafts/draft-1/review", (route) => {
+    reviewCount += 1
+    const diff =
+      reviewCount === 1
+        ? { add: ["github.com/acme/one"], update: [], remove: [], mode: "default", preview_digest: "draft-first" }
+        : { add: ["github.com/acme/one"], update: ["github.com/acme/two"], remove: [], mode: "default", preview_digest: "draft-next" }
+    return route.fulfill({ json: { draft, ready: true, pins_match: true, folder_match: true, reason: "Ready to restore.", diff } })
+  })
+  await page.route(/\/revisions\/rev-1\/restore(\?.*)?$/, (route) => {
+    restoreCalls += 1
+    expect(route.request().postDataJSON()).toMatchObject({ preview_digest: "draft-next", restart: false })
+    return route.fulfill({ json: { restored: true } })
+  })
+  await page.route("**/api/library/drafts/draft-1", (route) => route.fulfill({ json: { discarded: true } }))
+
+  await page.goto("/library")
+  const pending = page.getByRole("region", { name: "Pending changes" })
+  await expect(pending).toContainText("Pending changes (1)")
+  await expect(pending).toContainText("Restore Project setup · Stable")
+  await expect(pending).not.toContainText("pack-1")
+  await expect(pending).toContainText("Build server · /srv/project")
+  await expect(pending).toContainText("Reconnecting never applies a draft.")
+  await pending.getByRole("button", { name: "Discard" }).click()
+  const discard = page.getByRole("alertdialog")
+  await expect(discard).toContainText("Discard the pending change for Restore Project setup")
+  await discard.getByRole("button", { name: "Cancel" }).click()
+
+  await pending.getByRole("button", { name: "Review again" }).click()
+  const dialog = page.getByRole("dialog")
+  await expect(dialog).toContainText("Add github.com/acme/one")
+
+  // First confirm rechecks and finds a changed diff: must NOT write, must show revised diff and require a second confirm.
+  await dialog.getByRole("button", { name: "Restore", exact: true }).click()
+  await expect(dialog).toContainText("Changed since you reviewed")
+  await expect(dialog).toContainText("Update github.com/acme/two")
+  expect(restoreCalls).toBe(0)
+
+  // Second confirm matches the revised diff and applies.
+  await dialog.getByRole("button", { name: "Confirm restore", exact: true }).click()
+  await expect.poll(() => restoreCalls).toBe(1)
 })
 
 test("replication requires explicit trust and reports sync progress per peer", async ({ page }) => {

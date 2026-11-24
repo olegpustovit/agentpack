@@ -39,7 +39,9 @@ export type UsageSession = {
 
 export type LimitSample = { hour: number; node_id: string; harness: string; window_id: string; used_percent?: number | null; reset_at: number }
 
-export type UsageReport = { hourly: UsageHour[]; sessions: UsageSession[]; samples: LimitSample[] }
+export type UsageCoverage = { node_id: string; state: "current" | "pending" | "offline" | "stale"; last_sync?: string }
+
+export type UsageReport = { hourly: UsageHour[]; sessions: UsageSession[]; samples: LimitSample[]; coverage?: UsageCoverage[] }
 
 export type Range = "day" | "week" | "month"
 
@@ -59,6 +61,15 @@ export const metrics = {
 } as const satisfies Record<string, { label: string; kind: Kind; value: (row: UsageHour) => number }>
 
 export type Metric = keyof typeof metrics
+
+// Cost is -1 when the agent doesn't report it, so "no cost" and "$0" must stay apart.
+export const reportsCost = (rows: { cost_micros: number }[]) => rows.some((row) => row.cost_micros >= 0)
+
+// Shown under a cost total that only some sessions contribute to; empty when coverage is complete.
+export function costCoverage(sessions: { cost_micros: number }[]): string {
+  const reported = sessions.filter((session) => session.cost_micros >= 0).length
+  return reported === sessions.length ? "" : `${reported} of ${sessions.length} sessions report cost`
+}
 
 export const metricOf = (value: string | undefined): Metric => (value && value in metrics ? (value as Metric) : "out")
 export const rangeOf = (value: string | undefined): Range => (value === "day" || value === "month" ? value : "week")
@@ -172,4 +183,47 @@ export const activeIn = (session: UsageSession, from: number, to: number) => ses
 // Change against the period before, in whole percent; undefined when there is nothing to compare with.
 export function changeOf(current: number, previous: number): number | undefined {
   return previous > 0 ? Math.round(((current - previous) / previous) * 100) : undefined
+}
+
+export type UsageDataState = "loading" | "error" | "empty" | "partial" | "ready"
+
+// Distinguishes loading, failed read, confirmed zero, partial coverage from offline peers, and complete data.
+export function usageDataState(input: {
+  pending: boolean
+  error: boolean
+  hasData: boolean
+  incompleteCount: number
+}): UsageDataState {
+  if (input.error) return "error"
+  if (input.pending) return "loading"
+  if (input.incompleteCount > 0) return "partial"
+  return input.hasData ? "ready" : "empty"
+}
+
+function timeZoneLabel(ms: number): string {
+  const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(new Date(ms))
+  return parts.find((part) => part.type === "timeZoneName")?.value ?? ""
+}
+
+// Exact inclusive calendar dates plus viewer timezone, so "This Week" is unambiguous.
+export function exactRangeLabel(win: Window): string {
+  const start = win.starts[0]!
+  const endInclusive = win.end - 1
+  const tz = timeZoneLabel(start)
+  const suffix = tz ? ` (${tz})` : ""
+  if (win.range === "day") {
+    return `${date(start, { month: "short", day: "numeric", year: "numeric" })}${suffix}`
+  }
+  const sameYear = new Date(start).getFullYear() === new Date(endInclusive).getFullYear()
+  const from = date(start, sameYear ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" })
+  const to = date(endInclusive, { month: "short", day: "numeric", year: "numeric" })
+  return `${from} – ${to}${suffix}`
+}
+
+// Concise label naming the prior comparison window (e.g. "Nov 9 – Nov 15").
+export function comparisonWindowLabel(previous: Window): string {
+  const start = previous.starts[0]!
+  const endInclusive = previous.end - 1
+  if (previous.range === "day") return date(start, { month: "short", day: "numeric" })
+  return `${date(start, { month: "short", day: "numeric" })} – ${date(endInclusive, { month: "short", day: "numeric" })}`
 }

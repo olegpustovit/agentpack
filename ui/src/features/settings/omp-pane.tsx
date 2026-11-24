@@ -19,6 +19,7 @@ import {
   formatRoleModel,
   formatTokens,
   groupSettings,
+  inheritedValue,
   isChanged,
   isRoleReference,
   kindRoles,
@@ -26,6 +27,7 @@ import {
   ompModelsQuery,
   ompSettingsQuery,
   ompTabs,
+  overrideValue,
   parseRoleModel,
   roleKey,
   roleKinds,
@@ -50,22 +52,18 @@ const switchingRows: OmpSetting[] = [
   { key: "modelPresets", tab: "roles", group: "", type: "record", label: "Presets", description: "Named sets of role models and thinking levels you can switch between." },
 ]
 
-// Writes one network-wide value (or resets it) with an optimistic update that rolls back on rejection.
+// Update just the confirmed override, then refetch so edits from other machines also appear.
 function useOmpSetting(key: string) {
   const queryClient = useQueryClient()
   const path = `/api/omp/settings/${encodeURIComponent(key)}` as const
-  return useMutation<unknown, Error, { value?: unknown }, { previous?: OmpSettings }>({
+  return useMutation<unknown, Error, { value?: unknown }>({
     mutationFn: ({ value }) => (value === undefined ? api(path, { method: "DELETE" }) : api(path, { method: "PUT", body: { value } })),
-    onMutate: async ({ value }) => {
-      await queryClient.cancelQueries({ queryKey: ompSettingsQuery(LOCAL).queryKey })
-      const previous = queryClient.getQueryData(ompSettingsQuery(LOCAL).queryKey)
-      if (previous) queryClient.setQueryData(ompSettingsQuery(LOCAL).queryKey, withOverride(previous, key, value))
-      return { previous }
+    onSuccess: async (_response, { value }) => {
+      const queryKey = ompSettingsQuery(LOCAL).queryKey
+      await queryClient.cancelQueries({ queryKey })
+      queryClient.setQueryData(queryKey, (old) => old && withOverride(old, key, value))
+      await queryClient.invalidateQueries({ queryKey })
     },
-    onError: (_error, _input, context) => {
-      if (context?.previous) queryClient.setQueryData(ompSettingsQuery(LOCAL).queryKey, context.previous)
-    },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ompSettingsQuery(LOCAL).queryKey }),
   })
 }
 
@@ -143,44 +141,94 @@ function ChangedDot() {
   return <span role="img" aria-label="Changed" title="Changed for every machine" className="size-1.5 shrink-0 rounded-full bg-(--accent)" />
 }
 
+function valueLabel(value: unknown) {
+  if (value === undefined || value === null) return "Not set"
+  if (typeof value === "boolean") return value ? "On" : "Off"
+  if (typeof value === "object") return summarize(value)
+  return String(value)
+}
+
+function SettingValues({ settings, settingKey, fallback }: { settings: OmpSettings; settingKey: string; fallback?: unknown }) {
+  const inherited = valueLabel(inheritedValue(settings, settingKey) ?? fallback)
+  const override = overrideValue(settings, settingKey)
+  const effective = valueLabel(effectiveValue(settings, settingKey) ?? fallback)
+  return (
+    <dl className="mt-(--s1) flex flex-wrap gap-x-(--s3) gap-y-(--s1) break-words text-(length:--fs-xs) text-(--fg2)">
+      <div className="min-w-0"><dt className="inline">Inherited</dt>{" "}<dd className="inline font-medium">{inherited}</dd></div>
+      <div className="min-w-0"><dt className="inline">Mesh override</dt>{" "}<dd className="inline font-medium">{override === undefined ? "None" : valueLabel(override)}</dd></div>
+      <div className="min-w-0"><dt className="inline">Effective</dt>{" "}<dd className="inline font-medium">{effective}</dd></div>
+    </dl>
+  )
+}
+
 function SettingRow({ setting, settings }: { setting: OmpSetting; settings: OmpSettings }) {
   const save = useOmpSetting(setting.key)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<{ value: unknown } | null>(null)
   const value = effectiveValue(settings, setting.key) ?? setting.default
-  const changed = isChanged(settings, setting.key)
+  const hasOverride = isChanged(settings, setting.key)
+  const scalar = ["boolean", "enum", "number", "string"].includes(setting.type)
+  const number = setting.type === "number"
+  const invalidNumber = number && draft !== null && (String(draft.value).trim() === "" || !Number.isFinite(Number(draft.value)))
+  const next = draft !== null && number ? Number(draft.value) : draft?.value
+  const dirty = draft !== null && !Object.is(next, value)
   const id = `omp-${setting.key}`
+  function commit(value?: unknown) {
+    save.mutate({ value }, { onSuccess: () => setDraft(null) })
+  }
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-(--s4) border-b-[0.5px] border-(--sep-soft) py-(--s3) max-[760px]:grid-cols-1">
       <div className="min-w-0">
         <div className="flex items-center gap-(--s2)">
-          {changed && <ChangedDot />}
+          {hasOverride && <ChangedDot />}
           <label htmlFor={id}>{setting.label}</label>
         </div>
         {setting.description && <p className="mt-0.5 max-w-[72ch] text-(length:--fs-xs) text-(--fg2)">{setting.description}</p>}
+        <SettingValues settings={settings} settingKey={setting.key} fallback={setting.default} />
+        {invalidNumber && <FieldError id={`${id}-error`} className="mt-(--s1)">Enter a valid number.</FieldError>}
         {save.error && <FieldError className="mt-(--s1)">{errorText(save.error)}</FieldError>}
+        {(save.isPending || save.isSuccess) && <p role="status" className="mt-(--s1) text-(length:--fs-xs) text-(--fg2)">{save.isPending ? "Saving…" : "Saved"}</p>}
       </div>
-      <div className="flex items-center justify-end gap-(--s2)">
-        {changed && <Button variant="ghost" size="sm" className="text-(--accent)" disabled={save.isPending} onClick={() => save.mutate({})}>Reset</Button>}
-        <SettingControl id={id} setting={setting} value={value} commit={(next) => save.mutate({ value: next })} />
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-(--s2) max-[760px]:justify-start">
+        {hasOverride && <Button variant="ghost" size="sm" className="text-(--accent)" aria-label={`Reset ${setting.label}`} disabled={save.isPending} onClick={() => commit()}>Reset</Button>}
+        {scalar ? (
+          <form className="flex min-w-0 flex-wrap items-center gap-(--s2)" onSubmit={(event) => {
+            event.preventDefault()
+            if (dirty && !invalidNumber && !save.isPending) commit(next)
+          }}>
+            <SettingControl id={id} setting={setting} value={draft?.value ?? value} invalid={invalidNumber} disabled={save.isPending} edit={(next) => {
+              if (save.error || save.isSuccess) save.reset()
+              setDraft({ value: next })
+            }} />
+            <Button type="submit" size="sm" disabled={!dirty || invalidNumber || save.isPending}>Save</Button>
+          </form>
+        ) : (
+          <>
+            <Button id={id} size="sm" disabled={save.isPending} onClick={() => { save.reset(); setEditing(true) }}>Edit…</Button>
+            <Sheet open={editing} onOpenChange={setEditing}>
+              {editing && <ValueEditor setting={setting} value={value} save={save} onDone={() => setEditing(false)} />}
+            </Sheet>
+          </>
+        )}
       </div>
     </div>
   )
 }
 
-function SettingControl({ id, setting, value, commit }: { id: string; setting: OmpSetting; value: unknown; commit: (value: unknown) => void }) {
-  const [draft, setDraft] = useState<string | null>(null)
-  const [editing, setEditing] = useState(false)
+function SettingControl({ id, setting, value, invalid, disabled, edit }: { id: string; setting: OmpSetting; value: unknown; invalid: boolean; disabled: boolean; edit: (value: unknown) => void }) {
   if (setting.type === "boolean") {
-    return <Switch id={id} aria-label={setting.label} checked={value === true} onCheckedChange={(checked) => commit(checked)} />
+    return <Switch id={id} aria-label={setting.label} checked={value === true} disabled={disabled} onCheckedChange={edit} />
   }
   if (setting.type === "enum") {
     const options = setting.values ?? (value === undefined ? [] : [value])
     return (
-      <div className="w-40">
+      <div className="w-40 max-w-full">
         <PopupSelect
           label={setting.label}
           value={String(value ?? "")}
           items={options.map((option) => ({ value: String(option), label: String(option) }))}
-          onValueChange={(next) => commit(options.find((option) => String(option) === next) ?? next)}
+          disabled={disabled}
+          onValueChange={(next) => edit(options.find((option) => String(option) === next) ?? next)}
         />
       </div>
     )
@@ -189,52 +237,29 @@ function SettingControl({ id, setting, value, commit }: { id: string; setting: O
     const items = chatRoles.map((role) => ({ value: `@${role.id}`, label: `${role.name} role` }))
     if (typeof value === "string" && !items.some((item) => item.value === value)) items.push({ value, label: value })
     return (
-      <div className="w-40">
-        <PopupSelect label={setting.label} value={String(value ?? "")} items={items} onValueChange={commit} />
+      <div className="w-40 max-w-full">
+        <PopupSelect label={setting.label} value={String(value ?? "")} items={items} disabled={disabled} onValueChange={edit} />
       </div>
     )
   }
-  if (setting.type === "number" || setting.type === "string") {
-    const number = setting.type === "number"
-    const shown = value === undefined || value === null ? "" : String(value)
-    const finish = () => {
-      if (draft === null) return
-      setDraft(null)
-      if (draft === shown) return
-      if (!number) return commit(draft)
-      const parsed = Number(draft)
-      if (draft.trim() !== "" && Number.isFinite(parsed)) commit(parsed)
-    }
-    return (
-      <Input
-        id={id}
-        inputMode={number ? "decimal" : undefined}
-        placeholder="Not set"
-        className={number ? "w-30 text-right" : "w-60"}
-        value={draft ?? shown}
-        onChange={(event) => setDraft(event.currentTarget.value)}
-        onBlur={finish}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") finish()
-          if (event.key === "Escape") setDraft(null)
-        }}
-      />
-    )
-  }
+  const number = setting.type === "number"
   return (
-    <>
-      <span className="max-w-60 truncate text-(length:--fs-sm) text-(--fg2)" title={summarize(value)}>{summarize(value)}</span>
-      <Button id={id} size="sm" onClick={() => setEditing(true)}>Edit…</Button>
-      <Sheet open={editing} onOpenChange={setEditing}>
-        {editing && <ValueEditor setting={setting} value={value} onDone={() => setEditing(false)} />}
-      </Sheet>
-    </>
+    <Input
+      id={id}
+      inputMode={number ? "decimal" : undefined}
+      placeholder="Not set"
+      className={number ? "w-30 text-right" : "w-52 max-w-full"}
+      value={String(value ?? "")}
+      aria-invalid={invalid}
+      aria-describedby={invalid ? `${id}-error` : undefined}
+      disabled={disabled}
+      onChange={(event) => edit(event.currentTarget.value)}
+    />
   )
 }
 
 // Lists of plain strings edit one per line; anything else edits as JSON.
-function ValueEditor({ setting, value, onDone }: { setting: OmpSetting; value: unknown; onDone: () => void }) {
-  const save = useOmpSetting(setting.key)
+function ValueEditor({ setting, value, save, onDone }: { setting: OmpSetting; value: unknown; save: ReturnType<typeof useOmpSetting>; onDone: () => void }) {
   const lines = setting.type === "array" && (value === undefined || (Array.isArray(value) && value.every((item) => typeof item === "string")))
   const [text, setText] = useState(() => (lines ? ((value as string[] | undefined) ?? []).join("\n") : JSON.stringify(value ?? (setting.type === "array" ? [] : {}), null, 2)))
   const [invalid, setInvalid] = useState("")
@@ -345,8 +370,8 @@ function Machines({ provider, availability }: { provider: string; availability: 
 
 function RolesTable({ roles, settings, catalog, availability, onChoose }: { roles: Role[]; settings: OmpSettings; catalog: Map<string, OmpModel>; availability: Availability[]; onChoose: (role: Role) => void }) {
   return (
-    <DataGrid className="min-w-0">
-      <DataGridHead>
+    <DataGrid className="min-w-0" role="table">
+      <DataGridHead className="max-[760px]:sr-only" role="rowgroup">
         <tr>
           <DataGridHeaderCell className="w-[24%]">Role</DataGridHeaderCell>
           <DataGridHeaderCell>Model</DataGridHeaderCell>
@@ -355,7 +380,7 @@ function RolesTable({ roles, settings, catalog, availability, onChoose }: { role
           <DataGridHeaderCell className="w-20"><span className="sr-only">Reset</span></DataGridHeaderCell>
         </tr>
       </DataGridHead>
-      <tbody>
+      <tbody role="rowgroup" className="max-[760px]:block">
         {roles.map((role) => <RoleRow key={role.id} role={role} settings={settings} catalog={catalog} availability={availability} onChoose={() => onChoose(role)} />)}
       </tbody>
     </DataGrid>
@@ -368,24 +393,26 @@ function RoleRow({ role, settings, catalog, availability, onChoose }: { role: Ro
   const name = current ? catalog.get(current.selector)?.name ?? current.selector : "Automatic"
   return (
     <DataGridRow
-      className="h-8"
+      role="row"
+      className="h-8 max-[760px]:grid max-[760px]:h-auto max-[760px]:gap-(--s2) max-[760px]:py-(--s3)"
       onClick={(event) => {
         if (!(event.target as HTMLElement).closest("a, button")) onChoose()
       }}
     >
-      <DataGridCell>
+      <DataGridCell role="cell">
         <span className="font-medium">{role.name}</span>
         <span className="ms-(--s2) text-(length:--fs-xs) text-(--fg3)">{role.id}</span>
       </DataGridCell>
-      <DataGridCell>
+      <DataGridCell role="cell" className="whitespace-normal py-(--s2)">
         <button type="button" aria-label={`${role.name} model`} className="max-w-full truncate text-left outline-none focus-visible:ring-2 focus-visible:ring-(--accent)" onClick={onChoose}>
           <span className={current ? "" : "text-(--fg3)"}>{name}</span>
           {current && <span className="ms-(--s2) text-(length:--fs-xs) text-(--fg3)">{current.provider}</span>}
         </button>
+        <SettingValues settings={settings} settingKey={roleKey(role.id)} fallback="Automatic" />
       </DataGridCell>
-      <DataGridCell>{current ? <Level level={current.level} /> : <span className="text-(--fg3)">—</span>}</DataGridCell>
-      <DataGridCell>{current && <Machines provider={current.provider} availability={availability} />}</DataGridCell>
-      <DataGridCell className="text-right">
+      <DataGridCell role="cell">{current && <><span className="hidden text-(--fg2) max-[760px]:inline">Thinking </span><Level level={current.level} /></>}</DataGridCell>
+      <DataGridCell role="cell">{current && <><span className="hidden text-(--fg2) max-[760px]:inline">Machines </span><Machines provider={current.provider} availability={availability} /></>}</DataGridCell>
+      <DataGridCell role="cell" className="text-right max-[760px]:text-left">
         {isChanged(settings, roleKey(role.id)) && (
           <Button
             variant="ghost"
@@ -451,7 +478,7 @@ function ModelBrowser({ role, settings, catalog, availability, onDone }: { role:
                       key={model.selector}
                       aria-selected={selected}
                       onClick={() => setPick(model.selector)}
-                      className="group/model text-(--fg2) aria-selected:bg-(--accent) aria-selected:text-(--accent-fg) aria-selected:hover:bg-(--accent)"
+                      className="group/model text-(--fg2) aria-selected:bg-(--accent-fill) aria-selected:text-(--accent-fg) aria-selected:hover:bg-(--accent-fill)"
                     >
                       <DataGridCell>
                         <button type="button" aria-pressed={selected} className="max-w-full truncate text-left text-(--fg) outline-none focus-visible:underline group-aria-selected/model:text-(--accent-fg)">

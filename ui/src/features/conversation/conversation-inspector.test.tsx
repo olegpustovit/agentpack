@@ -75,7 +75,7 @@ describe("conversation inspector", () => {
     }
     act(() => root.render(<QueryClientProvider client={client}><ConversationInspector thread={withDiff} info={info} machine="local" open /></QueryClientProvider>))
     const row = container.querySelector<HTMLButtonElement>('button[title="src/main.go"]')!
-    expect([...row.querySelectorAll("span.block")].map((line) => line.textContent)).toEqual(["main.go", "src"])
+    expect(row.textContent).toContain("src/main.go")
     expect(container.textContent).toContain("+1")
     expect(container.textContent).toContain("−1")
   })

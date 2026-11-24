@@ -5,15 +5,57 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/registry"
 	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state/statetest"
 )
+
+func TestUsageReportsPeerCoverageWithoutProbing(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	library, err := registry.NewWithStore(g.store, filepath.Join(g.options.Home, "registry"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.options.Library.Store = library
+	for _, id := range []string{"birch", "cedar", "ash", "maple"} {
+		if err := g.options.Library.Store.EnrollPeer(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := g.options.Library.Store.EnrollOwnMachine("library-only"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	g.replicaStatus.Store("birch", replicaContact{Reachable: true, LastSuccess: now})
+	g.replicaStatus.Store("cedar", replicaContact{LastSuccess: now, Error: "unreachable"})
+	g.replicaStatus.Store("maple", replicaContact{Reachable: true, LastSuccess: now, Error: "peer needs update"})
+	recorder := httptest.NewRecorder()
+	g.serveUsage(recorder, httptest.NewRequest(http.MethodGet, "/api/usage?from=0&to=3600", nil))
+	var report usageReport
+	if err := json.Unmarshal(recorder.Body.Bytes(), &report); recorder.Code != http.StatusOK || err != nil {
+		t.Fatalf("usage response: %d %v", recorder.Code, err)
+	}
+	local, err := g.nodeID(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{local: "current", "birch": "current", "cedar": "offline", "ash": "pending", "maple": "stale"}
+	if len(report.Coverage) != len(want) {
+		t.Fatalf("coverage = %+v", report.Coverage)
+	}
+	for _, row := range report.Coverage {
+		if row.State != want[row.NodeID] || (row.NodeID == "cedar" && !row.LastSync.Equal(now)) {
+			t.Fatalf("unexpected coverage row %+v", row)
+		}
+	}
+}
 
 func TestUsageReplayedEventCountsOnce(t *testing.T) {
 	store := statetest.Open(t, t.TempDir())
@@ -159,7 +201,10 @@ func TestUsageRejectsUnboundedRanges(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 	g.serveUsage(recorder, httptest.NewRequest(http.MethodGet, "/api/usage?from=0&to=3600", nil))
-	if recorder.Code != http.StatusOK || recorder.Body.String() != "{\"hourly\":[],\"sessions\":[],\"samples\":[]}\n" {
+	var report usageReport
+	err := json.Unmarshal(recorder.Body.Bytes(), &report)
+	if recorder.Code != http.StatusOK || err != nil || len(report.Hourly) != 0 || len(report.Sessions) != 0 || len(report.Samples) != 0 ||
+		report.Hourly == nil || report.Sessions == nil || report.Samples == nil {
 		t.Fatalf("empty usage: %d %s", recorder.Code, recorder.Body)
 	}
 }

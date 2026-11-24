@@ -80,6 +80,27 @@ test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
 })
 
+test("on phones the settings index lists sections and a pane opens full height with Back", async ({ page }) => {
+  await mockGateway(page)
+  await page.setViewportSize({ width: 390, height: 500 })
+  await page.goto("/settings")
+  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Appearance" }).click()
+  await expect(page).toHaveURL(/\/settings\/appearance$/)
+  await expect(page.getByRole("navigation", { name: "Settings sections" })).toHaveCount(0)
+  for (const viewport of [{ width: 390, height: 500 }, { width: 320, height: 568 }]) {
+    await page.setViewportSize(viewport)
+    for (const name of ["System", "Light", "Dark"]) {
+      const button = page.getByRole("group", { name: "Theme" }).getByRole("button", { name, exact: true })
+      await button.focus()
+      const bottom = (await button.boundingBox())!
+      const tabs = (await page.locator('[data-slot="tab-bar"]').boundingBox())!
+      expect(bottom.y + bottom.height).toBeLessThanOrEqual(tabs.y)
+    }
+  }
+  await page.getByRole("link", { name: "Back to Settings" }).click()
+  await expect(page).toHaveURL(/\/settings$/)
+})
+
 test("the settings index opens General", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings")
@@ -93,6 +114,25 @@ test("general shows gateway state, platform, version and hostname", async ({ pag
   await expect(page.getByText("linux", { exact: true })).toBeVisible()
   await expect(page.getByText("0.9.0", { exact: true })).toBeVisible()
   await expect(page.getByRole("main").or(page.locator("body")).getByText("host-a", { exact: true }).last()).toBeVisible()
+  const details = page.getByRole("navigation", { name: "Gateway details" })
+  await expect(details.getByRole("link", { name: "Machine details" })).toHaveAttribute("href", "/machines/local")
+  await expect(details.getByRole("link", { name: "Connectivity" })).toHaveAttribute("href", "/settings/sharing")
+  await expect(details.getByRole("link", { name: "Diagnostics" })).toHaveAttribute("href", "/settings/diagnostics")
+})
+
+test("blocked browser delivery keeps event preferences editable", async ({ page }) => {
+  await mockGateway(page)
+  await page.addInitScript(() => {
+    Object.defineProperty(Notification, "permission", { value: "denied", configurable: true })
+  })
+  await page.goto("/settings/notifications")
+  await expect(page.getByText(/Notifications are blocked for this site/)).toHaveCount(1)
+  await expect(page.getByText("Applies once delivery is on.")).toBeVisible()
+  const alert = page.getByRole("checkbox", { name: "A turn finishes" })
+  await expect(alert).toBeEnabled()
+  await alert.check()
+  await expect(alert).toBeChecked()
+  await expect(page.getByRole("switch", { name: "Push to this device" })).toBeDisabled()
 })
 
 test("the sharing switch sends the new state and says when it applies", async ({ page }) => {
@@ -114,8 +154,11 @@ test("the sharing switch sends the new state and says when it applies", async ({
 test("a catch-all proxy suggests nothing; the owner types the address and it is checked", async ({ page }) => {
   await mockGateway(page)
   await page.route("**/api/settings", (route) => answer(route, { running: true, platform: "linux", sharing_enabled: true, public: { enabled: false, catch_all: true } }))
-  await page.route("**/api/settings/public", (route) => {
+  let completeProbe!: () => void
+  const probe = new Promise<void>((resolve) => { completeProbe = resolve })
+  await page.route("**/api/settings/public", async (route) => {
     calls.push({ request: "POST /api/settings/public", body: route.request().postDataJSON() })
+    await probe
     return route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({ check: "reachable", ok: false, detail: "couldn't reach mine.example" }) + "\n" + JSON.stringify({ public: { enabled: false, catch_all: true } }) + "\n" })
   })
   await page.goto("/settings/sharing")
@@ -123,9 +166,15 @@ test("a catch-all proxy suggests nothing; the owner types the address and it is 
   await expect(page.getByText("Detected")).toBeHidden()
   await expect(toggle).toBeDisabled()
   await page.getByRole("textbox", { name: "Public address" }).fill("https://mine.example/")
-  await toggle.click()
-  await expect.poll(() => calls).toEqual([{ request: "POST /api/settings/public", body: { enabled: true, origin: "https://mine.example" } }])
+  await page.getByRole("button", { name: "Check address" }).click()
+  await expect(page.getByText(/Checking mine.example/)).toBeVisible()
+  await expect(toggle).not.toBeChecked()
+  completeProbe()
+  await expect.poll(() => calls).toEqual([{ request: "POST /api/settings/public", body: { enabled: true, check_only: true, origin: "https://mine.example" } }])
   await expect(page.getByRole("list", { name: "Public access checks" }).getByLabel("Failed")).toHaveCount(1)
+  // The switch never claims On for an address that failed its checks.
+  await expect(toggle).not.toBeChecked()
+  await expect(page.getByRole("button", { name: "Enable access" })).toHaveCount(0)
 })
 
 test("public access turns on the detected address after its checks stream in", async ({ page }) => {
@@ -137,18 +186,26 @@ test("public access turns on the detected address after its checks stream in", a
   await page.route("**/api/settings/public", (route) => {
     calls.push({ request: "POST /api/settings/public", body: route.request().postDataJSON() })
     const checks = ["reachable", "sign_in", "cookies"].map((check) => ({ check, ok: true, detail: `${check} ok` }))
-    const lines = [...checks, { check: "mcp", ok: true, detail: "OAuth metadata answers" }, { public: { enabled: true, origin } }]
+    const outcome = route.request().postDataJSON().check_only ? { verified_origin: origin } : { public: { enabled: true, origin } }
+    const lines = [...checks, { check: "mcp", ok: true, detail: "OAuth metadata answers" }, outcome]
     return route.fulfill({ contentType: "application/x-ndjson", body: lines.map((line) => JSON.stringify(line)).join("\n") + "\n" })
   })
   await page.goto("/settings/sharing")
   await expect(page.getByText("agentpack.example.com", { exact: true })).toBeVisible()
 
-  await page.getByRole("switch", { name: "Public access" }).click()
+  await page.getByRole("button", { name: "Check address" }).click()
 
-  await expect.poll(() => calls).toEqual([{ request: "POST /api/settings/public", body: { enabled: true, origin } }])
   const checks = page.getByRole("list", { name: "Public access checks" })
   await expect(checks.getByRole("listitem")).toHaveCount(4)
   await expect(checks.getByLabel("Passed")).toHaveCount(4)
+  await expect(page.getByRole("switch", { name: "Public access" })).not.toBeChecked()
+  await expect(page.getByText(/sign-in page and MCP endpoint at agentpack.example.com/)).toBeVisible()
+  expect(calls).toEqual([{ request: "POST /api/settings/public", body: { enabled: true, check_only: true, origin } }])
+  await page.getByRole("button", { name: "Enable access" }).click()
+  await expect.poll(() => calls).toEqual([
+    { request: "POST /api/settings/public", body: { enabled: true, check_only: true, origin } },
+    { request: "POST /api/settings/public", body: { enabled: true, origin } },
+  ])
   await expect(page.getByText(`On · ${origin}`)).toBeVisible()
   await expect(page.getByRole("switch", { name: "Public access" })).toBeChecked()
   await expect(page.getByText(`${origin}/mcp`)).toBeVisible()
@@ -166,23 +223,52 @@ test("replication rows show enrollment, enroll only online peers and sync one", 
   await expect.poll(() => calls).toEqual([{ request: "POST /api/library/replication/sync", body: { peer: "n2" } }])
 })
 
+test("replication lists what a peer receives and links removal to credential recovery", async ({ page }) => {
+  await mockGateway(page)
+  await page.route("**/api/nodes*", (route) => answer(route, nodes.map((node) => ({ ...node, online: true }))))
+  await page.goto("/settings/replication")
+  await page.getByRole("button", { name: "Enroll", exact: true }).click()
+  const dialog = page.getByRole("alertdialog")
+  await expect(dialog).toContainText("password hashes, chat history, limits, Library data and shared MCP logins")
+  await dialog.getByRole("button", { name: "Cancel" }).click()
+  await page.getByRole("button", { name: "Remove", exact: true }).click()
+  await expect(dialog).toContainText("Previously replicated data remains")
+  await expect(dialog.getByRole("link", { name: "Connections" })).toHaveAttribute("href", "/settings/connections")
+  await dialog.getByRole("button", { name: "Remove", exact: true }).click()
+  await expect(page.getByRole("link", { name: "Open Connections" })).toBeVisible()
+})
+
 test("appearance sets the theme and keeps it across a reload", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings/appearance")
   await page.getByRole("button", { name: "Dark" }).click()
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark")
+  await expect(page.getByText("Currently Dark")).toBeVisible()
 
   await page.reload()
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark")
 
   await page.getByRole("button", { name: "System" }).click()
   await expect(page.locator("html")).not.toHaveAttribute("data-theme")
+  await page.emulateMedia({ colorScheme: "light" })
+  await expect(page.getByText("Currently Light")).toBeVisible()
+})
+
+test("terminal screen reader mode lives in Accessibility and explains its browser scope", async ({ page }) => {
+  await mockGateway(page)
+  await page.goto("/settings/accessibility")
+  const mode = page.getByRole("switch", { name: "Terminal screen reader mode" })
+  await expect(mode).toHaveAccessibleDescription("Applies to this browser only. Open terminals reconnect with this setting.")
+  await mode.click()
+  await page.reload()
+  await expect(mode).toBeChecked()
 })
 
 test("account shows the signed-in identity and the attribution sentence", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings/account")
-  await expect(page.getByText("ada@example.com, on host-a", { exact: true })).toBeVisible()
+  // Signed in as and Tailscale user are the same address in this fixture.
+  await expect(page.getByText("ada@example.com", { exact: true }).first()).toBeVisible()
   await expect(
     page.getByText(
       "Sessions are attributed to your account. Signing out leaves existing agents running.",
@@ -192,11 +278,11 @@ test("account shows the signed-in identity and the attribution sentence", async 
 
 test("stop all agents asks first and sends nothing until confirmed", async ({ page }) => {
   await mockGateway(page)
-  await page.goto("/settings/account")
+  await page.goto("/settings/general")
 
   await page.getByRole("button", { name: "Stop all agents" }).click()
   const dialog = page.getByRole("alertdialog")
-  await expect(dialog).toContainText("Stop all agents on the gateway machine?")
+  await expect(dialog).toContainText("Stop all agents on host-a?")
   expect(calls).toEqual([])
 
   await dialog.getByRole("button", { name: "Stop all agents" }).click()
@@ -204,18 +290,29 @@ test("stop all agents asks first and sends nothing until confirmed", async ({ pa
   await expect(page.getByText("Stopped local agents; 1 ACP session owned by another device remains running.")).toBeVisible()
 })
 
-test("stop gateway asks first, then shows the gateway as stopped", async ({ page }) => {
+test("stop gateway in General names the machine and how to reconnect", async ({ page }) => {
   await mockGateway(page)
-  await page.goto("/settings/account")
+  await page.goto("/settings/general")
 
   await page.getByRole("button", { name: "Stop gateway" }).click()
   const dialog = page.getByRole("alertdialog")
-  await expect(dialog).toContainText("Stop this gateway?")
+  await expect(dialog).toContainText("Stop the gateway on host-a?")
+  await expect(dialog).toContainText("ap gateway start on host-a")
+  await expect(dialog).toContainText(/\d+ running sessions? keep running/)
+  await expect(dialog.getByRole("button").first()).toHaveText("Cancel")
+  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused()
   expect(calls).toEqual([])
 
   await dialog.getByRole("button", { name: "Stop gateway" }).click()
   await expect.poll(() => calls).toEqual([{ request: "POST /api/node/stop", body: null }])
   await expect(page.getByRole("button", { name: "Stop gateway" })).toBeDisabled()
+})
+
+test("account holds identity only; machine controls live in General", async ({ page }) => {
+  await mockGateway(page)
+  await page.goto("/settings/account")
+  await expect(page.getByRole("button", { name: "Sign out everywhere…" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Stop gateway…" })).toHaveCount(0)
 })
 
 test("sign out calls the logout endpoint and returns to the login card", async ({ page }) => {
@@ -336,12 +433,16 @@ test("sign out everywhere confirms before revoking account logins", async ({ pag
 
 test("legacy claiming asks for the current password and keeps it", async ({ page }) => {
   await mockGateway(page, { signedIn: false, unclaimed: true, legacy: true })
-  await page.route("**/api/claim", (route) => route.fulfill({ status: 401, body: "invalid current password" }))
+  await page.route("**/api/status", (route) => route.fulfill({ json: { claimed: false, legacy: true, authenticated: false, email: "", node_name: "atlas" } }))
+  await page.route("**/api/claim", (route) => {
+    expect(route.request().postDataJSON()).toEqual({ email: "ada@example.com", current_password: "correct horse battery" })
+    return route.fulfill({ status: 401, body: "invalid current password" })
+  })
   await page.goto("/login")
-  await page.getByLabel("Email", { exact: true }).fill("ada@example.com")
+  await expect(page.getByRole("heading", { name: "Claim atlas" })).toBeVisible()
+  await expect(page.getByLabel("Current gateway password", { exact: true })).toHaveAccessibleDescription(/12 to 72 bytes/)
+  await page.getByLabel("Email for the owner account", { exact: true }).fill("ada@example.com")
   await page.getByLabel("Current gateway password", { exact: true }).fill("correct horse battery")
-  await page.getByLabel("Password", { exact: true }).fill("correct horse battery")
-  await page.getByLabel("Confirm password", { exact: true }).fill("correct horse battery")
   await page.getByRole("button", { name: "Claim gateway", exact: true }).click()
   await expect(page.getByRole("alert")).toContainText("invalid current password")
   await expect(page).toHaveURL(/\/login$/)
@@ -360,10 +461,28 @@ test("connections group logins by server and a second login needs its own name",
   await expect(logins.first()).toContainText("Default")
   await expect(logins.nth(1)).not.toContainText("Default")
   await page.getByRole("button", { name: "Add login…" }).click()
-  await expect(page.getByLabel("Server URL")).toHaveValue(linear)
-  await expect(page.getByLabel("Label")).toBeFocused()
-  await page.getByLabel("Label").fill("Work")
-  await page.getByRole("button", { name: "Sign in…" }).click()
+  const dialog = page.getByRole("dialog", { name: "Add login" })
+  await expect(dialog.getByLabel("Server URL")).toHaveValue(linear)
+  await expect(dialog.getByLabel("Server URL")).toHaveAttribute("readonly", "")
+  await expect(dialog.getByLabel("Client ID")).toBeHidden()
+  await expect(dialog.getByLabel("Alias")).toBeFocused()
+  await dialog.getByLabel("Alias").fill("Work")
+  await dialog.getByRole("button", { name: "Sign in…" }).click()
   await expect(page.getByText("A login named Work exists. Choose another name.")).toBeVisible()
   expect(calls).toEqual([])
+})
+
+test("phone Connections shows visible actions and the OAuth return state on its row", async ({ page }) => {
+  await mockGateway(page)
+  await page.setViewportSize({ width: 320, height: 568 })
+  await page.route("**/api/mcp/credentials", (route) => answer(route, { callback_url: "", credentials: [
+    { id: "c1", match: "https://mcp.linear.app/mcp", kind: "oauth", label: "Work", status: "needs_login" },
+    { id: "c2", match: "https://mcp.linear.app/mcp", kind: "oauth", label: "Client", status: "connected" },
+  ] }))
+  await page.goto("/settings/connections?callback=expired&connection=c1")
+  const work = page.getByRole("listitem").filter({ hasText: "Work" })
+  await expect(work.getByRole("button", { name: "Work actions" })).toHaveCSS("opacity", "1")
+  await expect(work.getByText(/link expired or was already used/)).toBeVisible()
+  await expect(work.getByRole("button", { name: "Try again" })).toBeVisible()
+  await expect(page.getByRole("listitem").filter({ hasText: "Client" }).getByRole("button", { name: "Try again" })).toHaveCount(0)
 })

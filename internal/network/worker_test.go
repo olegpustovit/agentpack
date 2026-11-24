@@ -132,12 +132,13 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	const header = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+	const claimed = "session-0123456789abcdef0123456789abcdef"
 	ctx, cancel := context.WithCancel(obs.WithTrace(context.Background(), header))
 	defer cancel()
 	ready := make(chan string, 1)
 	done := make(chan error, 1)
 	go func() {
-		_, err := RunWorker(ctx, home, "test", WorkerLaunch{Program: executable, Directory: home, Arguments: []string{"-test.run=^TestTerminalChild$"}, Environment: append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1"), Rows: 31, Columns: 101}, func(id string) error { ready <- id; return nil })
+		_, err := RunWorker(ctx, home, "test", WorkerLaunch{Transport: "terminal", Session: session.SessionInfo{ID: claimed, Transport: "terminal"}, Program: executable, Directory: home, Arguments: []string{"-test.run=^TestTerminalChild$"}, Environment: append(os.Environ(), "AGENTPACK_TEST_TERMINAL_CHILD=1"), Rows: 31, Columns: 101}, func(id string) error { ready <- id; return nil })
 		done <- err
 	}()
 	var id string
@@ -147,6 +148,9 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 		t.Fatalf("worker startup failed: %v", err)
 	case <-time.After(10 * time.Second):
 		t.Fatal("worker startup timeout")
+	}
+	if id != claimed {
+		t.Fatalf("worker used %q instead of its claimed ID %q", id, claimed)
 	}
 	record, err := ReadWorkerRecord(home, id)
 	if err != nil {

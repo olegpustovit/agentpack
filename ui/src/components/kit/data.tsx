@@ -1,4 +1,4 @@
-import type { ComponentProps, CSSProperties, PointerEvent, ReactNode } from "react";
+import { useRef, type ComponentProps, type CSSProperties, type ReactNode } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { shortHash } from "@/lib/format";
 import { copyText } from "@/lib/hud";
@@ -32,7 +32,7 @@ export function InspectorHead({
     <header className={cn("col-span-full flex min-w-0 items-start gap-(--s5) max-[760px]:flex-wrap", className)}>
       {icon && <span className="grid size-(--bar-h) shrink-0 place-items-center rounded-(--r-pop) bg-(--track) text-(--fg2)">{icon}</span>}
       <div className="min-w-0 flex-1">
-        <h1 className="truncate text-(length:--fs-lg) font-semibold text-(--fg)">{title}</h1>
+        <h2 className="truncate text-(length:--fs-lg) font-semibold text-(--fg)">{title}</h2>
         {subtitle && <p className="truncate text-(length:--fs-sm) text-(--fg2)">{subtitle}</p>}
       </div>
       {children && <div className="flex shrink-0 items-center gap-(--s3) max-[760px]:w-full max-[760px]:flex-wrap">{children}</div>}
@@ -91,31 +91,49 @@ export function DataGridHead({ className, ...props }: ComponentProps<"thead">) {
   return <thead className={cn("sticky top-0 z-10 bg-(--window)", className)} {...props} />;
 }
 
-const setColumnWidth = (cell: HTMLElement, width: number) => {
-  cell.style.width = `${Math.max(48, width)}px`;
-};
+const minColumnWidth = 48;
 
 // Drag or arrow keys set the width on the cell itself; fixed table layout sizes the column from it, and
 // the grid scrolls once the columns outgrow it. Double-click restores the default.
 // shortcut: widths last until the view unmounts, persist them if people resize the same columns repeatedly.
 function ColumnResizer({ label }: { label: string }) {
-  function drag(event: PointerEvent<HTMLElement>) {
-    const handle = event.currentTarget;
-    const cell = handle.parentElement!;
-    const start = event.clientX - cell.offsetWidth;
-    event.preventDefault();
-    handle.setPointerCapture(event.pointerId);
-    const move = (next: globalThis.PointerEvent) => setColumnWidth(cell, next.clientX - start);
-    handle.addEventListener("pointermove", move);
-    handle.addEventListener("pointerup", () => handle.removeEventListener("pointermove", move), { once: true });
-  }
+  const drag = useRef<{ id: number; offset: number } | null>(null);
   return (
     <span
+      ref={(handle) => {
+        const cell = handle?.parentElement;
+        if (!handle || !cell) return;
+        const updateValue = () => {
+          const width = Math.round(cell.getBoundingClientRect().width);
+          handle.setAttribute("aria-valuemin", String(Math.min(width, minColumnWidth)));
+          handle.setAttribute("aria-valuemax", String(Math.max(width, window.innerWidth)));
+          handle.setAttribute("aria-valuenow", String(width));
+          handle.setAttribute("aria-valuetext", `${width} pixels`);
+        };
+        updateValue();
+        const observer = new ResizeObserver(updateValue);
+        observer.observe(cell);
+        return () => observer.disconnect();
+      }}
       role="separator"
       aria-orientation="vertical"
-      aria-label={`Resize ${label}`}
+      aria-label={`Resize ${label} column`}
       tabIndex={0}
-      onPointerDown={drag}
+      onPointerDown={(event) => {
+        if (event.button !== 0 || drag.current) return;
+        const handle = event.currentTarget;
+        event.preventDefault();
+        drag.current = { id: event.pointerId, offset: event.clientX - handle.parentElement!.offsetWidth };
+        handle.setPointerCapture(event.pointerId);
+      }}
+      onPointerMove={(event) => {
+        if (drag.current?.id === event.pointerId) {
+          setColumnWidth(event.currentTarget.parentElement!, event.clientX - drag.current.offset);
+        }
+      }}
+      onPointerUp={(event) => { if (drag.current?.id === event.pointerId) drag.current = null; }}
+      onPointerCancel={(event) => { if (drag.current?.id === event.pointerId) drag.current = null; }}
+      onLostPointerCapture={(event) => { if (drag.current?.id === event.pointerId) drag.current = null; }}
       onDoubleClick={(event) => {
         event.currentTarget.parentElement!.style.width = "";
       }}
@@ -123,14 +141,20 @@ function ColumnResizer({ label }: { label: string }) {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         event.preventDefault();
         const cell = event.currentTarget.parentElement!;
-        setColumnWidth(cell, cell.offsetWidth + (event.key === "ArrowRight" ? 16 : -16));
+        setColumnWidth(cell, cell.offsetWidth + (event.key === "ArrowRight" ? 8 : -8));
       }}
-      className="absolute inset-y-0 right-0 w-(--s3) cursor-col-resize hover:bg-(--sep) focus-visible:bg-(--accent)"
+      className="absolute inset-y-0 right-0 w-(--s3) touch-none cursor-col-resize hover:bg-(--sep) focus-visible:bg-(--accent) max-[760px]:hidden"
     />
   );
 }
 
-export function DataGridHeaderCell({ className, children, ...props }: ComponentProps<"th">) {
+function setColumnWidth(cell: HTMLElement, width: number) {
+  const maximum = Math.max(cell.offsetWidth, window.innerWidth);
+  cell.style.width = `${Math.min(maximum, Math.max(minColumnWidth, width))}px`;
+}
+
+export function DataGridHeaderCell({ className, children, resizeLabel, ...props }: ComponentProps<"th"> & { resizeLabel?: string }) {
+  const label = resizeLabel ?? (typeof children === "string" ? children : undefined);
   return (
     <th
       scope="col"
@@ -138,7 +162,7 @@ export function DataGridHeaderCell({ className, children, ...props }: ComponentP
       {...props}
     >
       {children}
-      <ColumnResizer label={typeof children === "string" ? children : "column"} />
+      {label && <ColumnResizer label={label} />}
     </th>
   );
 }

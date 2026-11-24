@@ -48,7 +48,7 @@ export function UsageChart({
   win: Window
   series: Series[]
   totals: number[]
-  average: number
+  average?: number
   kind: Kind
   label: string
   color: (key: string, index: number) => string
@@ -68,7 +68,7 @@ export function UsageChart({
   }, [])
 
   const count = win.starts.length
-  const { step, lines, top } = axisOf(Math.max(...totals, average, 1e-9))
+  const { step, lines, top } = axisOf(Math.max(...totals, average ?? 0, 1e-9))
   const slot = (width - AXIS) / count
   const bar = Math.max(2, Math.min(slot - Math.max(2, Math.min(10, slot * 0.3)), win.range === "week" ? 34 : 14))
   const y = (value: number) => TOP + (H - BOTTOM - TOP) * (1 - value / top)
@@ -122,8 +122,12 @@ export function UsageChart({
             </g>
           )
         })}
-        <line data-slot="chart-average" x1={0} x2={width - AXIS + 6} y1={y(average)} y2={y(average)} stroke="var(--fg3)" strokeDasharray="3 3" />
-        <text x={2} y={y(average) - 4} fontSize={10} fill="var(--fg3)">{`avg ${fmt(average, kind)}`}</text>
+        {average !== undefined && (
+          <>
+            <line data-slot="chart-average" x1={0} x2={width - AXIS + 6} y1={y(average)} y2={y(average)} stroke="var(--fg3)" strokeDasharray="3 3" />
+            <text x={2} y={y(average) - 4} fontSize={10} fill="var(--fg3)">{`avg ${fmt(average, kind)}`}</text>
+          </>
+        )}
         {win.starts.map((_, i) => (
           <rect
             key={i}

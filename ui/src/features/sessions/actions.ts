@@ -5,7 +5,7 @@ import { newIntentID, useIntent } from "@/lib/intent"
 import { hud } from "@/lib/hud"
 import { rowKey, sessionLabel, type ListedSession } from "./group"
 import { sessionsQuery } from "./queries"
-import { reusesOperationId } from "./rules"
+import { reusesOperationId, sessionRules } from "./rules"
 
 export function useSessionCommands(onArchivePending?: (session: ListedSession, pending: boolean) => void) {
   const queryClient = useQueryClient()
@@ -48,7 +48,7 @@ export function useSessionCommands(onArchivePending?: (session: ListedSession, p
       const path: `/api/${string}` = `/api/sessions/${encodeURIComponent(session.id)}`
       const options = { machine: session.machine, idempotencyKey: id }
       // The row may be stale. The archive endpoint checks that the agent is stopped.
-      if (session.state.running && !session.offline) await api(`${path}/stop`, { ...options, method: "POST" }).catch(() => undefined)
+      if (sessionRules(session).stop) await api(`${path}/stop`, { ...options, method: "POST" }).catch(() => undefined)
       return api(path, { ...options, method: "PATCH", body: { hidden: true } })
     },
     apply: (session) => {

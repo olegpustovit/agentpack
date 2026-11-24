@@ -1,12 +1,18 @@
-import { lazy, useState, type ReactNode } from "react"
+import { lazy, useState, useSyncExternalStore, type ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
+import { Section } from "@/components/kit/data"
 import { Banner, RowSkeleton } from "@/components/kit/feedback"
 import { Field, FieldGrid, FieldLabel } from "@/components/kit/forms"
 import { SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
 import { StatusDot } from "@/components/kit/status-dot"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
+import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
 import { identityQuery } from "@/features/machines/queries"
+import { useListedSessions } from "@/features/sessions/queries"
+import { LOCAL } from "@/lib/api"
+import { plural } from "@/lib/format"
 import { terminalPool } from "@/features/terminal/pool"
 import { screenReaderEnabled, setScreenReaderEnabled } from "@/features/terminal/screen-reader"
 import { allowListLabel, sharingLabel } from "./model"
@@ -66,15 +72,62 @@ export function GeneralPane() {
   if (!settings.data || !identity.data) return <RowSkeleton lines={2} />
   return (
     <Pane title="General">
-      <FieldGrid>
-        <Row label="Gateway">
-          <StatusDot state={settings.data.running ? "running" : "stopped"} />
-        </Row>
-        <Row label="Platform">{settings.data.platform}</Row>
-        <Row label="Version">{identity.data.node.version}</Row>
-        <Row label="Hostname">{identity.data.node.name}</Row>
-      </FieldGrid>
+      <Section title="This gateway">
+        <FieldGrid>
+          <Row label="Gateway">
+            <StatusDot state={settings.data.running ? "running" : "stopped"} />
+          </Row>
+          <Row label="Platform">{settings.data.platform}</Row>
+          <Row label="Version">{identity.data.node.version}</Row>
+          <Row label="Hostname">{identity.data.node.name}</Row>
+        </FieldGrid>
+        <nav aria-label="Gateway details" className="flex flex-wrap gap-(--s4) py-(--s4) text-(--accent)">
+          <Link to="/machines/$machine" params={{ machine: LOCAL }}>Machine details</Link>
+          <Link to="/settings/$pane" params={{ pane: "sharing" }}>Connectivity</Link>
+          <Link to="/settings/$pane" params={{ pane: "diagnostics" }}>Diagnostics</Link>
+        </nav>
+      </Section>
+      {settings.data.can_manage !== false && <MachineControls machine={identity.data.node.name} stopped={!settings.data.running} />}
     </Pane>
+  )
+}
+
+// Machine lifecycle, not account: each confirmation names the machine, what stops and how to recover.
+function MachineControls({ machine, stopped }: { machine: string; stopped: boolean }) {
+  const actions = useGatewayActions()
+  const running = useListedSessions().sessions.filter((session) => session.machine === LOCAL && session.state.running)
+  const [confirm, setConfirm] = useState<"agents" | "gateway" | null>(null)
+  const sessions = plural(running.length, "running session")
+  const agents = plural(running.filter((session) => session.transport !== "shell").length, "running agent session")
+  const confirms = {
+    agents: { title: `Stop all agents on ${machine}?`, description: `${agents} on ${machine} may stop, including in-progress turns. Shells and chats owned by another device keep running.`, destructiveLabel: "Stop all agents" },
+    gateway: { title: `Stop the gateway on ${machine}?`, description: `Browser access to ${machine} disconnects. ${sessions} keep running in the CLI. Run ap gateway start on ${machine} to reconnect.`, destructiveLabel: "Stop gateway" },
+  }
+  return (
+    <Section title="Gateway controls">
+      <div className="flex flex-col gap-(--s4)">
+        <div className="flex items-center justify-between gap-(--s6)">
+          <p>{`Stop agent sessions on ${machine} (${agents}).`}</p>
+          <Button variant="destructive" disabled={stopped} onClick={() => setConfirm("agents")}>Stop all agents…</Button>
+        </div>
+        <div className="flex items-center justify-between gap-(--s6)">
+          <p>Stop this gateway. CLI sessions keep running. Run <code>ap gateway start</code> to reconnect.</p>
+          <Button variant="destructive" disabled={stopped} onClick={() => setConfirm("gateway")}>Stop gateway…</Button>
+        </div>
+      </div>
+      <ConfirmAlert open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>
+        {confirm && (
+          <ConfirmAlertContent
+            {...confirms[confirm]}
+            onConfirm={() => {
+              setConfirm(null)
+              if (confirm === "agents") actions.stopAgents.mutate()
+              else actions.stopGateway.mutate()
+            }}
+          />
+        )}
+      </ConfirmAlert>
+    </Section>
   )
 }
 
@@ -86,19 +139,21 @@ export function SharingPane() {
   }
   if (!settings.data) return <RowSkeleton lines={2} />
   const enabled = settings.data.sharing_enabled
+  const canManage = settings.data.can_manage !== false
   return (
     <Pane title="Sharing">
-      <PublicAccessBanner access={settings.data.public} />
+      {canManage && <PublicAccessBanner access={settings.data.public} />}
       <FieldGrid>
-        {settings.data.public && <PublicAccessRows access={settings.data.public} />}
+        {settings.data.public && <PublicAccessRows access={settings.data.public} canManage={canManage} />}
         <Row label="Tailscale sharing" htmlFor="sharing">
           <Switch
             id="sharing"
             checked={enabled}
-            disabled={sharing.isPending}
+            disabled={sharing.isPending || !canManage}
             onCheckedChange={(next) => sharing.mutate(next)}
           />
           <span className="text-(length:--fs-sm) text-(--fg2)">{sharingLabel(enabled)}</span>
+          {!canManage && <span className="text-(length:--fs-sm) text-(--fg2)">Only the gateway owner can change sharing.</span>}
         </Row>
         <Row label="Allow list">{allowListLabel(settings.data.allowed_peers)}</Row>
       </FieldGrid>
@@ -107,10 +162,17 @@ export function SharingPane() {
 }
 
 const themeLabels: Record<Theme, string> = { system: "System", light: "Light", dark: "Dark" }
+const systemTheme = () => window.matchMedia("(prefers-color-scheme: dark)")
+
+function subscribeToSystemTheme(notify: () => void) {
+  const preference = systemTheme()
+  preference.addEventListener("change", notify)
+  return () => preference.removeEventListener("change", notify)
+}
 
 export function AppearancePane() {
   const [theme, setTheme] = useState<Theme>(currentTheme)
-  const [screenReader, setScreenReader] = useState(screenReaderEnabled)
+  const dark = useSyncExternalStore(subscribeToSystemTheme, () => systemTheme().matches)
   function choose(value: unknown[]) {
     const next = themes.find((item) => item === value[0])
     if (!next) return
@@ -128,10 +190,22 @@ export function AppearancePane() {
               </SegmentedControlItem>
             ))}
           </SegmentedControl>
+          <span className="text-(length:--fs-sm) text-(--fg2)" role="status">{`Currently ${themeLabels[theme === "system" ? dark ? "dark" : "light" : theme]}`}</span>
         </Row>
-        <Row label="Terminal screen reader support">
+      </FieldGrid>
+    </Pane>
+  )
+}
+
+export function AccessibilityPane() {
+  const [screenReader, setScreenReader] = useState(screenReaderEnabled)
+  return (
+    <Pane title="Accessibility">
+      <FieldGrid>
+        <Row label="Terminal screen reader mode" htmlFor="terminal-screen-reader">
           <Switch
-            aria-label="Terminal screen reader support"
+            id="terminal-screen-reader"
+            aria-describedby="terminal-screen-reader-scope"
             checked={screenReader}
             onCheckedChange={(checked) => {
               setScreenReaderEnabled(checked)
@@ -140,6 +214,7 @@ export function AppearancePane() {
               terminalPool.disposeAll()
             }}
           />
+          <span id="terminal-screen-reader-scope" className="text-(length:--fs-sm) text-(--fg2)">Applies to this browser only. Open terminals reconnect with this setting.</span>
         </Row>
       </FieldGrid>
     </Pane>

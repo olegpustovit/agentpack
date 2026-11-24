@@ -97,7 +97,7 @@ func TestRestoredExternalDefinitionsKeepNativeStateAndIsolateModes(t *testing.T)
 		go func(destination destinationInfo) {
 			defer group.Done()
 			for _, modeName := range []string{"default", "review"} {
-				if err := store.Restore(destination.packID, destination.revisionID, destination.definition, func() error {
+				if err := store.Restore(destination.packID, destination.revisionID, destination.definition, "", func() error {
 					for _, target := range []base.Target{base.Claude, base.Codex} {
 						if err := service.RestoreFrozenOptions(context.Background(), destination.definition, packSync.SyncOptions{Mode: modeName, Target: &target, WorkspaceRoot: destination.workspace}); err != nil {
 							return err
@@ -238,7 +238,7 @@ func TestRestoreDuringLiveLaunchKeepsOriginalGeneration(t *testing.T) {
 		t.Fatalf("make second revision: %#v %v", second, err)
 	}
 	service := packSync.NewService()
-	if err := store.Restore(pack.ID, first.ID, definition, func() error {
+	if err := store.Restore(pack.ID, first.ID, definition, "", func() error {
 		return service.RestoreFrozenOptions(context.Background(), definition, packSync.SyncOptions{Mode: "default", Target: codexTarget(), WorkspaceRoot: workspace})
 	}); err != nil {
 		t.Fatal(err)
@@ -291,7 +291,7 @@ func TestRestoreDuringLiveLaunchKeepsOriginalGeneration(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if err := store.Restore(pack.ID, second.ID, definition, func() error {
+	if err := store.Restore(pack.ID, second.ID, definition, "", func() error {
 		return service.RestoreFrozenOptions(context.Background(), definition, packSync.SyncOptions{Mode: "default", Target: codexTarget(), WorkspaceRoot: workspace})
 	}); err != nil {
 		t.Fatal(err)

@@ -197,28 +197,36 @@ type createdWorktree struct {
 	Carried   bool
 }
 
-// createWorktree cuts a new branch from main's current HEAD into a fresh linked worktree. carry
-// brings uncommitted tracked changes along without touching main or leaving a stash entry.
-func createWorktree(ctx context.Context, home, main, slug string, carry bool) (createdWorktree, error) {
-	top, err := gitLine(ctx, main, "rev-parse", "--show-toplevel")
+func worktreeSource(ctx context.Context, main string) (top, relative, head string, err error) {
+	top, err = gitLine(ctx, main, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return createdWorktree{}, err
+		return "", "", "", err
 	}
 	real, err := filepath.EvalSymlinks(main)
 	if err != nil {
-		return createdWorktree{}, err
+		return "", "", "", err
 	}
-	rel, err := filepath.Rel(filepath.Clean(top), real)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return createdWorktree{}, errors.New("folder is outside its repository")
+	relative, err = filepath.Rel(filepath.Clean(top), real)
+	if err != nil || strings.HasPrefix(relative, "..") {
+		return "", "", "", errors.New("folder is outside its repository")
+	}
+	head, err = gitLine(ctx, top, "rev-parse", "HEAD")
+	if err != nil {
+		return "", "", "", errors.New("the repository has no commits yet")
+	}
+	return top, relative, head, nil
+}
+
+// createWorktree cuts a new branch from main's current HEAD into a fresh linked worktree. carry
+// brings uncommitted tracked changes along without touching main or leaving a stash entry.
+func createWorktree(ctx context.Context, home, main, slug string, carry bool) (createdWorktree, error) {
+	top, rel, head, err := worktreeSource(ctx, main)
+	if err != nil {
+		return createdWorktree{}, err
 	}
 	root := filepath.Join(worktreesRoot(home), projectHash(top))
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return createdWorktree{}, err
-	}
-	head, err := gitLine(ctx, top, "rev-parse", "HEAD")
-	if err != nil {
-		return createdWorktree{}, errors.New("the repository has no commits yet")
 	}
 	var path, branch string
 	for n := 1; n <= 50 && path == ""; n++ {

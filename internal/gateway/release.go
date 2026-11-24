@@ -21,16 +21,29 @@ func (g *Gateway) registerUpdates(mux routeRegistrar) {
 	mux.HandleFunc("POST /api/node/update", g.serveGatewayUpdate)
 }
 
+type UpdatePhase string
+
+const (
+	updateRequested   UpdatePhase = "requested"
+	UpdateDownloading UpdatePhase = "downloading"
+	UpdateRestarting  UpdatePhase = "restarting"
+)
+
+type gatewayUpdateStatus struct {
+	State   string      `json:"state"`
+	Error   string      `json:"error"`
+	Phase   UpdatePhase `json:"phase,omitempty"`
+	Version string      `json:"version,omitempty"`
+}
+
 func (g *Gateway) serveUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	g.updateMu.Lock()
-	defer g.updateMu.Unlock()
-	state := "idle"
-	if g.updating {
-		state = "running"
-	} else if g.updateError != "" {
-		state = "failed"
+	status := g.updateStatus
+	g.updateMu.Unlock()
+	if status.State == "" {
+		status.State = "idle"
 	}
-	network.WriteJSON(w, map[string]string{"state": state, "error": g.updateError})
+	network.WriteJSON(w, status)
 }
 
 func (g *Gateway) serveGatewayUpdate(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +64,7 @@ func (g *Gateway) serveGatewayUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.updateMu.Lock()
-	if g.updating {
+	if g.updateStatus.State == "running" {
 		g.updateMu.Unlock()
 		http.Error(w, "an update is already running", http.StatusConflict)
 		return
@@ -61,22 +74,26 @@ func (g *Gateway) serveGatewayUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gateway is shutting down", http.StatusServiceUnavailable)
 		return
 	}
-	g.updating = true
-	g.updateError = ""
+	g.updateStatus = gatewayUpdateStatus{State: "running", Phase: updateRequested, Version: version}
 	g.updateMu.Unlock()
 	obs.Go("gateway.update", func() {
 		defer g.operations.Done()
 		ctx, event := obs.Start(obs.WithRecording(context.Background(), r.Context()), "gateway", "update")
 		event.Set("target_version", version)
-		err := g.options.Update(ctx, version)
+		err := g.options.Update(ctx, version, func(phase UpdatePhase) {
+			g.updateMu.Lock()
+			g.updateStatus.Phase = phase
+			g.updateMu.Unlock()
+		})
 		if err != nil {
 			event.Fail(err)
 		}
 		event.End()
 		g.updateMu.Lock()
-		g.updating = false
+		g.updateStatus.State = "idle"
 		if err != nil {
-			g.updateError = err.Error()
+			g.updateStatus.State = "failed"
+			g.updateStatus.Error = err.Error()
 		}
 		g.updateMu.Unlock()
 	})

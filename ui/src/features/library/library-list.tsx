@@ -1,5 +1,5 @@
 import { useDeferredValue, useState } from "react"
-import { Link, getRouteApi, useMatchRoute } from "@tanstack/react-router"
+import { Link, getRouteApi, useMatchRoute, useNavigate } from "@tanstack/react-router"
 import { Boxes, Compass, Plug, Puzzle, RefreshCw, Sparkles, type LucideIcon } from "lucide-react"
 import { PopupSelect } from "@/components/kit/forms"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
@@ -13,13 +13,14 @@ import { cn } from "@/lib/utils"
 import { installedIn } from "./inspect"
 import { agentpacksQuery, packagesQuery } from "./queries"
 import { useLatest } from "./use-library"
-import { AddPackageSheet, SaveAgentpackSheet } from "./add-package-sheet"
+import { SaveAgentpackSheet } from "./add-package-sheet"
 import { PendingInstalls } from "./pending-installs"
 import {
   arrangeLibrary,
   buildLibrary,
   parseFilter,
   parseSort,
+  updateCheckSummary,
   type LibraryFilter,
   type LibraryItem,
   type LibrarySort,
@@ -110,9 +111,7 @@ export function LibraryList() {
   const agentpacks = useMachineQueries(agentpacksQuery)
   const projects = useMachineQueries(projectsQuery)
   const search = route.useSearch()
-  const navigate = route.useNavigate()
-  // ?add=1 opens an empty sheet; any other value is a spec to fill in, as Discover's Install… sends.
-  const adding = search.add !== undefined
+  const navigate = useNavigate()
   const matchRoute = useMatchRoute()
   const discovering = Boolean(matchRoute({ to: "/library/discover" }))
   const [saving, setSaving] = useState(false)
@@ -142,7 +141,8 @@ export function LibraryList() {
   }).map((row) => row.module.toLowerCase()))
   const updatable = (item: LibraryItem) => (item.type === "skill" || item.type === "plugin") && item.sources.some((module) => outdated.has(module.toLowerCase()))
   const updates = items.filter(updatable).length
-  const checked = checking && !latest.checking ? (updates ? plural(updates, "update") : "Up to date") : undefined
+  const summary = checking && !latest.checking ? updateCheckSummary({ checked: latest.checkedCount, failed: latest.failedCount, updates }) : undefined
+  const checked = summary?.label
   // Status bar totals cover the whole library, so search and type do not change them.
   const totals = arrangeLibrary(items, { filter: "all", sort: "type", query: "" }).counts
   const loading = packages.firstLoadPending || agentpacks.firstLoadPending || projects.firstLoadPending
@@ -154,7 +154,7 @@ export function LibraryList() {
 
   // Search, type and sort live in the URL. Replace, so each keystroke does not add history.
   function patch(values: { q?: string; type?: string; sort?: string }) {
-    void navigate({ search: (prev) => ({ ...prev, ...values }), replace: true })
+    void navigate({ to: ".", search: (prev) => ({ ...prev, ...values }), replace: true })
   }
 
   function chooseFilter(value: unknown[]) {
@@ -168,11 +168,16 @@ export function LibraryList() {
     <div className="flex h-full min-h-0 flex-col">
       <ToolbarTitle title="Library" subtitle={`${plural(totals.all, "item")} on ${plural(machines.length, "machine")}`} />
       <ToolbarSlot>
-        <Button type="button" aria-label={checked ?? "Check for updates"} disabled={latest.checking} onClick={() => (checking ? latest.refetch() : setChecking(true))}>
+        <Button
+          type="button"
+          aria-label={checked ?? "Check for updates"}
+          disabled={latest.checking}
+          onClick={() => (!checking ? setChecking(true) : summary?.hasFailures ? latest.refetchFailed() : latest.refetch())}
+        >
           <RefreshCw aria-hidden className={cn(latest.checking && "animate-spin motion-reduce:animate-none")} />
           {checked ?? <><span className={wideOnly}>Check for updates</span><span className="min-[761px]:hidden">Updates</span></>}
         </Button>
-        <Button type="button" aria-label="Add package…" onClick={() => void navigate({ search: (prev) => ({ ...prev, add: "1" }) })}>
+        <Button type="button" aria-label="Add package…" onClick={() => void navigate({ to: ".", search: (prev) => ({ ...prev, add: "1" }) })}>
           Add<span className={wideOnly}> package</span>…
         </Button>
         <Button type="button" aria-label="Save agentpack…" onClick={() => setSaving(true)}>
@@ -232,7 +237,21 @@ export function LibraryList() {
               Skills, plugins, MCP servers and agentpacks from your machines appear here.
             </Empty>
           ) : (
-            <Empty title="No matches">Try another search or type.</Empty>
+            <Empty title="No matches">
+              <div className="flex flex-col items-center gap-(--s3)">
+                <span>Try another search or type.</span>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    setDraft(undefined)
+                    patch({ q: undefined, type: undefined })
+                  }}
+                >
+                  Clear filters
+                </Button>
+              </div>
+            </Empty>
           ))}
         {view.groups.map((group) => (
           <div key={group.key}>
@@ -250,14 +269,7 @@ export function LibraryList() {
         {/* Below what has loaded, so rows do not jump as each slower machine answers. */}
         {loading && [0, 1, 2].map((index) => <RowSkeleton key={index} lines={2} />)}
       </SourceList>
-      <SaveAgentpackSheet open={saving} onOpenChange={setSaving} />
-      <AddPackageSheet
-        open={adding}
-        initialSpec={search.add === "1" ? undefined : search.add}
-        onOpenChange={(open) => {
-          if (!open) void navigate({ search: (prev) => ({ ...prev, add: undefined }), replace: true })
-        }}
-      />
+      {saving && <SaveAgentpackSheet open onOpenChange={setSaving} />}
     </div>
   )
 }

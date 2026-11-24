@@ -20,6 +20,7 @@ type replicaContact struct {
 	LastSuccess time.Time `json:"last_sync,omitzero"`
 	Error       string    `json:"error,omitempty"`
 	NeedsUpdate bool      `json:"needs_update,omitempty"`
+	NeedsTrust  bool      `json:"needs_trust,omitempty"`
 	Schema      int       `json:"schema_version,omitempty"`
 	Version     int64     `json:"version,omitempty"`
 	Lag         *int64    `json:"lag,omitempty"`

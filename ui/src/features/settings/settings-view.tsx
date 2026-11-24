@@ -10,7 +10,7 @@ import { SourceList, SourceRow } from "@/components/kit/list"
 import { cn } from "@/lib/utils"
 import { AccountPane } from "./account-pane"
 import { NotificationsPane } from "./notifications-pane"
-import { AppearancePane, ConnectionsPane, DiagnosticsPane, GeneralPane, OmpPane, SharingPane } from "./panes"
+import { AccessibilityPane, AppearancePane, ConnectionsPane, DiagnosticsPane, GeneralPane, OmpPane, SharingPane } from "./panes"
 import { ReplicationPane } from "./replication-pane"
 
 const sections = [
@@ -23,11 +23,12 @@ const sections = [
   { id: "omp", label: "Oh My Pi", view: OmpPane, wide: true },
   { id: "diagnostics", label: "Diagnostics", view: DiagnosticsPane },
   { id: "appearance", label: "Appearance", view: AppearancePane },
+  { id: "accessibility", label: "Accessibility", view: AccessibilityPane },
   { id: "account", label: "Account", view: AccountPane },
 ] as const
 
 // The shared collapsible sidebar beside one pane, so the toolbar keeps its sidebar toggle.
-// Every Settings URL is a pane, so phones stack the list above it instead of switching between them.
+// Phones show the list at /settings and one full-height pane per section URL, with Back to the list.
 export function SettingsView({ pane }: { pane: string }) {
   const current = sections.find((item) => item.id === pane)
   const identity = useQuery(identityQuery)
@@ -35,7 +36,7 @@ export function SettingsView({ pane }: { pane: string }) {
   const list = (
     <SourceList
       aria-label="Settings sections"
-      className="h-full pt-(--s3) max-[760px]:h-auto max-[760px]:w-full max-[760px]:shrink-0 max-[760px]:border-b-[0.5px] max-[760px]:border-(--sep) max-[760px]:bg-(--sidebar)"
+      className="h-full pt-(--s3) max-[760px]:w-full max-[760px]:overflow-y-auto"
     >
       {sections.map((item) => (
         <SourceRow
@@ -49,7 +50,7 @@ export function SettingsView({ pane }: { pane: string }) {
     </SourceList>
   )
   const body = (
-    <div className={cn("flex h-full min-h-0 min-w-0 flex-1 flex-col gap-(--s6) overflow-y-auto p-(--s6)", current && "wide" in current ? "max-w-270" : "max-w-160")}>
+    <div className={cn("flex h-full min-h-0 min-w-0 flex-1 flex-col gap-(--s6) overflow-y-auto p-(--s6) max-[760px]:scroll-pb-[calc(var(--tab-h)+var(--safe-b))]", current && "wide" in current ? "max-w-270" : "max-w-160")}>
       {current ? (
         <Suspense fallback={<RowSkeleton lines={2} />}><current.view /></Suspense>
       ) : (
@@ -59,12 +60,9 @@ export function SettingsView({ pane }: { pane: string }) {
   )
   return (
     <>
-      <ToolbarTitle title="Settings" subtitle={identity.data?.node.name} />
+      <ToolbarTitle title={isPhone && current ? current.label : "Settings"} subtitle={identity.data?.node.name} />
       {isPhone ? (
-        <div className="flex h-full min-h-0 min-w-0 flex-col">
-          {list}
-          {body}
-        </div>
+        <div className="flex h-full min-h-0 min-w-0 flex-col">{pane ? body : list}</div>
       ) : (
         <ListDetail list={list}>{body}</ListDetail>
       )}

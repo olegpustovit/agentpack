@@ -129,7 +129,7 @@ export type PermissionPayload = {
   requestId?: string
   tool?: string
   summary?: string
-  options?: { id: string; label: string }[]
+  options?: { id: string; label: string; kind?: string }[]
   resolved?: boolean
   inactive?: boolean
   result?: { optionId?: string }

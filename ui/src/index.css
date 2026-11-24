@@ -39,8 +39,10 @@
   --line-soft:light-dark(oklch(.2 .01 265 / 6%),oklch(1 0 0 / 6%));
   --hover:light-dark(oklch(.2 .01 265 / 5%),oklch(1 0 0 / 6%));
   --press:light-dark(oklch(.2 .01 265 / 9%),oklch(1 0 0 / 11%));
-  --accent:light-dark(var(--blue-500),var(--blue-300));
+  --accent:light-dark(var(--blue-500),var(--blue-300));      /* text, links, glyphs and bars */
+  --accent-fill:light-dark(var(--blue-500),oklch(.52 .17 258)); /* fills under --on-accent text: ≥ 4.5:1 in both schemes */
   --on-accent:var(--n-0);
+  --control-edge:light-dark(var(--n-400),var(--n-500));     /* checkbox and field boundaries: ≥ 3:1 on page and canvas */
   --accent-tint:light-dark(oklch(.56 .19 258 / 11%),oklch(.68 .15 258 / 20%));
   --ok:light-dark(var(--green-500),var(--green-300));
   --warn:light-dark(var(--amber-500),var(--amber-300));
@@ -148,7 +150,7 @@
   --background: var(--window); --foreground: var(--fg);
   --card: var(--window); --card-foreground: var(--fg);
   --popover: var(--chrome); --popover-foreground: var(--fg);
-  --primary: var(--accent); --primary-foreground: var(--accent-fg);
+  --primary: var(--accent-fill); --primary-foreground: var(--accent-fg);
   --secondary: var(--control); --secondary-foreground: var(--fg);
   --muted: var(--track); --muted-foreground: var(--fg2);
   --accent-ui: var(--accent-soft);

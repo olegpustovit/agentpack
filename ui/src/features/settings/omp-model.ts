@@ -106,11 +106,19 @@ function lookup(map: Record<string, unknown>, key: string): unknown {
 
 // The network override wins; otherwise this machine's own value.
 export function effectiveValue(settings: OmpSettings, key: string): unknown {
-  return lookup(settings.network, key) ?? lookup(settings.values, key)
+  return overrideValue(settings, key) ?? inheritedValue(settings, key)
+}
+
+export function inheritedValue(settings: OmpSettings, key: string): unknown {
+  return lookup(settings.values, key)
+}
+
+export function overrideValue(settings: OmpSettings, key: string): unknown {
+  return lookup(settings.network, key)
 }
 
 export function isChanged(settings: OmpSettings, key: string): boolean {
-  return lookup(settings.network, key) !== undefined
+  return overrideValue(settings, key) !== undefined
 }
 
 // The CLI's role table: chat roles first, then the model kinds.
@@ -236,7 +244,7 @@ export function summarize(value: unknown): string {
   return "None"
 }
 
-// The cached settings with one override written (or removed when value is undefined), for optimistic edits.
+// The cached settings with one override written (or removed when value is undefined).
 export function withOverride(settings: OmpSettings, key: string, value: unknown): OmpSettings {
   const network = { ...settings.network }
   delete network[key]

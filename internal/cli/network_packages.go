@@ -41,8 +41,11 @@ func (runner Runner) restartStaleSessions(ctx context.Context, definitionRoot st
 	return err
 }
 
-func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec string, restart bool) error {
+func (runner Runner) installNetworkPackage(ctx context.Context, directory, spec string, restart bool, previewDigest string) error {
 	return runner.changeNetworkProject(ctx, directory, restart, func(ctx context.Context, root string) error {
+		if err := registry.CheckInstallPreview(root, spec, previewDigest); err != nil {
+			return err
+		}
 		_, err := runner.Service.AddAll(ctx, root, spec)
 		return err
 	})

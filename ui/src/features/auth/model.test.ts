@@ -14,8 +14,8 @@ describe("account forms", () => {
 
   it("requires proof of the legacy password and explains that claiming preserves it", () => {
     expect(loginErrors({ claimed: false, legacy: true }, fields)).toHaveProperty("currentPassword")
-    expect(loginErrors({ claimed: false, legacy: true }, { ...fields, currentPassword: "other-password" })).toHaveProperty("password")
-    expect(loginErrors({ claimed: false, legacy: true }, { ...fields, currentPassword: fields.password })).toEqual({})
+    expect(loginErrors({ claimed: false, legacy: true }, { ...fields, currentPassword: "short" })).toHaveProperty("currentPassword")
+    expect(loginErrors({ claimed: false, legacy: true }, { ...fields, password: "", confirm: "", currentPassword: "legacy-password" })).toEqual({})
   })
 
   it("does not require confirmation for an ordinary login", () => {

@@ -45,6 +45,7 @@ export const connectionsQuery = (live: boolean) => queryOptions({
 
 // Sign-in leaves for the authorization server and comes back through the gateway to return_to (Settings → Connections by default).
 type SignInInput = { url: string; label?: string; client_id?: string; client_secret?: string; return_to?: string }
+type SignInOutcome = { status: "pending" | "connected" | "failed"; credential_id?: string; error?: string }
 
 export async function startSignIn(input: SignInInput) {
   return api<{ login: string; authorize_url: string }>("/api/mcp/logins", { body: input })
@@ -54,12 +55,14 @@ export async function signIn(input: SignInInput) {
   location.assign((await startSignIn(input)).authorize_url)
 }
 
+export function signInOutcome(login: string, signal: AbortSignal) {
+  return api<SignInOutcome>(`/api/mcp/logins/${encodeURIComponent(login)}`, { signal })
+}
+
 export async function waitForSignIn(login: string, signal: AbortSignal) {
   for (;;) {
     signal.throwIfAborted()
-    const outcome = await api<{ status: string; credential_id?: string; error?: string }>(
-      `/api/mcp/logins/${encodeURIComponent(login)}`, { signal },
-    )
+    const outcome = await signInOutcome(login, signal)
     if (outcome.status === "connected" && outcome.credential_id) return outcome.credential_id
     if (outcome.status !== "pending") throw new Error(outcome.error || "Sign-in did not complete.")
     await new Promise((resolve) => setTimeout(resolve, 1_000))

@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useId, useState } from "react"
 import { useMutation } from "@tanstack/react-query"
 import { CornerDownRight, Pencil, Send, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -12,6 +12,7 @@ export function QueueChips({ queue, machine, sessionId, readOnly, steering, stee
   queue: QueuedPrompt[]; machine: string; sessionId: string; readOnly?: boolean; steering?: string; steerJoins?: boolean; onSteer: (id: string) => void
 }) {
   const [editing, setEditing] = useState<{ id: string; text: string }>()
+  const sendDescription = useId()
   const path = (id: string): `/api/${string}` => `/api/sessions/${encodeURIComponent(sessionId)}/conversation/queue/${encodeURIComponent(id)}`
   const change = useMutation({
     mutationFn: ({ id, action, text }: { id: string; action: "edit" | "remove"; text?: string }) =>
@@ -30,6 +31,11 @@ export function QueueChips({ queue, machine, sessionId, readOnly, steering, stee
   if (queue.length === 0) return null
   return (
     <ul data-slot="prompt-queue" aria-label="Queued messages" className="flex flex-col gap-(--s2)">
+      {!readOnly && queue.some((item) => !item.steer && !item.delivered) && (
+        <li id={sendDescription} className="px-(--s2) text-(length:--fs-xs) text-(--fg2)">
+          {steerJoins ? "Send now adds the queued message to the current turn." : "Send now interrupts the current turn and sends the queued message."}
+        </li>
+      )}
       {queue.map((item) => {
         const text = promptText(item)
         const images = item.images?.length ?? (item.image || item.resource_link ? 1 : 0)
@@ -71,8 +77,8 @@ export function QueueChips({ queue, machine, sessionId, readOnly, steering, stee
             {!readOnly && !isEditing && !item.delivered && (
               <>
                 {!isSteering && (
-                  <Button type="button" size="sm" variant="ghost" title={steerJoins ? "Send this into the agent's current turn now" : "Interrupt the agent and send this now"} disabled={change.isPending || steering !== undefined} onClick={() => onSteer(item.queueId)}>
-                    <Send aria-hidden /> Steer now
+                  <Button type="button" size="sm" variant="ghost" aria-describedby={sendDescription} disabled={change.isPending || steering !== undefined} onClick={() => onSteer(item.queueId)}>
+                    <Send aria-hidden /> Send now
                   </Button>
                 )}
                 <Button type="button" size="icon" variant="ghost" aria-label="Edit queued message" disabled={change.isPending} onClick={() => setEditing({ id: item.queueId, text })}>

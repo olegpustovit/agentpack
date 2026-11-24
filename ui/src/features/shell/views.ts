@@ -1,4 +1,4 @@
-import { linkOptions, useRouterState } from "@tanstack/react-router"
+import { createBrowserHistory, useRouterState, type RouterHistory } from "@tanstack/react-router"
 import { ChartColumn, Library, Server, Settings, Terminal } from "lucide-react"
 import { onSignOut } from "@/lib/persist"
 
@@ -45,18 +45,37 @@ export function rememberSession(session: LastSession | undefined) {
   }
 }
 
-// The Sessions view reopens the terminal it left. A view's own link never loses what was selected in it.
-export function viewLink(view: (typeof views)[number]) {
-  const session = view.id === "sessions" ? lastSession() : undefined
-  return session
-    ? linkOptions({ to: "/sessions/$machine/$sessionId", params: { machine: session.machine, sessionId: session.sessionId }, search: session.search })
-    : linkOptions({ to: view.to })
+// Route position from the URL: the first segment is the view; any further segment is a detail.
+export function routePosition(pathname: string) {
+  const [, view = "", ...rest] = pathname.split("/")
+  return { view, detail: rest.some(Boolean), landing: pathname === "/machines/topology" }
 }
 
-// Route position from the URL: the first segment is the view; any further segment is a detail.
 export function useRoutePosition() {
   const pathname = useRouterState({ select: (state) => state.location.pathname })
-  const [, view = "", ...rest] = pathname.split("/")
-  // The topology is where the Machines tab lands, so on a phone it keeps the tab bar and has no Back.
-  return { view, detail: rest.some(Boolean), landing: pathname === "/machines/topology" }
+  return routePosition(pathname)
+}
+
+declare module "@tanstack/history" {
+  interface HistoryState {
+    sectionOrigin?: string
+  }
+}
+
+// Store the section landing URL on each detail entry. Search changes and replacements inside
+// that detail keep the same origin, and browser Back and Forward restore it with the entry.
+export function createViewHistory() {
+  const history = createBrowserHistory()
+  const withSectionOrigin = (write: RouterHistory["push"]): RouterHistory["push"] => (href, state, options) => {
+    const current = history.location
+    const from = routePosition(current.pathname)
+    const to = routePosition(href.split(/[?#]/, 1)[0] ?? "")
+    const sectionOrigin = to.detail && !to.landing && from.view === to.view
+      ? !from.detail || from.landing ? current.href : current.state.sectionOrigin
+      : undefined
+    write(href, { ...state, sectionOrigin }, options)
+  }
+  history.push = withSectionOrigin(history.push)
+  history.replace = withSectionOrigin(history.replace)
+  return history
 }

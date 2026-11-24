@@ -219,6 +219,7 @@ export function persistQueries(client: QueryClient, build: string): () => void {
 }
 
 const resets = new Set<() => void>()
+export const pullRequestStoragePrefix = "agentpack:pull-request:"
 
 // Per-account state kept outside the query cache registers here, so the next account starts clean.
 export function onSignOut(reset: () => void): void {
@@ -229,6 +230,12 @@ function resetSessionState() {
   for (const reset of resets) reset()
   try {
     for (const key of Object.keys(sessionStorage)) if (key.startsWith("agentpack:draft:")) sessionStorage.removeItem(key)
+    sessionStorage.removeItem("agentpack:machine-updates")
+  } catch {
+    // Storage can be blocked; nothing was saved there then.
+  }
+  try {
+    for (const key of Object.keys(localStorage)) if (key.startsWith(pullRequestStoragePrefix)) localStorage.removeItem(key)
   } catch {
     // Storage can be blocked; nothing was saved there then.
   }

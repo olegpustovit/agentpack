@@ -125,7 +125,7 @@ test("rows from other machines sit under a disclosure", async ({ page }) => {
   await disclosure.click()
   await expect(disclosure).toHaveAttribute("aria-expanded", "true")
   await expect(grid(page).getByText("Peer weekly", { exact: true })).toBeVisible()
-  await expect(grid(page).getByText("Fast Mac")).toBeVisible()
+  await expect(grid(page).getByText("Fast Mac · Max", { exact: true })).toBeVisible()
 })
 
 test("the Limits toolbar shows the last report update", async ({ page }) => {

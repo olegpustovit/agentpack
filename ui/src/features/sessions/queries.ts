@@ -57,6 +57,17 @@ export const projectHistoryQuery = (machine: string, directory: string, live: bo
     refetchInterval: live ? false : 15_000,
   })
 
+export const sessionRowQuery = (machine: string, id: string) =>
+  queryOptions({
+    queryKey: ["m", LOCAL, "session-row", machine, id],
+    queryFn: async ({ signal }) => {
+      const row = await api<SessionInfo>(`/api/sessions/${encodeURIComponent(id)}`, { machine, signal })
+      return row?.id === id && row.state ? row : null
+    },
+    staleTime: 15_000,
+    retry: false,
+  })
+
 // One machine's project folders. Events invalidate it; the poll covers only a dropped stream.
 export const projectsQuery = (machine: string, live = true) =>
   queryOptions({

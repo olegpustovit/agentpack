@@ -110,11 +110,15 @@ export function useConversationStream(machine: string, sessionId: string, enable
       if (machine && machine !== LOCAL) url.searchParams.set("node", machine)
       source = new EventSource(url)
       untrack = trackStreamingQuery(key)
+      let interrupted = false
       source.onopen = () => {
+        if (interrupted) onGap()
+        interrupted = false
         attempt = 0
         connectedTo(true)
       }
       source.onerror = () => {
+        interrupted = true
         connectedTo(false)
         if (source?.readyState !== EventSource.CLOSED) return
         close()

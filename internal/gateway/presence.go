@@ -26,7 +26,7 @@ func RegisterPresence(home, version string, info session.SessionInfo, process *o
 	if err := paths.EnsurePrivateDirectory(root); err != nil {
 		return nil, err
 	}
-	directory, err := network.CreateSessionDirectory(root, "")
+	directory, err := network.CreateSessionDirectory(root, "", false)
 	if err != nil {
 		return nil, err
 	}

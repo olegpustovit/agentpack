@@ -1,5 +1,6 @@
 import { LOCAL } from "@/lib/api"
 import type { Package, Revision } from "@/lib/api-types"
+import { shortHash } from "@/lib/format"
 import type { LibraryInput } from "./model"
 
 export type InstalledRow = { key: string; machineId: string; online: boolean; machine: string; project: string; directory: string; module: string; commit: string }
@@ -89,7 +90,7 @@ export function agentpackRevisions(inputs: LibraryInput[], id: string): Revision
   return [...seen.values()].sort((a, b) => (Date.parse(b.revision.created_at) || 0) - (Date.parse(a.revision.created_at) || 0))
 }
 
-export type RevisionChange = { kind: "add" | "update" | "remove"; name: string }
+export type RevisionChange = { kind: "add" | "update" | "remove"; name: string; from?: string; to?: string }
 
 // Module decides identity. A changed commit is an update. No previous revision means no diff.
 export function revisionChanges(selected: RevisionEntry, previous: RevisionEntry | undefined): RevisionChange[] {
@@ -99,14 +100,24 @@ export function revisionChanges(selected: RevisionEntry, previous: RevisionEntry
   const changes: RevisionChange[] = []
   for (const pkg of selected.packages) {
     const old = before.get(pkg.module)
-    if (!old) changes.push({ kind: "add", name: pkg.name || pkg.module })
-    else if (old.commit !== pkg.commit) changes.push({ kind: "update", name: pkg.name || pkg.module })
+    if (!old) changes.push({ kind: "add", name: pkg.name || pkg.module, to: pkg.commit })
+    else if (old.commit !== pkg.commit) changes.push({ kind: "update", name: pkg.name || pkg.module, from: old.commit, to: pkg.commit })
   }
-  for (const pkg of previous.packages) if (!after.has(pkg.module)) changes.push({ kind: "remove", name: pkg.name || pkg.module })
+  for (const pkg of previous.packages) if (!after.has(pkg.module)) changes.push({ kind: "remove", name: pkg.name || pkg.module, from: pkg.commit })
   return changes
 }
 
-export type MCPUse = { machine: string; project: string; directory: string; status: string; integrity: string; version: string }
+// Formats commits/versions cleanly (shortens hex commit SHAs longer than 7 chars, keeps semver tags intact).
+const pinLabel = (value: string) => (/^[0-9a-f]{8,}$/i.test(value) ? shortHash(value) : value)
+
+export function formatRevisionChange(change: RevisionChange): string {
+  if (change.kind === "add") return change.to ? `Add ${change.name} ${pinLabel(change.to)}` : `Add ${change.name}`
+  if (change.kind === "remove") return change.from ? `Remove ${change.name} ${pinLabel(change.from)}` : `Remove ${change.name}`
+  if (change.from && change.to) return `Update ${change.name} ${pinLabel(change.from)} → ${pinLabel(change.to)}`
+  return `Update ${change.name}`
+}
+
+export type MCPUse = { machine: string; project: string; directory: string; status: string; integrity: string; version: string; projectLogin?: boolean; login?: string; transport?: string }
 
 // Status and integrity belong to each project's own record, so they are read per project.
 export function mcpUses(inputs: LibraryInput[], server: { name: string }): MCPUse[] {
@@ -114,7 +125,17 @@ export function mcpUses(inputs: LibraryInput[], server: { name: string }): MCPUs
     input.projects.flatMap((row) =>
       row.mcp
         .filter((mcp) => mcp.name === server.name)
-        .map((mcp) => ({ machine: input.machine.name, project: row.name || row.directory, directory: row.directory, status: mcp.status, integrity: mcp.integrity, version: mcp.version })),
+        .map((mcp) => ({
+          machine: input.machine.name,
+          project: row.name || row.directory,
+          directory: row.directory,
+          status: mcp.status,
+          integrity: mcp.integrity,
+          version: mcp.version,
+          projectLogin: mcp.project_login,
+          login: mcp.login,
+          transport: mcp.transport,
+        })),
     ),
   )
   return uses.sort((a, b) => a.machine.localeCompare(b.machine) || a.project.localeCompare(b.project) || a.directory.localeCompare(b.directory))

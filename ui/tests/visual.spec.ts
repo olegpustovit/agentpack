@@ -18,11 +18,51 @@ const composerFixture = [
 const style = (locator: Locator, property: string, pseudo?: string) =>
   locator.evaluate((element, [name, pseudoElement]) => getComputedStyle(element, pseudoElement).getPropertyValue(name!), [property, pseudo] as const)
 
+const contrast = (locator: Locator, property: "color" | "borderTopColor") => locator.evaluate((element, color) => {
+  const context = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!
+  const pixel = () => context.getImageData(0, 0, 1, 1).data
+  const paint = (value: string) => {
+    context.fillStyle = value
+    context.fillRect(0, 0, 1, 1)
+  }
+  const luminance = ([r, g, b]: Uint8ClampedArray) => {
+    const channel = (component: number) => {
+      const s = component / 255
+      return s <= .04045 ? s / 12.92 : ((s + .055) / 1.055) ** 2.4
+    }
+    return .2126 * channel(r!) + .7152 * channel(g!) + .0722 * channel(b!)
+  }
+  paint(getComputedStyle(element)[color])
+  const foreground = luminance(pixel())
+  const layers: string[] = []
+  let surface: Element | null = color === "color" ? element : element.parentElement
+  while (surface) {
+    const background = getComputedStyle(surface).backgroundColor
+    layers.push(background)
+    context.clearRect(0, 0, 1, 1)
+    paint(background)
+    if (pixel()[3] === 255) break
+    surface = surface.parentElement
+  }
+  context.clearRect(0, 0, 1, 1)
+  for (const layer of layers.reverse()) paint(layer)
+  const background = luminance(pixel())
+  return (Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05)
+}, property)
+
 const transparent = "rgba(0, 0, 0, 0)"
 
 async function desktop(page: Page) {
   await page.setViewportSize({ width: 1440, height: 900 })
   await mockAPI(page)
+}
+
+async function openToolsPackage(page: Page) {
+  await desktop(page)
+  await page.route("**/api/library/packages**", (route) => route.fulfill({ json: [{
+    id: "tools", module: "github.com/acme/tools", owner: "acme", repo: "tools", kind: "plugin", name: "Tools", commit: "a".repeat(40),
+  }] }))
+  await page.goto("/library/package/github.com/acme/tools")
 }
 
 test.describe("kit styling", () => {
@@ -501,7 +541,7 @@ test.describe("a peer on an older version", () => {
 test("a confirm alert places macOS-order buttons inside it on desktop and stacks them on phone", async ({ page, isMobile }) => {
   test.skip(isMobile, "desktop")
   await desktop(page)
-  await page.goto("/settings/account")
+  await page.goto("/settings/general")
   await page.getByRole("button", { name: "Stop gateway…" }).click()
   const dialog = page.getByRole("alertdialog")
   const cancelBtn = dialog.getByRole("button", { name: "Cancel" })
@@ -535,14 +575,18 @@ test("a confirm alert places macOS-order buttons inside it on desktop and stacks
   })
   expect(await style(stopBtn, "background-color")).toBe(danger)
 
-  // Phone stacks the destructive action above Cancel, still inside the alert.
+  // Phone stacks Cancel above the destructive action, still inside the alert.
+  await cancelBtn.click()
+  await expect(dialog).toBeHidden()
   await page.setViewportSize({ width: 390, height: 844 })
-  if (!(await dialog.isVisible())) await page.getByRole("button", { name: "Stop gateway…" }).click()
-  await expect(dialog).toBeVisible()
+  await expect(page.getByRole("link", { name: "Back to Settings" })).toBeVisible()
+  await page.getByRole("button", { name: "Stop gateway…" }).click()
+  await expect(cancelBtn).toBeFocused()
   const phone = await measure()
   expect(phone.stop.x).toBeGreaterThanOrEqual(phone.alert.x)
   expect(phone.stop.right).toBeLessThanOrEqual(phone.alert.right)
-  expect(phone.cancel.y).toBeGreaterThan(phone.stop.y)
+  expect(phone.stop.y).toBeGreaterThan(phone.cancel.y)
+  await expect(dialog.getByRole("button").first()).toHaveText("Cancel")
 })
 
 test("a machine with no projects says so in New session", async ({ page, isMobile }) => {
@@ -561,13 +605,71 @@ test("a grid column can be dragged wider", async ({ page, isMobile, browserName 
   await page.goto("/machines/topology")
   const header = page.getByRole("columnheader", { name: "Machine" })
   const before = (await header.boundingBox())!
-  const handle = (await page.getByRole("separator", { name: "Resize Machine" }).boundingBox())!
+  const resizer = page.getByRole("separator", { name: "Resize Machine column", exact: true })
+  await expect(resizer).toHaveAttribute("aria-valuenow", String(Math.round(before.width)))
+  await resizer.press("ArrowRight")
+  await expect(resizer).toHaveAttribute("aria-valuenow", String(Math.round(before.width + 8)))
+  await resizer.press("ArrowLeft")
+  await expect(resizer).toHaveAttribute("aria-valuenow", String(Math.round(before.width)))
+  const handle = (await resizer.boundingBox())!
   await page.mouse.move(handle.x + 1, handle.y + 5)
   await page.mouse.down()
   await page.mouse.move(handle.x + 81, handle.y + 5, { steps: 3 })
   await page.mouse.up()
   expect((await header.boundingBox())!.width).toBeCloseTo(before.width + 80, -1)
+
+  const moved = (await resizer.boundingBox())!
+  await page.mouse.move(moved.x + 1, moved.y + 5)
+  await page.mouse.down()
+  await page.mouse.move(moved.x + 11, moved.y + 5)
+  await resizer.dispatchEvent("pointercancel", { pointerId: 1, bubbles: true })
+  const cancelledWidth = (await header.boundingBox())!.width
+  await page.mouse.move(moved.x + 40, moved.y + 5)
+  await page.mouse.up()
+  expect((await header.boundingBox())!.width).toBe(cancelledWidth)
 })
+
+test("kit styling keeps rapid Tab inside the Install sheet and restores its opener", async ({ page }) => {
+  await openToolsPackage(page)
+  const install = page.getByRole("button", { name: "Install…" })
+  await install.focus()
+  await install.press("Enter")
+  const dialog = page.getByRole("dialog")
+  await expect(dialog).toBeVisible()
+  for (let i = 0; i < 40; i++) {
+    await page.keyboard.press(i < 20 ? "Tab" : "Shift+Tab")
+    expect(await dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true)
+  }
+  await page.keyboard.press("Escape")
+  await expect(dialog).toBeHidden()
+  await expect(install).toBeFocused()
+})
+
+for (const colorScheme of ["light", "dark"] as const) {
+  test(`kit styling keeps the Install controls and selected Usage metric legible in ${colorScheme}`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme })
+    await openToolsPackage(page)
+    await page.getByRole("button", { name: "Install…" }).click()
+    const sheet = page.getByRole("dialog")
+    await sheet.getByRole("checkbox", { name: /^previous/ }).click()
+    const button = sheet.getByRole("button", { name: /^Install/ })
+    const checkbox = sheet.getByRole("checkbox", { name: "Restart affected agents" })
+    await expect(button).toBeEnabled()
+    expect(await contrast(button, "color")).toBeGreaterThanOrEqual(4.5)
+    expect(await contrast(checkbox, "borderTopColor")).toBeGreaterThanOrEqual(3)
+
+    const hour = Math.floor(Date.now() / 3_600_000) * 3600
+    await page.route("**/api/usage?**", (route) => route.fulfill({ json: {
+      hourly: [{ hour, node_id: "gateway", harness: "claude", folder_id: "f", model: "", turns: 1, sessions: 1, input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_write_tokens: 0, cost_micros: 50_000, agent_ms: 1 }],
+      sessions: [],
+      samples: [],
+    } }))
+    await page.goto("/usage?metric=cost")
+    const metric = page.getByRole("group", { name: "Metric", exact: true }).getByRole("button", { pressed: true }).locator("span").first()
+    await expect(metric).toHaveText("Reported cost")
+    expect(await contrast(metric, "color")).toBeGreaterThanOrEqual(4.5)
+  })
+}
 
 test("Update on an Installed in row moves only that project to the latest version", async ({ page, isMobile }) => {
   test.skip(isMobile, "desktop")
@@ -583,8 +685,9 @@ test("Update on an Installed in row moves only that project to the latest versio
   await page.route("**/api/library/latest**", (route) => route.fulfill({ json: { commit: "b".repeat(40), current: ["b".repeat(40)], exact: true } }))
   await page.goto("/library/package/github.com/acme/tools")
   await page.getByRole("button", { name: "Update to bbbbbbb" }).click()
+  await page.getByRole("dialog").getByRole("button", { name: "Update 1 project", exact: true }).click()
   await expect.poll(() => posted.length).toBe(1)
-  expect(posted[0]).toMatchObject({ spec: `github.com/acme/tools@${"b".repeat(40)}`, directory: "/work/a" })
+  expect(posted[0]).toMatchObject({ spec: `github.com/acme/tools@${"b".repeat(40)}`, directory: "/work/a", restart: false })
 })
 
 test("a long project path stays inside the New session sheet", async ({ page, isMobile }) => {

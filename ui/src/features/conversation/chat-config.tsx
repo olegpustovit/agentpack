@@ -47,7 +47,7 @@ export function useChatConfig({ machine, sessionId, info, parent, live, starting
   const modelOption = selectOptions.find((option) => configRole(option) === "model")
   // An Oh My Pi chat can switch to a role's model (and thinking), as set on the machine running it.
   const ompSettings = useQuery({ ...ompSettingsQuery(machine), enabled: live && info?.harness === "omp", retry: false }).data
-  const roles = ompSettings && modelOption ? quickRoles(ompSettings, modelOption.items.map((item) => item.value)) : []
+  const roles = ompSettings && modelOption ? quickRoles(ompSettings, modelOption.items.filter((item) => !item.disabledReason).map((item) => item.value)) : []
   const effortOption = selectOptions.find((option) => configRole(option) === "effort")
   const extraOptions = configOptions.filter((option) => configRole(option) === "other")
   const setConfig = useMutation({
@@ -85,19 +85,20 @@ export function useChatConfig({ machine, sessionId, info, parent, live, starting
 }
 
 // The composer's permissions select and model / effort / options menu.
-export function ChatConfigControls({ config, harness, starting, needsYou, needsUpdate }: {
+export function ChatConfigControls({ config, harness, starting, needsYou, needsUpdate, controls = "all" }: {
   config: ReturnType<typeof useChatConfig>
   harness?: string
   starting: boolean
   needsYou: boolean
   needsUpdate: boolean
+  controls?: "all" | "model"
 }) {
   const navigate = useNavigate()
   const { configValues, setConfigValue, provisionalConfig, permissionsOption, modelOption, effortOption, extraOptions, roles } = config
   return (
     <>
-    {provisionalConfig && <span className="text-(length:--fs-xs) text-(--fg3)">Provisional</span>}
-    {permissionsOption && (
+    {provisionalConfig && controls === "all" && <span className="text-(length:--fs-xs) text-(--fg3)">Provisional</span>}
+    {controls === "all" && permissionsOption && (
       <PopupSelect
         label="Permissions"
         value={typeof configValues[permissionsOption.id] === "string" ? configValues[permissionsOption.id] as string : permissionsOption.value}
@@ -115,8 +116,8 @@ export function ChatConfigControls({ config, harness, starting, needsYou, needsU
               type="button"
               size="sm"
               variant="ghost"
-              aria-label={effortOption ? "Model and effort" : modelOption?.name ?? "Options"}
-              title="Choose model and effort"
+              aria-label={controls === "model" ? "Change model and effort in chat details" : effortOption ? "Model and effort" : modelOption?.name ?? "Options"}
+              title={needsUpdate ? "Model and effort are unavailable for this chat." : !starting && needsYou ? "Answer the pending request before changing model or effort." : "Choose model and effort"}
               disabled={config.setting || (!starting && needsYou) || needsUpdate}
               className="max-w-48 gap-(--s2)"
             >
@@ -145,7 +146,7 @@ export function ChatConfigControls({ config, harness, starting, needsYou, needsU
                   disabled={config.setting || (!starting && needsYou) || needsUpdate}
                   onClick={() => {
                     setConfigValue(modelOption.id, role.selector)
-                    if (role.level && effortOption?.items.some((item) => item.value === role.level)) setConfigValue(effortOption.id, role.level)
+                    if (role.level && effortOption?.items.some((item) => item.value === role.level && !item.disabledReason)) setConfigValue(effortOption.id, role.level)
                   }}
                 >
                   {role.name}
@@ -166,10 +167,10 @@ export function ChatConfigControls({ config, harness, starting, needsYou, needsU
                     role="menuitemradio"
                     aria-checked={selected}
                     icon={selected ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
-                    disabled={config.setting || (!starting && needsYou) || needsUpdate}
+                    disabled={config.setting || (!starting && needsYou) || needsUpdate || !!item.disabledReason}
                     onClick={() => setConfigValue(modelOption.id, item.value)}
                   >
-                    {item.label}
+                    {item.label}{item.disabledReason && <span className="text-(--fg2)"> · {item.disabledReason}</span>}
                   </MenuItem>
                 )
               })}
@@ -187,10 +188,10 @@ export function ChatConfigControls({ config, harness, starting, needsYou, needsU
                     role="menuitemradio"
                     aria-checked={selected}
                     icon={selected ? <Check aria-hidden /> : <span aria-hidden className="size-[15px]" />}
-                    disabled={config.setting || (!starting && needsYou) || needsUpdate}
+                    disabled={config.setting || (!starting && needsYou) || needsUpdate || !!item.disabledReason}
                     onClick={() => setConfigValue(effortOption.id, item.value)}
                   >
-                    {item.label}
+                    {item.label}{item.disabledReason && <span className="text-(--fg2)"> · {item.disabledReason}</span>}
                   </MenuItem>
                 )
               })}

@@ -1,18 +1,24 @@
+import { useQuery } from "@tanstack/react-query"
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router"
-import { draftsQuery } from "@/features/library/queries"
-import { statusQuery } from "@/features/status/queries"
+import { safeReturnTo } from "@/features/auth/return-to"
 import { EventsProvider } from "@/features/events/use-events"
+import { draftsQuery } from "@/features/library/queries"
 import { AppShell } from "@/features/shell/shell"
 import { SidebarProvider } from "@/features/shell/sidebar"
 
 export const Route = createFileRoute("/_app")({
-  beforeLoad: async ({ context }) => {
-    const status = await context.queryClient.query(statusQuery)
-    if (!status.authenticated) throw redirect({ to: "/login", search: { return_to: undefined } })
-    // Gateway-wide and listed by every Library view, so it loads with the shell, not on the first Library open.
-    void context.queryClient.query(draftsQuery).catch(() => undefined)
+  beforeLoad: ({ context, location }) => {
+    if (!context.accountStatus.authenticated) {
+      throw redirect({ to: "/login", search: { return_to: safeReturnTo(location.href) } })
+    }
   },
-  component: () => (
+  component: AppLayout,
+})
+
+function AppLayout() {
+  // Keep the shell's drafts read subscribed so reconnect catch-up refreshes it before Library opens.
+  useQuery(draftsQuery)
+  return (
     <EventsProvider>
       <SidebarProvider>
         <AppShell>
@@ -20,5 +26,5 @@ export const Route = createFileRoute("/_app")({
         </AppShell>
       </SidebarProvider>
     </EventsProvider>
-  ),
-})
+  )
+}

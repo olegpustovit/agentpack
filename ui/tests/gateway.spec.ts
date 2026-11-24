@@ -27,7 +27,7 @@ async function gwRefresh(page: Page) {
 // Detaches the open terminal. Phones hide the row menu behind the terminal, so Back does it there;
 // on desktop the row's Close terminal does it.
 async function gwDetach(page: Page, key: string) {
-  const back = page.getByRole("link", { name: "Back", exact: true })
+  const back = page.getByRole("link", { name: "Back to Sessions", exact: true })
   if (await back.isVisible()) {
     await back.click()
     return
@@ -271,10 +271,11 @@ test("390px switches between the session list and terminal panes", async ({ page
   await attachTerminal(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto("/")
+  await page.getByRole("button", { name: "All sessions", exact: true }).click()
   await expect(gwSessions(page)).toBeVisible()
   await gwRow(page, "local:local-one").click()
   await expect(page.locator(".xterm-screen")).toBeVisible()
-  await page.getByRole("link", { name: "Back", exact: true }).click()
+  await page.getByRole("link", { name: "Back to Sessions", exact: true }).click()
   await expect(gwSessions(page)).toBeVisible()
   await expect(page.locator(".xterm-screen")).toBeHidden()
   await gwMore(page, "local:local-one").click()
@@ -504,7 +505,7 @@ test("gateway settings stay separate from selected remote sessions", async ({ pa
   await expect(page.getByRole("switch", { name: "Tailscale sharing" })).not.toBeChecked()
   expect(settingsQueries.every((value) => !value.includes("node="))).toBeTruthy()
 
-  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Account" }).click()
+  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "General" }).click()
   await page.getByRole("button", { name: "Stop all agents…", exact: true }).click()
   await page.getByRole("alertdialog").getByRole("button", { name: "Stop all agents", exact: true }).click()
   await expect(page.getByText("Agents on the gateway machine have been stopped.")).toBeVisible()
@@ -619,7 +620,8 @@ test("Sessions starts active and appearance settings persist across views and re
   }
   // The terminal takes the theme it is attached under, so returning to the session shows light.
   await page.getByRole("link", { name: "Sessions", exact: true }).click()
-  await gwRow(page, "local:local-one").click()
+  await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible()
+  await page.getByRole("link", { name: "Continue last session" }).click()
   await expect.poll(() => page.evaluate(() => window.__agentpackTerminal?.options.theme?.background)).toBe("#ffffff")
 
   await page.getByRole("link", { name: "Library", exact: true }).click()
@@ -714,7 +716,7 @@ test("New Session says when the agent isn't signed in, without blocking the star
   await page.route("**/api/agent-sessions**", (route) => route.fulfill({ status: 500, body: "acp session/list: Authentication required" }))
   await page.goto("/sessions?new=1")
   await expect(page.getByText("Codex isn't signed in on Gateway machine.")).toBeVisible()
-  await expect(page.getByRole("link", { name: "Sign in…" })).toHaveAttribute("href", "/machines/local")
+  await expect(page.getByRole("button", { name: "Sign in…", exact: true })).toBeEnabled()
   await expect(page.getByText(/Couldn't load conversations/)).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Start session" })).toBeEnabled()
 })
@@ -730,7 +732,7 @@ test("New Session explains the Node requirement for ACP chat", async ({ page }) 
   await expect(page.getByRole("button", { name: "Start session" })).toBeDisabled()
 })
 
-test("⌘⌫ archives the focused session at once, stopping it first", async ({ page }) => {
+test("⌘⌫ reviews stopping the focused session before archiving it", async ({ page }) => {
   const requests = await mockAPI(page)
   const bodies: unknown[] = []
   await page.route("**/api/sessions/local-two", (route) => {
@@ -743,5 +745,9 @@ test("⌘⌫ archives the focused session at once, stopping it first", async ({ 
   await page.goto("/")
   await gwRow(page, "local:local-two").focus()
   await page.keyboard.press("ControlOrMeta+Backspace")
+  // The row looks running, so archiving names the agent it stops first (SES-03).
+  await expect(page.getByRole("alertdialog")).toContainText("on Gateway machine")
+  expect(bodies).toEqual([])
+  await page.getByRole("button", { name: "Stop and archive" }).click()
   await expect.poll(() => bodies).toEqual([{ hidden: true }])
 })

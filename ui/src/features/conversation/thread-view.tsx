@@ -480,8 +480,8 @@ function ActivityGroup({ items, end, fresh, machine, sessionId }: { items: Threa
   const { open, onToggle } = useOpen(false)
   const gist = thoughts.length ? thoughtGist(chunkText(thoughts.at(-1)!.data)) : ""
   const counts = activityCounts(tools)
-  const title = gist || (tools.length ? "Worked" : "Thought")
   const detail = [...counts, ...(span >= 1000 ? [clock(span)] : [])].join(" · ")
+  const title = gist || (!detail ? "Thought" : "")
   // Runs of exploration fold together; built only while open.
   const rows: (ThreadItem | ThreadItem[])[] = []
   if (open) {
@@ -495,11 +495,11 @@ function ActivityGroup({ items, end, fresh, machine, sessionId }: { items: Threa
   return (
     <>
       <details data-slot="tool-group" open={open} onToggle={onToggle} className="text-(length:--fs-sm)">
-        <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
+        {/* One left-aligned label: a long thought truncates first; the counts keep their width up to 70%. */}
+        <summary aria-expanded={open} className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s2) rounded-(--r-row) px-(--s2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
           <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
-          <span className="min-w-0 shrink truncate text-(--fg)">{title}</span>
-          {detail && <span className="min-w-0 flex-1 truncate tabular-nums text-(--fg3)"><span className="sr-only"> · </span>{detail}</span>}
-          {!detail && <span className="flex-1" />}
+          {title && <span className="min-w-[4ch] truncate text-(--fg)">{title}</span>}
+          {detail && <span className="max-w-[70%] shrink-0 truncate tabular-nums text-(--fg3)">{title && <span className="sr-only"> · </span>}{detail}</span>}
           {failed > 0 && <span className="shrink-0 text-(--danger-word)"><span className="sr-only"> · </span>{failed} failed</span>}
         </summary>
         {open && (
@@ -685,7 +685,7 @@ function ThreadItemView({
     case "permission":
       return <fieldset disabled={readOnly} className="min-w-0"><PermissionCard item={item} machine={machine} sessionId={sessionId} readOnly={readOnly} agent={agent} /></fieldset>
     case "elicitation":
-      return <fieldset disabled={readOnly} className="min-w-0"><ElicitationCard item={item} machine={machine} sessionId={sessionId} /></fieldset>
+      return <ElicitationCard item={item} machine={machine} sessionId={sessionId} readOnly={readOnly} />
     case "compaction":
       return <CompactionBlock item={item} />
     case "divider": {
@@ -817,6 +817,17 @@ export function turnMeta(turn: ThreadState["last_turn"], ts?: number): string {
 
 const noSubagents: Record<string, Subagent> = {}
 
+export function signInNotice(items: ThreadItem[]): ThreadItem | undefined {
+  const index = items.findLastIndex((item) => {
+    if (item.kind !== "divider") return false
+    const notice = item.data as NoticePayload
+    return notice.code === "auth_required" || (notice.title === "The agent could not run this prompt" && notice.description?.includes("Authentication required"))
+  })
+  // Output following the notice proves the sign-in worked.
+  if (index < 0 || items.slice(index + 1).some((item) => item.kind === "agent_message_chunk" || item.kind === "tool")) return
+  return items[index]
+}
+
 export function ThreadView({
   items,
   machine,
@@ -867,15 +878,7 @@ export function ThreadView({
   const retry = latestUserPrompt(items) && onRetry ? onRetry : undefined
   const lastAgent = items.findLast((item) => item.kind === "agent_message_chunk")
   const compacted = items.some((item) => item.kind === "compaction")
-  const signInIndex = items.findLastIndex((item) => {
-    if (item.kind !== "divider") return false
-    const notice = item.data as NoticePayload
-    return notice.code === "auth_required" || (notice.title === "The agent could not run this prompt" && notice.description?.includes("Authentication required"))
-  })
-  // Agent output after the notice proves the sign-in worked, so the card retires.
-  const signIn = signInIndex >= 0 && !items.slice(signInIndex + 1).some((item) => item.kind === "agent_message_chunk" || item.kind === "tool")
-    ? items[signInIndex]
-    : undefined
+  const signIn = signInNotice(items)
   const fresh = (item: ThreadItem) => animateAfter !== undefined && item.seq !== undefined && item.seq > animateAfter
   const permission = (item: ThreadItem) => (
     <fieldset disabled={readOnly} className="min-w-0">

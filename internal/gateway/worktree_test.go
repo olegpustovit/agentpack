@@ -404,6 +404,47 @@ func TestClientChatClaimPreparesWorktreeOnce(t *testing.T) {
 	}
 }
 
+func TestClientLaunchRejectsUnusableWorktreeBeforeClaim(t *testing.T) {
+	g, main, call := worktreeGateway(t)
+	git(t, main, "switch", "-c", "other")
+	write(t, filepath.Join(main, "README.md"), "other branch\n")
+	git(t, main, "commit", "-am", "change from other")
+	git(t, main, "switch", "main")
+	write(t, filepath.Join(main, "README.md"), "main branch\n")
+	git(t, main, "commit", "-am", "change from main")
+	if _, err := runGit(t.Context(), gitTimeout, main, "merge", "other"); err == nil {
+		t.Fatal("expected a conflicting merge")
+	}
+	before := git(t, main, "ls-files", "--unmerged")
+	if before == "" {
+		t.Fatal("no unresolved files")
+	}
+	for _, transport := range []string{"acp", "terminal"} {
+		for _, choice := range []string{"new", filepath.Join(worktreesRoot(g.options.Home), projectHash(main), "removed")} {
+			input := chatStartRequest{ID: "session-a6c2f7e8ce789af9ef12009492c53f07", Directory: main,
+				Harness: "claude", Mode: "default", Transport: transport, Worktree: choice, WorktreeName: "rejected", Carry: true}
+			w := call(http.MethodPost, "/api/sessions", string(network.MustRawJSON(input)))
+			var failure struct {
+				Error string `json:"error"`
+				Field string `json:"field"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &failure); w.Code != http.StatusUnprocessableEntity || err != nil || failure.Field != "worktree" || failure.Error == "" {
+				t.Fatalf("%s worktree %s: %d %s", transport, choice, w.Code, w.Body)
+			}
+			var claims int
+			if err := g.store.Reader.QueryRow("SELECT count(*) FROM session_start_requests WHERE session_id=?", input.ID).Scan(&claims); err != nil || claims != 0 {
+				t.Fatalf("rejected input left %d claims: %v", claims, err)
+			}
+		}
+	}
+	if _, err := os.Stat(worktreesRoot(g.options.Home)); !os.IsNotExist(err) {
+		t.Fatalf("preflight created the worktrees directory: %v", err)
+	}
+	if after := git(t, main, "ls-files", "--unmerged"); before != after {
+		t.Fatal("preflight changed the worktree index")
+	}
+}
+
 func TestSessionDiffstatRefreshesIndexAndUnstagedEdits(t *testing.T) {
 	dir := gitRepo(t)
 	path := filepath.Join(dir, "README.md")

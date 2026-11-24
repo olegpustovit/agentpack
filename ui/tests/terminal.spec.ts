@@ -78,7 +78,26 @@ test("an IME event after typing sends only its own text, never the whole line ag
   expect(worker.conns[0]?.sent.join("")).toBe("helloX")
 })
 
-test("the Sessions view reopens the terminal it left, with its grouping", async ({ page }) => {
+test("the phone terminal fits the same host grid and opens the keyboard explicitly", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const worker = await stubWorker(page)
+  await openRoute(page, "/sessions/local/s1")
+  const input = page.locator(".xterm-helper-textarea")
+  await expect(input).not.toBeFocused()
+  await expect(page.getByText("Connected · 100×30 host grid")).toBeVisible()
+  const grid = () => page.evaluate(() => [window.__agentpackTerminal?.cols, window.__agentpackTerminal?.rows])
+  const before = await grid()
+  await page.getByRole("button", { name: "Larger" }).click()
+  await expect(page.getByRole("button", { name: "Fit" })).toHaveAttribute("aria-pressed", "false")
+  await page.getByRole("button", { name: "Smaller" }).click()
+  await page.getByRole("button", { name: "Fit" }).click()
+  expect(await grid()).toEqual(before)
+  expect(worker.conns[0]?.sent).toEqual([])
+  await page.getByRole("button", { name: "Keyboard", exact: true }).click()
+  await expect(input).toBeFocused()
+})
+
+test("Continue last session reopens the terminal Sessions left, with its grouping", async ({ page }) => {
   await stubWorker(page)
   await openRoute(page, "/sessions/local/s1?group=machine")
   await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Usage", exact: true }).click()
@@ -86,6 +105,8 @@ test("the Sessions view reopens the terminal it left, with its grouping", async 
   // The URL changes before the Usage route commits; until the terminal has left, there is nothing to reopen.
   await expect(page.locator(".xterm")).toHaveCount(0)
   await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Sessions", exact: true }).click()
+  await expect(page).toHaveURL(/\/sessions$/)
+  await page.getByRole("link", { name: "Continue last session" }).click()
   await expect(page).toHaveURL(/\/sessions\/local\/s1\?group=machine/)
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused()
 })
@@ -94,12 +115,12 @@ test("a non-interactive session shows native stdio copy and never opens a socket
   await stubApi(page, () => [session("n1", "stdio", { state: { ...shared, interactive: false } })])
   const worker = await stubWorker(page)
   await page.goto("/sessions/local/n1")
-  await expect(page.getByRole("status").filter({ hasText: "Native stdio · browser input unavailable" })).toBeVisible()
+  await expect(page.getByText(/Native stdio · browser input unavailable/)).toBeVisible()
   await expect(page.locator(".xterm")).toHaveCount(0)
   expect(worker.conns).toHaveLength(0)
 })
 
-test("a session on an offline machine shows the last-known banner and fetches nothing", async ({ page }) => {
+test("an unknown session on an offline machine explains the missing metadata without opening a terminal", async ({ page }) => {
   const sessionRequests: string[] = []
   await stubApi(page, () => [], [{ id: "n2", name: "far", online: false }])
   await page.route(/\/api\/sessions(\?.*)?$/, (route) => {
@@ -108,9 +129,23 @@ test("a session on an offline machine shows the last-known banner and fetches no
   })
   const worker = await stubWorker(page)
   await page.goto("/sessions/n2/s9")
-  await expect(page.getByRole("status").filter({ hasText: "Offline · showing last-known session metadata" })).toBeVisible()
+  await expect(page.getByText("This gateway has no saved row for the session.")).toBeVisible()
   await expect(page.locator(".xterm")).toHaveCount(0)
   expect(sessionRequests.filter((url) => url.includes("node=n2"))).toHaveLength(0)
+  expect(worker.conns).toHaveLength(0)
+})
+
+test("an offline terminal keeps its title, host and last-seen time", async ({ page }) => {
+  await stubApi(page, () => [session("s9", "cedar logs tail", {
+    node_id: "n2", reachable: false, last_sync: "2026-11-24T19:30:00Z",
+  })], [{ id: "n2", name: "cedar", online: false }])
+  const worker = await stubWorker(page)
+  await page.goto("/sessions/n2/s9")
+  await expect(page.getByRole("heading", { level: 1, name: "cedar logs tail" })).toBeVisible()
+  await expect(page.getByText(/cedar · Last seen.+Offline/)).toBeVisible()
+  await expect(page.getByRole("button", { name: "Retry" })).toBeVisible()
+  await expect(page.getByRole("link", { name: "Return to sessions" })).toBeVisible()
+  await expect(page.locator(".xterm")).toHaveCount(0)
   expect(worker.conns).toHaveLength(0)
 })
 

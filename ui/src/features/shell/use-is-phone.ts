@@ -1,10 +1,10 @@
 import { useSyncExternalStore } from "react"
 
 // Matches the `max-[760px]` Tailwind variants used by the shell.
-const query = "(max-width: 760px)"
+export const phoneQuery = "(max-width: 760px)"
 
 function subscribe(onChange: () => void) {
-  const media = window.matchMedia(query)
+  const media = window.matchMedia(phoneQuery)
   media.addEventListener("change", onChange)
   return () => media.removeEventListener("change", onChange)
 }
@@ -12,7 +12,7 @@ function subscribe(onChange: () => void) {
 export function useIsPhone() {
   return useSyncExternalStore(
     subscribe,
-    () => window.matchMedia(query).matches,
+    () => window.matchMedia(phoneQuery).matches,
     () => false,
   )
 }

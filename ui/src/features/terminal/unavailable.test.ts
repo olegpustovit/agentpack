@@ -18,7 +18,7 @@ describe("unavailableMessage", () => {
     expect(unavailableMessage({ transport: "acp", state: { interactive: false } }, true)).toBeUndefined()
   })
 
-  it("marks a stale session offline even with no info", () => {
-    expect(unavailableMessage(undefined, true)).toBe("Offline · showing last-known session metadata")
+  it("leaves unknown sessions to the route's lookup fallback", () => {
+    expect(unavailableMessage(undefined, true)).toBeUndefined()
   })
 })

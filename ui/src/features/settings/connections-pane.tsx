@@ -1,45 +1,117 @@
-import { useState, type FormEvent, type ReactNode } from "react"
+import { useEffect, useState, type FormEvent, type ReactNode } from "react"
 import { Plus } from "lucide-react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { getRouteApi } from "@tanstack/react-router"
 import { Section } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { Field, FieldError, FieldGrid, FieldLabel } from "@/components/kit/forms"
 import { SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
-import { ConfirmAlert, ConfirmAlertContent, Menu, MenuContent, MenuItem, MenuTrigger, RowMoreButton } from "@/components/kit/overlays"
+import { ConfirmAlert, ConfirmAlertContent, Menu, MenuContent, MenuItem, MenuTrigger, RowMoreButton, Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { LoginGlyph } from "@/features/library/mcp-inspector"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useEventsConnected } from "@/features/events/use-events"
-import { api, errorText } from "@/lib/api"
+import { api, ApiError, errorText } from "@/lib/api"
 import { hud } from "@/lib/hud"
-import { connectionsQuery, loginsFor, serverName, signIn, type Connection } from "./connections-model"
+import { connectionsQuery, loginsFor, serverName, signInOutcome, startSignIn, type Connection } from "./connections-model"
 import { LoadError, Pane } from "./panes"
 
+const route = getRouteApi("/_app/settings/$pane")
+const returningConnectionKey = "agentpack.mcp.returning-connection"
+
+function returningConnection() {
+  try {
+    return sessionStorage.getItem(returningConnectionKey) || undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function openConnectionsLogin(input: Parameters<typeof startSignIn>[0], connection?: string) {
+  const search = connection ? `?${new URLSearchParams({ connection })}` : ""
+  const login = await startSignIn({ ...input, return_to: `/settings/connections${search}` })
+  try {
+    sessionStorage.setItem(returningConnectionKey, connection ?? "")
+  } catch {
+    // The return path still identifies the affected row while the login is valid.
+  }
+  location.assign(login.authorize_url)
+}
+
+type LoginFeedback = { message: string; retry?: boolean; pending?: boolean }
+const callbackMessages = {
+  denied: "The server declined sign-in.",
+  expired: "This sign-in link expired or was already used.",
+  canceled: "Sign-in canceled.",
+}
+
 export function ConnectionsPane() {
-  const [adding, setAdding] = useState("")
+  const [adding, setAdding] = useState<string>()
+  const [returning] = useState(returningConnection)
+  const { callback, oauth_login: login, connection } = route.useSearch()
+  const reported = callback === "denied" || callback === "expired" || callback === "canceled" ? callback : undefined
+  const navigate = route.useNavigate()
+  const queryClient = useQueryClient()
   const connections = useQuery(connectionsQuery(useEventsConnected()))
+  const outcome = useQuery({
+    queryKey: ["mcp-credential-login", login],
+    queryFn: ({ signal }) => signInOutcome(login ?? "", signal),
+    enabled: Boolean(login) && !reported,
+    retry: false,
+    staleTime: Infinity,
+    refetchInterval: (query) => query.state.data?.status === "pending" ? 1_000 : false,
+  })
+  const connected = outcome.data?.status === "connected" && !reported
+  useEffect(() => {
+    if (connected) void queryClient.invalidateQueries({ queryKey: ["mcp-credentials"] })
+  }, [connected, queryClient])
   if (connections.error) return <LoadError what="MCP connections" error={connections.error} retry={() => void connections.refetch()} />
   if (!connections.data) return <RowSkeleton lines={2} />
   const remote = connections.data.credentials.filter((connection) => connection.match)
   const servers = [...new Set(remote.map((connection) => connection.match))]
   const local = connections.data.credentials.filter((connection) => !connection.match)
+  const targetID = outcome.data?.credential_id ?? connection ?? (reported === "expired" ? returning : undefined)
+  const target = remote.find((credential) => credential.id === targetID && credential.kind === "oauth")
+  const reason = reported ?? (outcome.error instanceof ApiError && outcome.error.status === 404 ? "expired" : undefined)
+  const feedback: LoginFeedback | undefined =
+    reason ? { message: callbackMessages[reason], retry: true }
+      : connected ? { message: "Signed in on the mesh." }
+        : outcome.data?.status === "failed" || outcome.error ? { message: "Sign-in didn't complete.", retry: true }
+          : login ? { message: "Finishing sign-in…", pending: true } : undefined
+  function dismissFeedback() {
+    try {
+      sessionStorage.removeItem(returningConnectionKey)
+    } catch {
+      // The row remains addressable through the return URL when storage is off.
+    }
+    void navigate({ replace: true, search: (previous) => ({ ...previous, callback: undefined, oauth_login: undefined, connection: undefined }) })
+  }
   return (
     <Pane title="Connections">
       <div className="flex flex-col gap-(--s6)">
         <Banner>
           Sign in to a remote MCP server once and every machine in this mesh can use it. With more than one login, projects use the default unless you pick another in New session.
         </Banner>
+        {feedback && !target && <Banner tone={feedback.retry ? "warn" : "info"} action={
+          <div className="flex flex-wrap gap-(--s2)">
+            {feedback.retry && <Button size="sm" onClick={() => { dismissFeedback(); setAdding("") }}>Try again</Button>}
+            <Button size="sm" variant="ghost" onClick={dismissFeedback}>{feedback.pending ? "Dismiss" : "Done"}</Button>
+          </div>
+        }>{feedback.message}</Banner>}
         {connections.data.credentials.length === 0 && (
           <Empty title="No connections">Add a server below, or run <code>agentpack mcp login</code>.</Empty>
         )}
-        {servers.map((match) => <ServerGroup key={match} match={match} logins={loginsFor(match, remote)} onAdd={() => setAdding(match)} />)}
+        {servers.map((match) => <ServerGroup key={match} match={match} logins={loginsFor(match, remote)} onAdd={() => setAdding(match)} targetID={target?.id} feedback={feedback} dismissFeedback={dismissFeedback} />)}
         {local.length > 0 && (
           <Section title="Local servers">
             <LoginList>{local.map((connection) => <ConnectionRow key={connection.id} connection={connection} single />)}</LoginList>
           </Section>
         )}
-        <AddConnection key={adding} initialURL={adding} remote={remote} callbackURL={connections.data.callbackURL} />
+        <div><Button onClick={() => setAdding("")}><Plus aria-hidden className="size-3.5" />Add connection…</Button></div>
+        <Sheet open={adding !== undefined} onOpenChange={(open) => !open && setAdding(undefined)}>
+          {adding !== undefined && <AddConnection key={adding} initialURL={adding} remote={remote} callbackURL={connections.data.callbackURL} onDone={() => setAdding(undefined)} />}
+        </Sheet>
         {connections.data.credentials.some((connection) => connection.kind === "oauth") && <RevokeAll />}
       </div>
     </Pane>
@@ -50,7 +122,7 @@ function LoginList({ children }: { children: ReactNode }) {
   return <ul className="overflow-hidden rounded-(--r-pop) border-[0.5px] border-(--sep) bg-(--window)">{children}</ul>
 }
 
-function ServerGroup({ match, logins, onAdd }: { match: string; logins: Connection[]; onAdd: () => void }) {
+function ServerGroup({ match, logins, onAdd, targetID, feedback, dismissFeedback }: { match: string; logins: Connection[]; onAdd: () => void; targetID?: string; feedback?: LoginFeedback; dismissFeedback: () => void }) {
   const name = serverName(match)
   const oauth = logins.some((connection) => connection.kind === "oauth")
   return (
@@ -58,7 +130,9 @@ function ServerGroup({ match, logins, onAdd }: { match: string; logins: Connecti
       title={<>{name}<span className="font-normal text-(--fg3)"> · {new URL(match).host}</span></>}
       action={oauth && <Button size="sm" onClick={onAdd}><Plus aria-hidden className="size-3.5" />Add login…</Button>}
     >
-      <LoginList>{logins.map((connection, index) => <ConnectionRow key={connection.id} connection={connection} single={logins.length === 1} first={index === 0} />)}</LoginList>
+      <LoginList>{logins.map((connection, index) => (
+        <ConnectionRow key={connection.id} connection={connection} single={logins.length === 1} first={index === 0} feedback={targetID === connection.id ? feedback : undefined} dismissFeedback={dismissFeedback} />
+      ))}</LoginList>
       {logins.length > 1 && (
         <p className="mt-(--s2) text-(length:--fs-xs) text-(--fg3)">The first login added is the default. Pick another for a project in New session.</p>
       )}
@@ -66,9 +140,10 @@ function ServerGroup({ match, logins, onAdd }: { match: string; logins: Connecti
   )
 }
 
-function ConnectionRow({ connection, single, first = false }: { connection: Connection; single: boolean; first?: boolean }) {
+function ConnectionRow({ connection, single, first = false, feedback, dismissFeedback }: { connection: Connection; single: boolean; first?: boolean; feedback?: LoginFeedback; dismissFeedback?: () => void }) {
   const queryClient = useQueryClient()
   const [removing, setRemoving] = useState(false)
+  const [revoking, setRevoking] = useState("")
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["mcp-credentials"] })
   const remove = useMutation<unknown, Error, void>({
     mutationFn: () => api(`/api/mcp/credentials/${encodeURIComponent(connection.id)}`, { method: "DELETE" }),
@@ -84,7 +159,7 @@ function ConnectionRow({ connection, single, first = false }: { connection: Conn
     onError: (error, module) => hud.error(`Couldn't revoke ${module}: ${errorText(error)}`, () => revoke.mutate(module)),
   })
   const reconnect = useMutation<void, Error, void>({
-    mutationFn: () => signIn({ url: connection.match, label: connection.label }),
+    mutationFn: () => openConnectionsLogin({ url: connection.match, label: connection.label }, connection.id),
     onError: (error) => hud.error(`Couldn't reconnect ${connection.label}: ${errorText(error)}`, () => reconnect.mutate()),
   })
   const problem = connection.status === "needs_login"
@@ -107,22 +182,35 @@ function ConnectionRow({ connection, single, first = false }: { connection: Conn
             {`${plugins.join(", ")} may use it`}
           </p>
         )}
+        {feedback && <div className="mt-(--s2) flex flex-wrap items-center gap-(--s2) text-(length:--fs-sm)">
+          <span role={feedback.retry ? "alert" : "status"}>{feedback.message}</span>
+          {feedback.retry && <Button size="sm" disabled={reconnect.isPending} onClick={() => reconnect.mutate()}>Try again</Button>}
+          <Button size="sm" variant="ghost" onClick={dismissFeedback}>{feedback.pending ? "Dismiss" : "Done"}</Button>
+        </div>}
       </div>
-      {problem && connection.kind === "oauth" && (
+      {problem && connection.kind === "oauth" && !feedback && (
         <Button size="sm" variant="primary" disabled={reconnect.isPending} onClick={() => reconnect.mutate()}>Reconnect…</Button>
       )}
       <Menu>
-        <MenuTrigger render={<RowMoreButton aria-label={`${connection.label} actions`} className="data-popup-open:opacity-100" />} />
+        <MenuTrigger render={<RowMoreButton aria-label={`${connection.label} actions`} className="opacity-100 data-popup-open:opacity-100" />} />
         <MenuContent align="end">
           {connection.kind === "oauth" && <MenuItem onClick={() => reconnect.mutate()}>Reconnect…</MenuItem>}
           {connection.plugins.length > 0 && <DropdownMenuSeparator className="mx-[11px] my-[5px]" />}
           {connection.plugins.map((module) => (
-            <MenuItem key={module} onClick={() => revoke.mutate(module)}>{`Revoke ${module.split("/").pop()}`}</MenuItem>
+            <MenuItem key={module} onClick={() => setRevoking(module)}>{`Revoke ${module.split("/").pop()}…`}</MenuItem>
           ))}
           <DropdownMenuSeparator className="mx-[11px] my-[5px]" />
           <MenuItem danger onClick={() => setRemoving(true)}>Remove…</MenuItem>
         </MenuContent>
       </Menu>
+      <ConfirmAlert open={Boolean(revoking)} onOpenChange={(open) => !open && setRevoking("")}>
+        {revoking && <ConfirmAlertContent
+          title={`Revoke ${revoking.split("/").pop()}?`}
+          description={`Remove its approval to use ${connection.label} on every machine. You can approve it again the next time a project requests this login.`}
+          destructiveLabel="Revoke approval"
+          onConfirm={() => { revoke.mutate(revoking); setRevoking("") }}
+        />}
+      </ConfirmAlert>
       <ConfirmAlert open={removing} onOpenChange={setRemoving}>
         {removing && <ConfirmAlertContent
           title={connection.match ? `Remove the ${serverName(connection.match)} login “${connection.label}”?` : `Remove “${connection.label}”?`}
@@ -155,14 +243,14 @@ function RevokeAll() {
   })
   return (
     <Section title="Removed a machine?">
-      <div className="flex items-center justify-between gap-(--s6)">
-        <p>A machine that left the mesh keeps the logins it received. Sign out of every login, then reconnect the ones you use. Token headers stay; replace them where they were issued.</p>
+      <div className="flex items-center justify-between gap-(--s6) max-[760px]:flex-wrap">
+        <p>A machine that left the mesh keeps the logins it received. Sign out of your OAuth logins, then reconnect the ones you use. Rotate token headers and variables at their providers.</p>
         <Button variant="destructive" disabled={revoke.isPending} onClick={() => setConfirming(true)}>Sign out of all…</Button>
       </div>
       <ConfirmAlert open={confirming} onOpenChange={setConfirming}>
         {confirming && <ConfirmAlertContent
           title="Sign out of all MCP logins?"
-          description="Every signed-in server is revoked on every machine and must be reconnected before agents can use it. Token headers stay."
+          description="Sign out of this account’s OAuth logins on every machine and revoke their tokens where the provider supports it. Reconnect each login before agents can use it again."
           destructiveLabel="Sign out everywhere"
           onConfirm={() => { setConfirming(false); revoke.mutate() }}
         />}
@@ -173,7 +261,7 @@ function RevokeAll() {
 
 type Method = "oauth" | "header" | "env"
 
-function AddConnection({ callbackURL, initialURL, remote }: { callbackURL: string; initialURL: string; remote: Connection[] }) {
+function AddConnection({ callbackURL, initialURL, remote, onDone }: { callbackURL: string; initialURL: string; remote: Connection[]; onDone: () => void }) {
   const queryClient = useQueryClient()
   const [method, setMethod] = useState<Method>("oauth")
   const [url, setURL] = useState(initialURL)
@@ -186,17 +274,15 @@ function AddConnection({ callbackURL, initialURL, remote }: { callbackURL: strin
   const [variable, setVariable] = useState("")
   const add = useMutation<void, Error, void>({
     mutationFn: async () => {
-      if (method === "oauth") return signIn({ url, label, client_id: clientID, client_secret: clientSecret })
+      if (method === "oauth") return openConnectionsLogin({ url, label, client_id: clientID, client_secret: clientSecret })
       if (method === "env") await api("/api/mcp/credentials", { body: { kind: "env", label, values: { [variable]: value } } })
       else await api("/api/mcp/credentials", { body: { kind: "header", url, label, values: { [header]: value } } })
     },
     onSuccess: () => {
       if (method === "oauth") return
       hud.success(method === "env" ? `Saved ${variable} as ${label}. Local servers use it with credential = "${label}".` : `Saved the ${header} header for every machine.`)
-      setURL("")
-      setLabel("")
-      setValue("")
       void queryClient.invalidateQueries({ queryKey: ["mcp-credentials"] })
+      onDone()
     },
   })
   const taken = loginsFor(url.trim().replace(/\/+$/, ""), remote).map((connection) => connection.label)
@@ -209,27 +295,31 @@ function AddConnection({ callbackURL, initialURL, remote }: { callbackURL: strin
     add.mutate()
   }
   return (
-    <Section title="Add connection">
+    <SheetContent>
+      <SheetTitle>{initialURL ? "Add login" : "Add connection"}</SheetTitle>
+      <SheetDescription>{initialURL ? `Create another sign-in for ${serverName(initialURL)}.` : "Choose how agents on the mesh can use this server."}</SheetDescription>
       <form className="flex flex-col gap-(--s4)" onSubmit={submit}>
-        <SegmentedControl aria-label="Connection method" value={[method]} onValueChange={(values) => {
-          if (values[0] === "oauth" || values[0] === "header" || values[0] === "env") setMethod(values[0])
-        }}>
-          <SegmentedControlItem value="oauth">Sign in</SegmentedControlItem>
-          <SegmentedControlItem value="header">Token header</SegmentedControlItem>
-          <SegmentedControlItem value="env">Variable</SegmentedControlItem>
-        </SegmentedControl>
         <FieldGrid>
+          <Field>
+            <FieldLabel htmlFor="mcp-label">Alias</FieldLabel>
+            <Input id="mcp-label" required={method === "env"} autoFocus={Boolean(initialURL)} maxLength={256}
+              placeholder={method === "env" ? "Name used by local servers" : method === "oauth" && taken.length > 0 ? "e.g. Client workspace" : "Defaults to the host"} value={label} onChange={(event) => setLabel(event.target.value)} />
+          </Field>
+          {initialURL ? <p className="text-(length:--fs-sm) text-(--fg2)">OAuth sign-in</p> : (
+            <SegmentedControl aria-label="Connection method" value={[method]} onValueChange={(values) => {
+              if (values[0] === "oauth" || values[0] === "header" || values[0] === "env") setMethod(values[0])
+            }}>
+              <SegmentedControlItem value="oauth">Sign in</SegmentedControlItem>
+              <SegmentedControlItem value="header">Token header</SegmentedControlItem>
+              <SegmentedControlItem value="env">Variable</SegmentedControlItem>
+            </SegmentedControl>
+          )}
           {method !== "env" && (
             <Field>
               <FieldLabel htmlFor="mcp-url">Server URL</FieldLabel>
-              <Input id="mcp-url" type="url" required placeholder="https://api.githubcopilot.com/mcp/" value={url} onChange={(event) => setURL(event.target.value)} />
+              <Input id="mcp-url" type="url" required readOnly={Boolean(initialURL)} placeholder="https://api.githubcopilot.com/mcp/" value={url} onChange={(event) => setURL(event.target.value)} />
             </Field>
           )}
-          <Field>
-            <FieldLabel htmlFor="mcp-label">Label</FieldLabel>
-            <Input id="mcp-label" required={method === "env"} autoFocus={Boolean(initialURL)}
-              placeholder={method === "env" ? "Servers name it with credential = \"label\"" : method === "oauth" && taken.length > 0 ? "Name this login, e.g. Client workspace" : "Defaults to the host"} value={label} onChange={(event) => setLabel(event.target.value)} />
-          </Field>
           {method === "env" ? (
             <>
               <Field>
@@ -242,10 +332,11 @@ function AddConnection({ callbackURL, initialURL, remote }: { callbackURL: strin
               </Field>
             </>
           ) : method === "oauth" ? (
-            <>
+            <details className="space-y-(--s3) text-(length:--fs-sm)">
+              <summary className="cursor-pointer text-(--fg2)">Advanced OAuth settings</summary>
               <Field>
                 <FieldLabel htmlFor="mcp-client">Client ID</FieldLabel>
-                <Input id="mcp-client" placeholder="Optional; registered automatically when the server allows it" value={clientID} onChange={(event) => setClientID(event.target.value)} />
+                <Input id="mcp-client" placeholder="Optional. Otherwise registered automatically." value={clientID} onChange={(event) => setClientID(event.target.value)} />
               </Field>
               {clientID && (
                 <Field>
@@ -253,7 +344,8 @@ function AddConnection({ callbackURL, initialURL, remote }: { callbackURL: strin
                   <Input id="mcp-client-secret" type="password" autoComplete="off" placeholder="Only for confidential clients" value={clientSecret} onChange={(event) => setClientSecret(event.target.value)} />
                 </Field>
               )}
-            </>
+              {clientID && callbackURL && <p className="break-all text-(--fg2)">Register <code>{callbackURL}</code> as the redirect URL with the OAuth app.</p>}
+            </details>
           ) : (
             <>
               <Field>
@@ -269,13 +361,10 @@ function AddConnection({ callbackURL, initialURL, remote }: { callbackURL: strin
         </FieldGrid>
         {tried && duplicate && <FieldError>{label.trim() ? `A login named ${label.trim()} exists. Choose another name.` : "Name this login so you can tell it apart from the others."}</FieldError>}
         {add.error && <FieldError>{errorText(add.error)}</FieldError>}
-        {method === "oauth" && clientID && (
-          <p className="text-(length:--fs-sm) text-(--fg2)">Register this redirect URL with the OAuth app: <code>{callbackURL}</code></p>
-        )}
-        <div>
-          <Button type="submit" disabled={add.isPending}>{method === "oauth" ? "Sign in…" : "Save"}</Button>
-        </div>
+        <SheetActions>
+          <Button type="submit" variant="primary" disabled={add.isPending}>{add.isPending ? method === "oauth" ? "Opening sign-in…" : "Saving…" : method === "oauth" ? "Sign in…" : "Save"}</Button>
+        </SheetActions>
       </form>
-    </Section>
+    </SheetContent>
   )
 }

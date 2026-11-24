@@ -3,7 +3,7 @@ import { busyStage, type Listed, openRoute, rowText, screen, serve, session, sha
 
 // On phone the session list is hidden while a session is open, so go back to it first.
 async function openFromList(page: Page, name: string) {
-  const back = page.getByRole("link", { name: "Back", exact: true })
+  const back = page.getByRole("link", { name: "Back to Sessions", exact: true })
   if (await back.count()) await back.click()
   await page.getByRole("link", { name: new RegExp(`(^|\\s)${name}(\\s|$)`) }).click()
 }

@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +14,7 @@ import (
 )
 
 // Restore writes the selected definition, runs apply, and restores both original files on any failure.
-func (s *Store) Restore(id, revisionID, directory string, apply func() error) error {
+func (s *Store) Restore(id, revisionID, directory, previewDigest string, apply func() error) error {
 	if err := s.Recover(directory); err != nil {
 		return err
 	}
@@ -55,6 +56,12 @@ func (s *Store) Restore(id, revisionID, directory string, apply func() error) er
 	if err != nil {
 		return err
 	}
+	if previewDigest != "" {
+		old := reviewSnapshot{oldManifest, oldLock, hadManifest, hadLock}
+		if old.digest(directory, "restore:"+id+":"+revisionID) != previewDigest {
+			return ErrPreviewChanged
+		}
+	}
 	journal := restoreJournal{Project: root, Manifest: oldManifest, Lock: oldLock, HadManifest: hadManifest, HadLock: hadLock, ManifestMode: oldManifestMode, LockMode: oldLockMode}
 	transactionPath, err := s.writeJournal(root, journal)
 	if err != nil {
@@ -94,6 +101,39 @@ func (s *Store) Restore(id, revisionID, directory string, apply func() error) er
 	}
 	if err := removeDurable(transactionPath); err != nil {
 		return fmt.Errorf("finish registry restore transaction: %w", err)
+	}
+	return nil
+}
+
+type reviewSnapshot struct {
+	manifest, lock       []byte
+	hadManifest, hadLock bool
+}
+
+func readReviewSnapshot(directory string) (reviewSnapshot, error) {
+	manifest, hadManifest, _, err := readRegularOptional(paths.ManifestPath(directory))
+	if err != nil {
+		return reviewSnapshot{}, err
+	}
+	lock, hadLock, _, err := readRegularOptional(paths.LockPath(directory))
+	return reviewSnapshot{manifest, lock, hadManifest, hadLock}, err
+}
+
+func (s reviewSnapshot) digest(directory, action string) string {
+	input := fmt.Sprintf("%q:%q:%t:%x:%t:%x", directory, action, s.hadManifest, sha256.Sum256(s.manifest), s.hadLock, sha256.Sum256(s.lock))
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(input)))
+}
+
+func CheckInstallPreview(directory, spec, expected string) error {
+	if expected == "" {
+		return nil
+	}
+	current, err := readReviewSnapshot(directory)
+	if err != nil {
+		return err
+	}
+	if current.digest(directory, "install:"+spec) != expected {
+		return ErrPreviewChanged
 	}
 	return nil
 }

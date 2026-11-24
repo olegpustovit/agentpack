@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { LimitSnapshot, LimitWindow } from "@/lib/api-types"
-import { needsLogin, observedAt, paceText, providerGroups, remainingPercent, resetText, runsOutAt, selectReport, untilText, type LimitReport } from "./model"
+import { absoluteResetTime, disagreementSummary, isWindowStale, needsLogin, observedAt, paceText, providerGroups, remainingPercent, resetText, runsOutAt, selectReport, untilText, type LimitReport } from "./model"
 
 const snapshot = (over: Partial<LimitSnapshot>): LimitSnapshot => ({
   harness: "codex",
@@ -14,6 +14,12 @@ const report = (id: string, over: Partial<LimitSnapshot>): LimitReport => ({ id,
 const usableWindow = [window({ remaining_percent: 72 })]
 
 describe("selectReport", () => {
+  it("prefers the freshest usable report over a stale one", () => {
+    const stale = report("atlas", { windows: [window({ remaining_percent: 75 })], observed_at: "2026-10-29T10:00:00Z" })
+    const fresh = report("birch", { windows: [window({ remaining_percent: 4 })], observed_at: "2026-10-30T10:00:00Z" })
+    expect(selectReport([stale, fresh])).toBe(fresh)
+  })
+
   it("prefers a machine with usable windows over the gateway's unsupported report", () => {
     const gateway = report("local", { state: "unsupported", error: "codex CLI not found" })
     const peer = report("peer-1", { state: "available", windows: usableWindow })
@@ -148,5 +154,42 @@ describe("runsOutAt", () => {
 
   it("says nothing without a window length", () => {
     expect(paceText(window({ remaining_percent: 10 }), now)).toEqual({ text: "", warn: false })
+  })
+})
+
+describe("staleness, disagreement, and absolute reset time", () => {
+  const now = Date.parse("2026-10-30T12:00:00Z")
+
+  it("ranks a current report ahead of one whose reset already passed and flags stale windows", () => {
+    const expired = report("atlas", {
+      observed_at: "2026-10-30T11:55:00Z",
+      windows: [window({ id: "w", remaining_percent: 75, reset_at: "2026-10-30T11:50:00Z" })],
+    })
+    const fresh = report("birch", {
+      observed_at: "2026-10-30T11:50:00Z",
+      windows: [window({ id: "w", remaining_percent: 4, reset_at: "2026-10-30T15:00:00Z" })],
+    })
+    expect(selectReport([expired, fresh], now)).toBe(fresh)
+    expect(isWindowStale(expired.snapshot.windows[0]!, Date.parse(expired.snapshot.observed_at), now)).toBe(true)
+    expect(isWindowStale(fresh.snapshot.windows[0]!, Date.parse(fresh.snapshot.observed_at), now)).toBe(false)
+  })
+
+  it("summarizes material disagreement between machines", () => {
+    const stale = report("atlas", {
+      observed_at: "2026-10-29T12:00:00Z",
+      windows: [window({ id: "w", remaining_percent: 75, reset_at: "2026-10-30T15:00:00Z" })],
+    })
+    const fresh = report("birch", {
+      observed_at: "2026-10-30T11:59:00Z",
+      windows: [window({ id: "w", remaining_percent: 4, reset_at: "2026-10-30T15:00:00Z" })],
+    })
+    const [group] = providerGroups([stale, fresh], now)
+    expect(disagreementSummary(group!, now)).toContain("birch reports 4% left")
+    expect(disagreementSummary(group!, now)).toContain("atlas reported 75%")
+  })
+
+  it("formats an absolute reset time only for future resets", () => {
+    expect(absoluteResetTime(window({ reset_at: "2026-10-30T14:30:00Z" }), now)).toMatch(/\d+:\d+/)
+    expect(absoluteResetTime(window({ reset_at: "2026-10-30T11:00:00Z" }), now)).toBe("")
   })
 })

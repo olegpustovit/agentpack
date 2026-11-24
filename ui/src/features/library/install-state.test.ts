@@ -40,7 +40,7 @@ describe("destinationState", () => {
 
   it("disables a project already on this commit", () => {
     const same = target({ project: { packages: [{ module: item.module, commit: item.commit, content_hash: "", cache_key: "", kind: "skill", name: "alpha", url: "", direct: true }] } })
-    expect(destinationState(item, same)).toEqual({ disabled: true, draftReason: "", text: "Installed" })
+    expect(destinationState(item, same)).toEqual({ disabled: true, draftReason: "", text: "Already installed" })
   })
 
   it("saves a draft for an offline machine that has a folder identity", () => {
@@ -122,14 +122,20 @@ describe("canApplyDraft", () => {
     pins_match: true,
     folder_match: true,
     reason: "",
+    diff: { add: [], update: [], remove: [], preview_digest: "sha256:1" },
     ...overrides,
   })
 
-  it("applies only a review that is ready and matches every pin and folder", () => {
+  it("accepts the fresh digest after pins change, if the folder matches", () => {
     expect(canApplyDraft(review({}))).toBe(true)
-    expect(canApplyDraft(review({ pins_match: false, reason: "Pins changed" }))).toBe(false)
+    expect(canApplyDraft(review({ pins_match: false, reason: "Pins changed" }))).toBe(true)
     expect(canApplyDraft(review({ folder_match: false }))).toBe(false)
     expect(canApplyDraft(review({ ready: false }))).toBe(false)
+  })
+
+  it("blocks legacy reviews without a server digest", () => {
+    expect(canApplyDraft(review({ diff: { add: [], update: [], remove: [] } }))).toBe(false)
+    expect(canApplyDraft(review({ diff: undefined }))).toBe(false)
   })
 })
 

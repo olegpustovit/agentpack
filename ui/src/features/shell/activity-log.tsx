@@ -1,8 +1,8 @@
 import type { RefObject } from "react"
-import { CircleAlert, CircleCheck } from "lucide-react"
+import { CircleAlert, CircleCheck, X } from "lucide-react"
 import { Popover, PopoverContent } from "@/components/ui/popover"
 import { Button } from "@/components/ui/button"
-import { dismissActivity, type Activity } from "@/lib/hud"
+import { clearActivity, dismissActivity, type Activity } from "@/lib/hud"
 
 function ago(at: number, now: number) {
   const minutes = Math.round((now - at) / 60_000)
@@ -27,7 +27,7 @@ export default function ActivityLog({
       <PopoverContent anchor={anchor} align="end" className="w-90 gap-0 rounded-(--r-pop) bg-(--raised) p-(--s2) shadow-(--e-pop) ring-0">
         <div className="flex items-center px-(--s3) pt-(--s2) pb-(--s3)">
           <p className="flex-1 text-(length:--fs-sm) font-semibold text-(--fg2)">Activity</p>
-          <Button size="sm" variant="ghost" onClick={() => { for (const item of log) dismissActivity(item.id) }}>Clear</Button>
+          <Button size="sm" variant="ghost" onClick={clearActivity}>Clear</Button>
         </div>
         <ul className="flex max-h-80 flex-col overflow-y-auto">
           {log.map((item) => (
@@ -40,6 +40,9 @@ export default function ActivityLog({
                 <span className="block text-(length:--fs-xs) text-(--fg3)">{ago(item.at, now)}</span>
               </span>
               {item.tone === "failed" && item.retry && <Button size="sm" onClick={() => { dismissActivity(item.id); item.retry?.() }}>Retry</Button>}
+              {item.tone === "failed" && (
+                <Button size="icon" variant="ghost" aria-label={`Dismiss ${item.message}`} onClick={() => dismissActivity(item.id)}><X aria-hidden /></Button>
+              )}
             </li>
           ))}
         </ul>

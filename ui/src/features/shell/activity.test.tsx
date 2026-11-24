@@ -44,3 +44,14 @@ it("keeps failures visible and removes a failed outcome when retried", () => {
   expect(retry).toHaveBeenCalledOnce()
   expect(container.querySelector('[aria-label="Couldn\'t update the machine. Show activity"]')).toBeNull()
 })
+
+it("keeps an unresolved failure ahead of later successful outcomes", () => {
+  act(() => {
+    hud.error("Couldn't update the machine")
+    for (let i = 0; i < 21; i++) hud.success(`Saved project ${i}`)
+  })
+  expect(container.querySelector("button")?.getAttribute("aria-label")).toBe("Couldn't update the machine. Show activity")
+  const dismiss = container.querySelector<HTMLButtonElement>('button[aria-label="Dismiss"]')
+  act(() => dismiss?.click())
+  expect(container.querySelector("button")?.getAttribute("aria-label")).toBe("Saved project 20. Show activity")
+})

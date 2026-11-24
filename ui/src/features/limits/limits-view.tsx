@@ -15,7 +15,7 @@ import { harnessName, plural, relativeTime } from "@/lib/format"
 import { hud, useCopied } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { limitsQuery } from "./queries"
-import { loginCommands, needsLogin, useLimitGroups, observedAt, paceText, remainingPercent, resetText, runsOutAt, tightestWindow, windowsOf, type LimitReport, type ProviderGroup } from "./model"
+import { absoluteResetTime, disagreementSummary, isWindowStale, loginCommands, needsLogin, observedAt, paceText, remainingPercent, resetPassed, resetText, runsOutAt, tightestWindow, useLimitGroups, windowsOf, type LimitReport, type ProviderGroup } from "./model"
 
 const limitsRoute = getRouteApi("/_app/usage/limits")
 
@@ -50,9 +50,11 @@ export function LimitsView() {
   const pending = machines.filter((machine) => queries.byMachine[machine.id]?.pending)
   const outdated = machines.filter((machine) => machine.needsUpdate || queries.byMachine[machine.id]?.needsUpdate)
   const offline = machines.filter((machine) => !machine.online && !outdated.includes(machine) && queries.byMachine[machine.id]?.data)
-  // Newest measurement across machines; 0 when none has data yet. A gateway can answer from its saved copy, so
-  // the fetch time would overstate freshness. The minute tick can lag a fresh fetch, so `now` is clamped below.
-  const latest = Math.max(0, ...machines.map((machine) => {
+  // Newest measurement among chosen reports (falling back to all machines); 0 when none has data yet.
+  const selectedObserved = groups.length > 0
+    ? Math.max(0, ...groups.map((group) => observedAt([group.selected.snapshot], queries.byMachine[group.selected.id]?.updatedAt ?? 0)))
+    : 0
+  const latest = selectedObserved || Math.max(0, ...machines.map((machine) => {
     const entry = queries.byMachine[machine.id]
     return entry?.data ? observedAt(entry.data, entry.updatedAt) : 0
   }))
@@ -103,7 +105,8 @@ function BurnHero({ group, window, now }: { group: ProviderGroup; window: LimitW
   const { selected } = group
   const from = Math.floor(now / 3_600_000) * 3_600_000 - DAY
   const samples = useQuery(usageQuery(from, from + DAY + 2 * 3_600_000)).data?.samples ?? []
-  const used = 100 - (remainingPercent(window) ?? 0)
+  const left = remainingPercent(window) ?? 0
+  const used = 100 - left
   const points = samples
     .filter((sample) => sample.node_id === selected.snapshot.node_id && sample.harness === selected.snapshot.harness && sample.window_id === window.id && sample.used_percent != null)
     // A sample is the hour's last reading; mid-hour, never later than now, is where it most likely fell.
@@ -113,20 +116,27 @@ function BurnHero({ group, window, now }: { group: ProviderGroup; window: LimitW
   const H = 90
   const x = (time: number) => ((time - (now - DAY)) / (DAY + AHEAD)) * W
   const y = (percent: number) => H - (percent / 100) * H
-  const end = runsOutAt(window, now)
+  const observed = observedAt([selected.snapshot], 0)
+  const stale = isWindowStale(window, observed, now)
+  const end = stale ? undefined : runsOutAt(window, now)
   const projected = end === undefined ? undefined : Math.min(end, now + AHEAD)
   const reset = Date.parse(window.reset_at ?? "")
-  const pace = paceText(window, now)
-  const observed = Date.parse(selected.snapshot.observed_at)
+  const rawPace = stale
+    ? { text: resetPassed(window, now) ? "Stale · reset passed" : observed > 0 ? `As of ${relativeTime(new Date(observed), Math.max(now, observed))}` : "Stale", warn: false }
+    : paceText(window, now)
+  const pace = !stale && rawPace.warn ? { ...rawPace, text: `Estimate · ${rawPace.text}` } : rawPace
+  const resetInfo = resetText(window, now)
+  const absoluteReset = absoluteResetTime(window, now)
+  const resetLine = resetInfo.text ? (absoluteReset ? `${resetInfo.text} (${absoluteReset})` : resetInfo.text) : ""
   return (
     <section aria-label="Tightest limit">
       <div className="flex min-w-0 items-center gap-(--s3) text-(length:--fs-sm)">
         <h2 className="min-w-0 flex-1 truncate font-semibold text-(--fg2)">{`${harnessName(group.provider)} · ${window.label}`}</h2>
         {observed > 0 && <span className="shrink-0 text-(--fg3)">{`Reported by ${selected.name} ${relativeTime(new Date(observed), Math.max(now, observed))}`}</span>}
       </div>
-      <p className="mt-(--s3) text-(length:--fs-sm) text-(--fg2)">Used</p>
-      <p className="text-[28px] leading-tight font-semibold tabular-nums">{`${Math.round(used)}%`}</p>
-      <p className={cn("text-(length:--fs-sm) text-(--fg2)", pace.warn && "text-(--warn-word)")}>{[pace.text, resetText(window, now).text].filter(Boolean).join(" · ")}</p>
+      <p className="mt-(--s3) text-(length:--fs-sm) text-(--fg2)">Remaining</p>
+      <p className="text-[28px] leading-tight font-semibold tabular-nums">{`${Math.round(left)}% left`}</p>
+      <p className={cn("text-(length:--fs-sm) text-(--fg2)", pace.warn && "text-(--warn-word)")}>{[pace.text, resetLine].filter(Boolean).join(" · ")}</p>
       <svg viewBox={`0 0 ${W} ${H + 16}`} role="img" aria-label={`${window.label} used over the last day`} className="mt-(--s4) block h-auto w-[min(100%,720px)] overflow-visible">
         {[0, 50, 100].map((percent) => <line key={percent} x1={0} x2={W} y1={y(percent)} y2={y(percent)} stroke="var(--sep-soft)" />)}
         <polyline fill="none" stroke="var(--accent)" strokeWidth={2} strokeLinejoin="round" points={points.map(([time, percent]) => `${x(time)},${y(percent)}`).join(" ")} />
@@ -150,6 +160,8 @@ function BurnHero({ group, window, now }: { group: ProviderGroup; window: LimitW
 function ProviderLimits({ group, now }: { group: ProviderGroup; now: number }) {
   const [open, setOpen] = useState(false)
   const { selected } = group
+  const observed = observedAt([selected.snapshot], 0)
+  const disagreement = disagreementSummary(group, now)
   return (
     <section
       aria-label={harnessName(group.provider)}
@@ -159,20 +171,33 @@ function ProviderLimits({ group, now }: { group: ProviderGroup; now: number }) {
       <header className="flex min-w-0 items-center gap-(--s3)">
         <AgentTile harness={group.provider} state="idle" label={harnessName(group.provider)} />
         <h3 className="font-semibold">{harnessName(group.provider)}</h3>
-        <p className="min-w-0 truncate text-(length:--fs-sm) text-(--fg2)">{[selected.name, selected.snapshot.plan].filter(Boolean).join(" · ")}</p>
+        <p className="min-w-0 truncate text-(length:--fs-sm) text-(--fg2)">
+          {[selected.name, selected.snapshot.plan, observed > 0 ? relativeTime(new Date(observed), Math.max(now, observed)) : undefined].filter(Boolean).join(" · ")}
+        </p>
       </header>
+      {disagreement && <Banner tone="warn">{disagreement}</Banner>}
       <ReportBody report={selected} now={now} />
       {group.others.length > 0 && (
-        <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="self-start rounded-(--r-row) text-(length:--fs-sm) text-(--fg2) hover:text-(--fg)">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          className="inline-flex min-h-11 items-center self-start rounded-(--r-row) py-(--s2) text-(length:--fs-sm) text-(--fg2) hover:text-(--fg)"
+        >
           {`Other machines (${group.others.length})`}
         </button>
       )}
-      {open && group.others.map((report) => (
-        <div key={report.id} className="flex min-w-0 flex-col gap-(--s2) ps-(--s7)">
-          <p className="truncate text-(length:--fs-sm) text-(--fg2)">{[report.name, report.snapshot.plan].filter(Boolean).join(" · ")}</p>
-          <ReportBody report={report} now={now} />
-        </div>
-      ))}
+      {open && group.others.map((report) => {
+        const reportObserved = observedAt([report.snapshot], 0)
+        return (
+          <div key={report.id} className="flex min-w-0 flex-col gap-(--s2) ps-(--s7)">
+            <p className="truncate text-(length:--fs-sm) text-(--fg2)">
+              {[report.name, report.snapshot.plan, reportObserved > 0 ? relativeTime(new Date(reportObserved), Math.max(now, reportObserved)) : undefined].filter(Boolean).join(" · ")}
+            </p>
+            <ReportBody report={report} now={now} />
+          </div>
+        )
+      })}
     </section>
   )
 }
@@ -185,6 +210,9 @@ function ReportBody({ report, now }: { report: LimitReport; now: number }) {
       <div className="flex flex-wrap items-center gap-(--s3)">
         <span className="text-(--fg) font-medium">Signed out</span>
         <span className="text-(length:--fs-sm) text-(--fg2)">{`Limits need a login on ${report.name}.`}</span>
+        <Link to="/machines/$machine" params={{ machine: report.id }} className="text-(length:--fs-sm) text-(--accent) underline-offset-2 hover:underline">
+          {`Sign in on ${report.name}`}
+        </Link>
         {command && <CopyCommand command={command} />}
       </div>
     )
@@ -193,14 +221,26 @@ function ReportBody({ report, now }: { report: LimitReport; now: number }) {
   if (windows.length === 0) {
     return <p className="text-(length:--fs-sm) text-(--fg2)">{snapshot.error || "No usage windows reported by this machine."}</p>
   }
-  return windows.map((window) => <WindowMeter key={window.id} window={window} now={now} />)
+  const observed = observedAt([snapshot], now)
+  return windows.map((window) => <WindowMeter key={window.id} window={window} now={now} observed={observed} source={report.name} />)
 }
 
 // One window: label and what is left, the meter, then the pace and the reset.
-function WindowMeter({ window, now, provider }: { window: LimitWindow; now: number; provider?: string }) {
+function WindowMeter({ window, now, provider, observed = now, source }: { window: LimitWindow; now: number; provider?: string; observed?: number; source?: string }) {
   const left = remainingPercent(window)
   const reset = resetText(window, now)
-  const pace = paceText(window, now)
+  const absoluteReset = absoluteResetTime(window, now)
+  const resetLine = reset.text ? (absoluteReset ? `${reset.text} (${absoluteReset})` : reset.text) : ""
+  // A passed reset or hour-old reading gets its age and no pace projection: extrapolating stale input misleads.
+  const expired = resetPassed(window, now)
+  const stale = isWindowStale(window, observed, now)
+  const rawPace = expired
+    ? { text: "Stale · reset passed", warn: false }
+    : stale
+      ? { text: `As of ${relativeTime(new Date(observed), Math.max(now, observed))}`, warn: false }
+      : paceText(window, now)
+  const pace = !stale && rawPace.warn ? { ...rawPace, text: `Estimate · ${rawPace.text}` } : rawPace
+  const provenance = source && observed > 0 && !stale ? `${source} · ${relativeTime(new Date(observed), Math.max(now, observed))}` : ""
   return (
     <div className="flex min-w-0 flex-col gap-(--s1)">
       <div className="flex min-w-0 items-baseline gap-(--s3)">
@@ -210,9 +250,9 @@ function WindowMeter({ window, now, provider }: { window: LimitWindow; now: numb
         <span className="ms-auto shrink-0 text-(length:--fs-sm) text-(--fg2) tabular-nums">{left === undefined ? "Unknown" : `${Math.round(left)}% left`}</span>
       </div>
       <Meter value={left} label={`${window.label} remaining`} />
-      <div className="flex min-w-0 gap-(--s3) text-(length:--fs-xs) text-(--fg2)">
-        <span className={cn("min-w-0 truncate", pace.warn && "text-(--warn-word)")}>{pace.text}</span>
-        {reset.text && <span className={cn("ms-auto shrink-0", reset.refreshing && "text-(--fg3)")}>{reset.text}</span>}
+      <div className="flex min-w-0 flex-wrap gap-x-(--s3) gap-y-(--s1) text-(length:--fs-xs) text-(--fg2)">
+        <span className={cn("min-w-0 truncate", pace.warn && "text-(--warn-word)")}>{[pace.text, provenance].filter(Boolean).join(" · ")}</span>
+        {resetLine && <span className={cn("ms-auto shrink-0", reset.refreshing && "text-(--fg3)")}>{resetLine}</span>}
       </div>
     </div>
   )
@@ -231,7 +271,7 @@ export function LimitsSummary({ agent }: { agent?: string }) {
         {shown.flatMap((group) =>
           windowsOf(group.selected.snapshot).map((window) => (
             <div key={`${group.provider}:${window.id}`} className="py-(--s3) first:pt-0">
-              <WindowMeter window={window} now={now} provider={group.provider} />
+              <WindowMeter window={window} now={now} provider={group.provider} observed={observedAt([group.selected.snapshot], now)} />
             </div>
           )),
         )}

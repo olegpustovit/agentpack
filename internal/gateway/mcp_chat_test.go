@@ -270,7 +270,7 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 	}
 	// An agent installs packages like a person does.
 	var installed atomic.Pointer[string]
-	h.gateway.options.Install = func(_ context.Context, gotDirectory, spec string, _ bool) error {
+	h.gateway.options.Install = func(_ context.Context, gotDirectory, spec string, _ bool, _ string) error {
 		installed.Store(&spec)
 		if gotDirectory != directory {
 			t.Errorf("install directory %q", gotDirectory)

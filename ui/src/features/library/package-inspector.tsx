@@ -1,22 +1,18 @@
-import { errorText } from "@/lib/api"
 import { getRouteApi } from "@tanstack/react-router"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useState, type ReactNode } from "react"
 import { Puzzle, RefreshCw, Sparkles } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Hash, Inspector, InspectorHead, KeyValue, Section } from "@/components/kit/data"
 import { Banner, Empty } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
 import { plural, relativeTime, shortHash } from "@/lib/format"
-import { projectsQuery } from "@/features/sessions/queries"
 import { useIsPhone } from "@/features/shell/use-is-phone"
-import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { installedIn, packageRecord, packageVersions, type InstalledRow, type VersionRow } from "./inspect"
-import { installPackage } from "./mutations"
 import { Failures, MissingItem } from "./inspector-state"
 import type { PackageItem } from "./model"
 import { useLatest, useLibrary } from "./use-library"
 import { InstallSheet } from "./install-sheet"
+import { UpdateSheet, type UpdateTarget } from "./update-sheet"
 
 const route = getRouteApi("/_app/library/package/$")
 
@@ -45,26 +41,8 @@ export function PackageInspector({ module }: { module: string }) {
   const [picked, setPicked] = useState<{ module: string; commit: string }>()
   const search = route.useSearch()
   const navigate = route.useNavigate()
-  const queryClient = useQueryClient()
   const latest = useLatest(inputs, item?.sources ?? [], Boolean(item))
-  const update = useMutation({
-    mutationFn: async (rows: { row: InstalledRow; commit: string }[]) => {
-      const failed: string[] = []
-      for (const { row, commit } of rows) {
-        try {
-          await installPackage(row.machineId, row.directory, `${row.module}@${commit}`, true)
-          void queryClient.invalidateQueries({ queryKey: projectsQuery(row.machineId).queryKey })
-        } catch (error) {
-          failed.push(`${row.project}: ${errorText(error)}`)
-        }
-      }
-      return { failed, total: rows.length }
-    },
-    onSuccess: ({ failed, total }) => {
-      if (failed.length) hud.error(`Couldn't update ${failed.join("; ")}`)
-      else hud.success(total === 1 ? "Updated 1 project" : `Updated ${total} projects`)
-    },
-  })
+  const [review, setReview] = useState<UpdateTarget[]>([])
   if (!item) {
     return (
       <MissingItem loading={loading} failures={failures} title="Package not found">
@@ -109,8 +87,8 @@ export function PackageInspector({ module }: { module: string }) {
     const target = behind.find((entry) => entry.row.key === row.key)
     if (target) {
       return (
-        <Button size="sm" disabled={!row.online || update.isPending} onClick={() => update.mutate([target])}>
-          {`Update to ${shortHash(target.commit)}`}
+        <Button size="sm" disabled={!row.online} onClick={() => setReview([target])}>
+          {`Update to ${shortHash(target.commit)}…`}
         </Button>
       )
     }
@@ -135,15 +113,22 @@ export function PackageInspector({ module }: { module: string }) {
           Check for updates
         </Button>
         {updatable.length > 0 && (
-          <Button type="button" size="sm" disabled={update.isPending} onClick={() => update.mutate(updatable)}>
-            {`Update ${plural(updatable.length, "project")}`}
+          <Button type="button" size="sm" onClick={() => setReview(updatable)}>
+            {`Update ${plural(updatable.length, "project")}…`}
           </Button>
         )}
         <Button type="button" variant="primary" onClick={() => openInstall(chosen)}>
           Install…
         </Button>
       </InspectorHead>
-      {latest.failed && <Banner tone="warn">Couldn't reach GitHub for the latest version. Showing the versions your machines know.</Banner>}
+      {latest.failed && (
+        <Banner tone="warn" className="col-span-full flex flex-wrap items-center justify-between gap-(--s3)">
+          <span>Couldn't reach GitHub for the latest version. Showing the versions your machines know.</span>
+          <Button type="button" size="sm" disabled={latest.checking} onClick={latest.refetchFailed}>
+            Retry failed
+          </Button>
+        </Banner>
+      )}
       <Section title="Installed in" className="col-span-full">
         {installed.length === 0 ? (
           <Empty title="Not installed yet">No project on any machine pins this package.</Empty>
@@ -236,6 +221,7 @@ export function PackageInspector({ module }: { module: string }) {
           <KeyValue label="Content hash">{record?.content_hash ? <Hash value={record.content_hash} /> : "—"}</KeyValue>
         </dl>
       </Section>
+      <UpdateSheet targets={review} onClose={() => setReview([])} />
       <InstallSheet
         item={{ module: chosen.module, commit: chosen.commit, name: item.name, cache_key: record?.commit === chosen.commit ? record.cache_key : "", content_hash: record?.commit === chosen.commit ? record.content_hash : undefined }}
         open={search.install === "1"}

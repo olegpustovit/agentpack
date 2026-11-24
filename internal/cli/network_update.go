@@ -13,12 +13,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
 // updateGateway installs version with the release installer and restarts the gateway service.
-func (runner Runner) updateGateway(ctx context.Context, version string) error {
+func (runner Runner) updateGateway(ctx context.Context, version string, progress func(gateway.UpdatePhase)) error {
 	client := &http.Client{Timeout: 30 * time.Second}
 	tag := "v" + version
 	executable, err := os.Executable()
@@ -33,6 +34,7 @@ func (runner Runner) updateGateway(ctx context.Context, version string) error {
 	if err != nil {
 		return err
 	}
+	progress(gateway.UpdateDownloading)
 	response, err := client.Do(request)
 	if err != nil {
 		return fmt.Errorf("download the release installer: %w", err)
@@ -65,6 +67,7 @@ func (runner Runner) updateGateway(ctx context.Context, version string) error {
 		}
 	}
 	// Another process must wait for the old gateway to exit before restarting it.
+	progress(gateway.UpdateRestarting)
 	restart := exec.Command(executable, "gateway", "restart-after-update")
 	network.ConfigureDetached(restart)
 	restart.Stdout, restart.Stderr = runner.Stdout, runner.Stderr

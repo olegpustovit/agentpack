@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react"
+import { useRef, useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { GroupHeader } from "@/components/kit/list"
 import { Field, FieldError, FieldLabel, PopupSelect } from "@/components/kit/forms"
@@ -9,12 +9,13 @@ import { Input } from "@/components/ui/input"
 import type { PackageItem } from "@/features/library/model"
 import { packagesQuery } from "@/features/library/queries"
 import { useLibrary } from "@/features/library/use-library"
-import { connectionsQuery, loginsFor, startSignIn, waitForSignIn, type Connection } from "@/features/settings/connections-model"
+import { connectionsQuery, loginsFor, type Connection } from "@/features/settings/connections-model"
 import { api, ApiError, errorText, LOCAL, routeMissing } from "@/lib/api"
 import type { MCPServerInput, ProjectMCP } from "@/lib/api-types"
 import { hud } from "@/lib/hud"
 import type { ListedSession } from "./group"
 import { projectDirectory } from "./git"
+import { ProjectSignInStatus, useProjectSignIn } from "./project-sign-in"
 import { projectsQuery, selectedProjectQuery, sessionsQuery } from "./queries"
 
 const section = "flex flex-col gap-(--s2)"
@@ -65,11 +66,8 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
   const [editingExisting, setEditingExisting] = useState(false)
   const [servers, setServers] = useState<MCPServerInput[]>([])
   const [args, setArgs] = useState("")
-  const [loginError, setLoginError] = useState("")
-  const [connecting, setConnecting] = useState(false)
-  const signInRequest = useRef<AbortController | null>(null)
+  const signIn = useProjectSignIn(() => connections.refetch({ throwOnError: true }))
   const justConnected = useRef(false)
-  useEffect(() => () => signInRequest.current?.abort(), [])
   const editedServer: MCPServerInput | undefined = edit && {
     name: edit.name.trim(),
     ...(edit.command !== undefined
@@ -89,6 +87,8 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
       savedPluginLogins[server.name] = { module: server.module, url: server.url, credential: server.login }
     }
   }
+  const removedServers = removeMCP.filter((name) => !savedServers.some((server) => server.name === name))
+  const enabledChanges = Object.entries(mcpEnabled).filter(([name]) => !removeMCP.includes(name))
   const save = useMutation({
     mutationFn: () => api("/api/projects/settings", {
       machine,
@@ -97,13 +97,11 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
         directory,
         add: [...Object.values(add), ...(spec.trim() ? [spec.trim()] : [])],
         remove,
-        remove_mcp: removeMCP.filter((name) => !savedServers.some((server) => server.name === name)),
+        remove_mcp: removedServers,
         servers: savedServers,
         logins,
         ...(Object.keys(savedPluginLogins).length > 0 && { plugin_logins: savedPluginLogins }),
-        ...(Object.keys(mcpEnabled).length > 0 && {
-          mcp_enabled: Object.fromEntries(Object.entries(mcpEnabled).filter(([name]) => !removeMCP.includes(name))),
-        }),
+        ...(enabledChanges.length > 0 && { mcp_enabled: Object.fromEntries(enabledChanges) }),
       },
     }),
     // A new credential can reach the project's machine just after the browser's OAuth callback.
@@ -121,10 +119,20 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
     },
     onError: () => void refreshProjects(),
   })
-  const busy = save.isPending || connecting
-  const changes = Object.keys(add).length + (spec.trim() ? 1 : 0) + remove.length + removeMCP.length + savedServers.length + Object.keys(logins).length + Object.keys(savedPluginLogins).length + Object.keys(mcpEnabled).length
-  const changed = changes > 0
+  const busy = save.isPending || Boolean(signIn.pending)
   const installed = project?.packages ?? []
+  const loginChange = (name: string, id: string) => `Use ${id ? credentials.find((item) => item.id === id)?.label ?? "the selected login" : "the default login"} for ${name}`
+  const changes = [
+    ...Object.keys(add).map((module) => `Add ${library.items.find((item) => (item.type === "skill" || item.type === "plugin") && item.module === module)?.name || module}`),
+    ...(spec.trim() ? [`Add ${spec.trim()}`] : []),
+    ...remove.map((module) => `Remove ${installed.find((pkg) => pkg.module === module)?.name || module}`),
+    ...removedServers.map((name) => `Remove ${name}`),
+    ...savedServers.map((server) => `${project?.mcp.some((item) => item.name === server.name) ? "Edit" : "Add"} ${server.name || "MCP server"}`),
+    ...enabledChanges.map(([name, enabled]) => `${enabled ? "Enable" : "Disable"} ${name}`),
+    ...Object.entries(logins).map(([url, id]) => loginChange(savedServers.find((server) => server.url === url)?.name ?? project?.mcp.find((server) => server.url === url)?.name ?? url, id)),
+    ...Object.entries(savedPluginLogins).map(([name, login]) => loginChange(name, login.credential)),
+  ]
+  const changed = changes.length > 0
   const editURL = loginURL(edit?.url ?? "")
   const choices = library.items.filter((item): item is PackageItem =>
     (item.type === "skill" || item.type === "plugin") &&
@@ -137,34 +145,6 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
     if (project?.available && changed && !busy) save.mutate()
   }
 
-  async function connect(url: string, label: string, selectLogin: (id: string) => void) {
-    const tab = window.open("about:blank", "_blank")
-    if (!tab) {
-      setLoginError("Allow pop-ups to sign in without losing your edits.")
-      return
-    }
-    tab.opener = null
-    const request = new AbortController()
-    signInRequest.current = request
-    setLoginError("")
-    setConnecting(true)
-    try {
-      const started = await startSignIn({ url, label })
-      request.signal.throwIfAborted()
-      tab.location.href = started.authorize_url
-      const id = await waitForSignIn(started.login, request.signal)
-      await connections.refetch({ throwOnError: true })
-      if (!request.signal.aborted) {
-        justConnected.current = true
-        selectLogin(id)
-      }
-    } catch (error) {
-      if (!request.signal.aborted) setLoginError(errorText(error))
-    }
-    tab.close()
-    if (!request.signal.aborted) setConnecting(false)
-  }
-
   function loginControl(name: string, url: string, server?: ProjectMCP) {
     const pending = pluginLogins[name]
     const plugin = server?.source === "plugin"
@@ -172,7 +152,11 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
     return <ProjectLogin name={name} url={url}
       current={plugin ? pending?.credential ?? server.login : logins[url] ?? server?.login}
       credentials={credentials} plugin={plugin} outdated={outdated}
-      busy={busy} canConnect={connections.isSuccess} connect={connect}
+      busy={busy} canConnect={connections.isSuccess}
+      connect={(name, url, label, onConnected) => signIn.connect(name, url, label, (id) => {
+        justConnected.current = true
+        onConnected(id)
+      })}
       onChange={(value) => {
         if (plugin) {
           const module = server.module
@@ -191,8 +175,10 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
 
   return (
     <form onSubmit={submit} className="contents">
-      <SheetTitle>Project settings</SheetTitle>
-      <SheetDescription className="truncate" title={row.definition_root || directory}>{row.definition_root || directory} · {row.machineName}</SheetDescription>
+      <header className="sticky -top-(--dlg-pad) z-10 -mx-(--dlg-pad) -mt-(--dlg-pad) border-b-[0.5px] border-(--line) bg-(--raised) px-(--dlg-pad) pt-(--dlg-pad) pb-(--s4)">
+        <SheetTitle>Project settings</SheetTitle>
+        <SheetDescription className="wrap-anywhere">{row.machineName} · {directory}</SheetDescription>
+      </header>
       <div className="flex flex-col gap-(--s8)">
         {active.isPending && <p role="status">Loading project…</p>}
         {active.isError && <FieldError>{errorText(active.error)}</FieldError>}
@@ -322,20 +308,22 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
                   </div>
                 </>
               ) : <Button type="button" size="sm" className="mt-(--s3) self-start" disabled={busy} onClick={() => openEditor({ name: "", url: "" }, false)}>Add MCP server…</Button>}
-              {loginError && <FieldError>{loginError}</FieldError>}
-              {connecting && <div className="flex items-center gap-(--s3)">
-                <p role="status" className="text-(--fg2)">Waiting for sign-in…</p>
-                <Button type="button" size="sm" onClick={() => {
-                  signInRequest.current?.abort()
-                  setConnecting(false)
-                }}>Cancel sign-in</Button>
-              </div>}
+              <ProjectSignInStatus signIn={signIn} />
             </section>
           </>
         )}
       </div>
+      {(changed || signIn.pending) && (
+        <section aria-label="Changes" className={section}>
+          <GroupHeader className="px-0">Changes</GroupHeader>
+          <ul className="list-disc ps-(--s6) text-(length:--fs-sm) text-(--fg2)">
+            {changes.map((change, index) => <li className="wrap-anywhere" key={index}>{change}</li>)}
+            {signIn.pending && <li className="wrap-anywhere">Sign in to {signIn.pending.name}</li>}
+          </ul>
+        </section>
+      )}
       {save.error && <FieldError>{routeMissing(save.error) ? `Update Agentpack on ${row.machineName} to save project settings.` : errorText(save.error)}</FieldError>}
-      <SheetActions status={changed ? `${changes} ${changes === 1 ? "change" : "changes"} · agents reload when idle` : "Saved settings reach agents when they are idle"}>
+      <SheetActions status={changed ? `${changes.length} ${changes.length === 1 ? "change" : "changes"} · agents reload when idle` : "Saved settings reach agents when they are idle"}>
         <Button type="submit" variant="primary" disabled={!project?.available || Boolean(project.error) || !changed || busy}>
           {save.isPending ? "Saving…" : "Save"}
         </Button>
@@ -353,7 +341,7 @@ function ProjectLogin({ name, url, current, credentials, plugin, outdated, busy,
   outdated: boolean
   busy: boolean
   canConnect: boolean
-  connect: (url: string, label: string, selectLogin: (id: string) => void) => Promise<void>
+  connect: (name: string, url: string, label: string, selectLogin: (id: string) => void) => Promise<void>
   onChange: (value: string) => void
 }) {
   const logins = loginsFor(url, credentials)
@@ -364,7 +352,7 @@ function ProjectLogin({ name, url, current, credentials, plugin, outdated, busy,
     const labels = new Set(logins.map((login) => login.label.toLowerCase()))
     let label = name
     for (let number = 2; labels.has(label.toLowerCase()); number++) label = `${name} ${number}`
-    void connect(url, active?.label ?? label, onChange)
+    void connect(name, url, active?.label ?? label, onChange)
   }
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-(--s2)">

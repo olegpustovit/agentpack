@@ -5,7 +5,7 @@ export type ConfigOption =
       name: string
       category?: string
       value: string
-      items: { value: string; label: string }[]
+      items: { value: string; label: string; disabledReason?: string }[]
     }
   | {
       type: "boolean"
@@ -49,13 +49,18 @@ function parseOptions(raw: unknown): ConfigOption[] {
       continue
     }
     if (row.type !== "select") continue
-    const items: { value: string; label: string }[] = []
+    const items: Extract<ConfigOption, { type: "select" }>["items"] = []
     if (Array.isArray(row.options)) {
       for (const choice of row.options) {
         const option = record(choice)
         if (!option) continue
         const value = String(option.value ?? option.id ?? "")
-        if (value) items.push({ value, label: String(option.name ?? option.label ?? value) })
+        const disabledReason = typeof option.disabledReason === "string" && option.disabledReason
+          ? option.disabledReason
+          : option.disabled === true || option.available === false
+            ? typeof option.description === "string" ? option.description : "Unavailable for this agent"
+            : undefined
+        if (value) items.push({ value, label: String(option.name ?? option.label ?? value), ...(disabledReason && { disabledReason }) })
       }
     }
     if (items.length > 0) {

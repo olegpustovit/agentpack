@@ -6,7 +6,7 @@ import { createQueryClient } from "@/lib/query-client"
 import { LOCAL } from "@/lib/api"
 import { configQuery } from "@/lib/config"
 import replicated from "@/generated/replicated-tables.json"
-import { EventsProvider, STATE_FAMILIES, stateFamilies, useConversationEvents, useEventsConnected } from "./use-events"
+import { EventsProvider, STATE_FAMILIES, stateFamilies, useConversationEvents, useEventsConnected, usePausedEvents } from "./use-events"
 
 class FakeEventSource {
   static instances: FakeEventSource[] = []
@@ -32,6 +32,7 @@ let calls: string[] = []
 let connected = false
 let hidden = false
 let subscribeToChat: ReturnType<typeof useConversationEvents>
+let paused: ReturnType<typeof usePausedEvents>
 
 const tracked = (queryKey: string[]) => ({
   queryKey,
@@ -43,6 +44,7 @@ const tracked = (queryKey: string[]) => ({
 
 function Probe() {
   connected = useEventsConnected()
+  paused = usePausedEvents()
   subscribeToChat = useConversationEvents()
   useQuery(tracked(["m", "local", "sessions"]))
   useQuery(tracked(["m", "peer-1", "sessions"]))
@@ -130,6 +132,13 @@ describe("event stream", () => {
     expect(calls.sort()).toEqual(["diagnostics/issues", "m/local/sessions", "nodes", "topology"])
   })
 
+  it("invalidates only the affected peer and the local Library when registry state changes", async () => {
+    const keys = [LOCAL, "peer-1", "peer-2"].map((machine) => ["m", machine, "library", "packages"])
+    for (const key of keys) client.setQueryData(key, [])
+    await act(async () => FakeEventSource.instances[0]!.emit({ topic: "state", node: "peer-1", tables: ["registry_objects", "registry_heads"] }))
+    expect(keys.map((key) => client.getQueryState(key)?.isInvalidated)).toEqual([true, true, false])
+  })
+
   it("refreshes the issue list for a diagnostics event", async () => {
     await act(async () => {
       FakeEventSource.instances[0]!.emit({ topic: "diagnostics" })
@@ -157,6 +166,28 @@ describe("event stream", () => {
       await flush()
     })
     expect(calls.sort()).toEqual(["diagnostics/issues", "m/local/projects", "m/local/sessions", "m/local/shells/s1", "m/peer-1/sessions", "nodes", "topology"])
+  })
+
+  it("reports a paused stream and manually reconnects and reconciles once", async () => {
+    const first = FakeEventSource.instances[0]!
+    await act(async () => first.onopen?.())
+    expect(paused).toBeNull()
+    await act(async () => first.onerror?.())
+    expect(paused?.lastReceivedAt).toBeGreaterThan(0)
+    calls = []
+    await act(async () => paused?.reconnect())
+    expect(first.closed).toBe(true)
+    expect(FakeEventSource.instances).toHaveLength(2)
+    const second = FakeEventSource.instances[1]!
+    await act(async () => second.onopen?.())
+    expect(paused).toBeNull()
+    expect(connected).toBe(true)
+    await act(async () => {
+      second.onopen?.()
+      await flush()
+    })
+    expect(calls.filter((call) => call === "m/local/projects")).toHaveLength(1)
+    expect(calls.filter((call) => call === "m/peer-1/sessions")).toHaveLength(1)
   })
 
   it("refreshes restored cache data on the first open", async () => {

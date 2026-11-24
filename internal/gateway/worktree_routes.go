@@ -47,9 +47,8 @@ func gitFailure(w http.ResponseWriter, r *http.Request, status int, err error, e
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-// newSessionWorktree resolves POST /api/sessions' worktree request for a startable main folder:
-// "new" creates one, anything else must be an existing worktree git lists for that folder.
-func (g *Gateway) newSessionWorktree(ctx context.Context, actor session.Actor, main, worktree, name string, carry bool) (string, error) {
+// A selected worktree must be listed by Git for a repository the actor can start in.
+func (g *Gateway) sessionWorktreeFolder(ctx context.Context, actor session.Actor, main, worktree string) (string, error) {
 	if !g.startableDirectory(ctx, actor, main) {
 		return "", errors.New("choose a recent folder from this node")
 	}
@@ -57,14 +56,7 @@ func (g *Gateway) newSessionWorktree(ctx context.Context, actor session.Actor, m
 		return "", errors.New("git is not installed on this machine")
 	}
 	if worktree == "new" {
-		ctx, event := obs.Start(ctx, "gateway", "worktree_create")
-		defer event.End()
-		created, err := createWorktree(ctx, g.options.Home, main, worktreeSlug(name), carry)
-		if err != nil {
-			event.Fail(err)
-			return "", err
-		}
-		return created.Directory, nil
+		return "", nil
 	}
 	// An existing worktree: git must list it for the same repository as main.
 	worktreeTop, root, err := worktreeMain(ctx, g.options.Home, filepath.Clean(worktree))
@@ -84,6 +76,54 @@ func (g *Gateway) newSessionWorktree(ctx context.Context, actor session.Actor, m
 		return "", errNotWorktree
 	}
 	return filepath.Join(root, rel), nil
+}
+
+func (g *Gateway) preflightSessionWorktree(ctx context.Context, actor session.Actor, input chatStartRequest) error {
+	if input.Worktree == "" {
+		return nil
+	}
+	main := filepath.Clean(input.Directory)
+	dir, err := g.sessionWorktreeFolder(ctx, actor, main, input.Worktree)
+	if err != nil {
+		return &sessionWorktreeError{err}
+	}
+	if input.Worktree != "new" {
+		if _, err := network.FolderIdentity(dir); err != nil {
+			return &sessionWorktreeError{errors.New("the selected worktree no longer has this project folder")}
+		}
+		return nil
+	}
+	top, _, _, err := worktreeSource(ctx, main)
+	if err != nil {
+		return &sessionWorktreeError{err}
+	}
+	if input.Carry {
+		unmerged, err := gitLine(ctx, top, "ls-files", "--unmerged")
+		if err != nil {
+			return &sessionWorktreeError{err}
+		}
+		if unmerged != "" {
+			return &sessionWorktreeError{errors.New("resolve conflicts in the main folder before carrying changes to the new worktree")}
+		}
+	}
+	return nil
+}
+
+type sessionWorktreeError struct{ error }
+
+func (g *Gateway) newSessionWorktree(ctx context.Context, actor session.Actor, main, worktree, name string, carry bool) (string, error) {
+	dir, err := g.sessionWorktreeFolder(ctx, actor, main, worktree)
+	if err != nil || worktree != "new" {
+		return dir, err
+	}
+	ctx, event := obs.Start(ctx, "gateway", "worktree_create")
+	defer event.End()
+	created, err := createWorktree(ctx, g.options.Home, main, worktreeSlug(name), carry)
+	if err != nil {
+		event.Fail(err)
+		return "", err
+	}
+	return created.Directory, nil
 }
 
 // definitionRootFor is what a session in a worktree of main uses for packages and modes: the main

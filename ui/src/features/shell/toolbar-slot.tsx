@@ -31,13 +31,13 @@ export function ToolbarTitleTarget() {
   return <div ref={target?.setTitle} className="peer min-w-24 flex-1 empty:hidden" />
 }
 
-// Object title and subtitle. Routes render this instead of a page heading, which would eat pane height.
+// Object title and subtitle: the page's one h1. Routes render this instead of an in-pane heading, which would eat pane height.
 export function ToolbarTitle({ title, subtitle }: { title: string; subtitle?: string }) {
   const target = useContext(ToolbarSlotContext)
   if (!target?.title) return null
   return createPortal(
     <div className="flex min-w-0 flex-col justify-center leading-tight">
-      <span className="truncate text-(length:--fs-lg) font-semibold tracking-[-.01em]">{title}</span>
+      <h1 tabIndex={-1} className="truncate text-(length:--fs-lg) font-semibold tracking-[-.01em]">{title}</h1>
       {subtitle && <span className="truncate text-(length:--fs-xs) text-(--fg2)">{subtitle}</span>}
     </div>,
     target.title,

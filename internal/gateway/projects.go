@@ -87,9 +87,10 @@ func (g *Gateway) serveProjects(w http.ResponseWriter, r *http.Request) {
 
 func (g *Gateway) serveInstallPackage(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Directory string `json:"directory"`
-		Spec      string `json:"spec"`
-		Restart   *bool  `json:"restart"`
+		Directory     string `json:"directory"`
+		Spec          string `json:"spec"`
+		PreviewDigest string `json:"preview_digest"`
+		Restart       *bool  `json:"restart"`
 	}
 	if !network.ReadJSON(w, r, &input) {
 		return
@@ -98,7 +99,11 @@ func (g *Gateway) serveInstallPackage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "choose a recent folder and package", 400)
 		return
 	}
-	if err := g.options.Install(r.Context(), input.Directory, input.Spec, input.Restart == nil || *input.Restart); err != nil {
+	if err := g.options.Install(r.Context(), input.Directory, input.Spec, input.Restart == nil || *input.Restart, input.PreviewDigest); err != nil {
+		if errors.Is(err, registry.ErrPreviewChanged) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		fail(w, r, err)
 		return
 	}

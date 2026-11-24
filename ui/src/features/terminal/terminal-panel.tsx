@@ -1,5 +1,5 @@
 import "@xterm/xterm/css/xterm.css"
-import { useEffect, useRef, useState, useSyncExternalStore } from "react"
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react"
 import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { ChevronDown, Maximize2, Minimize2, Plus, SquareTerminal, X } from "lucide-react"
@@ -49,6 +49,7 @@ export default function TerminalPanel({ chat, machine, machineName, phone, offli
   const navigate = useNavigate()
   const { queryKey } = chatShellsQuery(machine, chat.id)
   const [selected, setSelected] = useState<string>()
+  const tabsId = useId()
   const [confirm, setConfirm] = useState<SessionInfo>()
   const [height, setHeight] = useState(readHeight)
   const [maximized, setMaximized] = useState(false)
@@ -59,6 +60,25 @@ export default function TerminalPanel({ chat, machine, machineName, phone, offli
   const [view, setView] = useState<{ id: string; terminal: TerminalSession }>()
   const terminal = view && view.id === active?.id ? view.terminal : undefined
   const worktree = Boolean(chat.worktree_of)
+  const tabId = (id: string) => `${tabsId}-tab-${id}`
+  const panelId = (id: string) => `${tabsId}-panel-${id}`
+
+  function moveTab(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+    let next: number
+    switch (event.key) {
+      case "ArrowLeft": next = (index + rows.length - 1) % rows.length; break
+      case "ArrowRight": next = (index + 1) % rows.length; break
+      case "Home": next = 0; break
+      case "End": next = rows.length - 1; break
+      default: return
+    }
+    const target = rows[next]
+    if (!target) return
+    event.preventDefault()
+    setSelected(target.id)
+    document.getElementById(tabId(target.id))?.focus()
+  }
 
   const start = useMutation({
     mutationFn: (place: Place) => api<SessionInfo>("/api/sessions", { machine, body: { transport: "shell", parent_id: chat.id, place } }),
@@ -80,6 +100,14 @@ export default function TerminalPanel({ chat, machine, machineName, phone, offli
       } else {
         terminalPool.dispose(machine, shell.id)
         if (rows.length === 1 && open) onHide()
+        else if (shell.id === active?.id) {
+          const index = rows.findIndex((row) => row.id === shell.id)
+          const neighbor = rows[index + 1] ?? rows[index - 1]
+          if (neighbor) {
+            setSelected(neighbor.id)
+            document.getElementById(tabId(neighbor.id))?.focus()
+          }
+        }
       }
     },
   })
@@ -108,9 +136,10 @@ export default function TerminalPanel({ chat, machine, machineName, phone, offli
   }, [machine, activeId, open])
 
   function close(shell: SessionInfo) {
-    // A detached socket still receives worker state. If this browser never attached, confirm.
+    // Prefer the worker's report. Older peers may have no command state for a detached terminal.
     const snapshot = terminalPool.peek(machine, shell.id)?.getSnapshot()
-    if (snapshot?.shellCommand !== "idle" || snapshot.busy) setConfirm(shell)
+    const command = snapshot?.shellCommand ?? shell.state.shell_command
+    if (command !== "idle" || snapshot?.busy) setConfirm(shell)
     else finish.mutate({ shell, promote: false })
   }
 
@@ -126,11 +155,12 @@ export default function TerminalPanel({ chat, machine, machineName, phone, offli
   const error = start.error ?? finish.error ?? shells.error
   const body = (
     <>
-      <header className="flex h-[30px] shrink-0 items-center gap-(--s2) border-b-[0.5px] border-(--sep) bg-(--chrome) ps-(--s4) pe-(--s3)">
+      <header className="flex min-h-[30px] shrink-0 items-center gap-(--s2) border-b-[0.5px] border-(--sep) bg-(--chrome) ps-(--s4) pe-(--s3)">
         <div role="tablist" aria-label="Terminals" className="flex min-w-0 items-center gap-px overflow-x-auto rounded-(--r-ctl)">
-          {rows.map((shell) => (
-            <ShellTab key={shell.id} shell={shell} machine={machine} terminal={shell.id === active?.id ? terminal : undefined} active={shell.id === active?.id} offline={offline || finish.isPending}
-              select={() => { setSelected(shell.id); terminalPool.focus(machine, shell.id) }} close={() => close(shell)} />
+          {rows.map((shell, index) => (
+            <ShellTab key={shell.id} shell={shell} machine={machine} machineName={machineName} id={tabId(shell.id)} panel={panelId(shell.id)}
+              terminal={shell.id === active?.id ? terminal : undefined} active={shell.id === active?.id} offline={offline || finish.isPending}
+              select={() => setSelected(shell.id)} close={() => close(shell)} move={(event) => moveTab(event, index)} />
           ))}
         </div>
         <Menu>
@@ -154,9 +184,6 @@ export default function TerminalPanel({ chat, machine, machineName, phone, offli
           </MenuContent>
         </Menu>
         <span className="flex-1" />
-        {active && <span className="min-w-0 truncate text-(length:--fs-xs) text-(--fg2)">
-          {active.worktree_of ? `Worktree ${shellName(active)}` : active.title === "Home" ? "Home" : active.directory} · {machineName}
-        </span>}
         {!phone && <button type="button" className={control} aria-label={maximized ? "Restore terminal" : "Maximize terminal"} title={maximized ? "Restore terminal" : "Maximize terminal"}
           onClick={() => { setMaximized(!maximized); terminal?.focus() }}>{maximized ? <Minimize2 /> : <Maximize2 />}</button>}
         <button type="button" className={control} aria-label="Hide terminal" title="Hide terminal (⌘J)" onClick={onHide}><ChevronDown /></button>
@@ -167,13 +194,21 @@ export default function TerminalPanel({ chat, machine, machineName, phone, offli
     </>
   )
 
-  const screen = active && terminal && (
-    <PanelScreen key={active.id} terminal={terminal} visible={open} onExit={() => {
-      client.setQueryData<SessionInfo[]>(queryKey, (current) => current?.filter((row) => row.id !== active.id) ?? [])
-      terminalPool.dispose(machine, active.id)
-      if (rows.length === 1 && open) onHide()
-    }} />
-  )
+  const screens = rows.map((shell) => {
+    const selected = shell.id === active?.id
+    return (
+      <div key={shell.id} id={panelId(shell.id)} role="tabpanel" aria-labelledby={tabId(shell.id)} hidden={!selected}
+        className="flex min-h-0 flex-1 flex-col [&[hidden]]:hidden">
+        {selected && terminal && (
+          <PanelScreen terminal={terminal} visible={open} phone={phone} location={`${machineName} · ${shell.directory}`} shellCommand={shell.state.shell_command} onExit={() => {
+            client.setQueryData<SessionInfo[]>(queryKey, (current) => current?.filter((row) => row.id !== shell.id) ?? [])
+            terminalPool.dispose(machine, shell.id)
+            if (rows.length === 1 && open) onHide()
+          }} />
+        )}
+      </div>
+    )
+  })
 
   return (
     <>
@@ -182,7 +217,7 @@ export default function TerminalPanel({ chat, machine, machineName, phone, offli
           <SheetContent finalFocus={false} className="flex h-[60dvh] max-h-[85dvh] flex-col gap-0 overflow-hidden bg-(--terminal-bg) p-0">
             <SheetTitle className="sr-only">Terminal</SheetTitle>
             {body}
-            {screen}
+            {screens}
           </SheetContent>
         </Sheet>
       ) : (
@@ -211,7 +246,7 @@ export default function TerminalPanel({ chat, machine, machineName, phone, offli
               }
             }} />}
           {body}
-          {screen}
+          {screens}
         </section>
       )}
       <ConfirmAlert open={!!confirm} onOpenChange={(next) => !next && setConfirm(undefined)}>
@@ -226,24 +261,27 @@ export default function TerminalPanel({ chat, machine, machineName, phone, offli
   )
 }
 
-function ShellTab({ shell, machine, terminal: selectedTerminal, active, offline, select, close }: {
-  shell: SessionInfo; machine: string; terminal?: TerminalSession; active: boolean; offline: boolean; select: () => void; close: () => void
+function ShellTab({ shell, machine, machineName, id, panel, terminal: selectedTerminal, active, offline, select, close, move }: {
+  shell: SessionInfo; machine: string; machineName: string; id: string; panel: string; terminal?: TerminalSession; active: boolean; offline: boolean; select: () => void; close: () => void; move: (event: KeyboardEvent<HTMLButtonElement>) => void
 }) {
   const terminal = selectedTerminal ?? terminalPool.peek(machine, shell.id)
   const snapshot = useSyncExternalStore(terminal?.subscribe ?? idleSubscribe, terminal?.getSnapshot ?? emptySnapshot)
   const name = shellName(shell)
+  const running = (snapshot?.shellCommand ?? shell.state.shell_command) === "running"
   return (
-    <div className={cn("group flex h-(--ctl-h-sm) max-w-55 shrink-0 items-center rounded-(--r-row) pe-(--s2) text-(length:--fs-sm) text-(--fg2) hover:bg-(--hover)",
+    <div role="presentation" className={cn("group flex h-(--ctl-h-sm) max-w-55 shrink-0 items-center rounded-(--r-row) pe-(--s2) text-(length:--fs-sm) text-(--fg2) hover:bg-(--hover)",
       active && "bg-(--control) text-(--fg) shadow-(--shadow-ctl)")}>
-      <button type="button" role="tab" aria-selected={active} title={shell.directory} onClick={select}
+      <button type="button" role="tab" id={id} aria-selected={active} aria-controls={panel} tabIndex={active ? 0 : -1}
+        aria-description={`${machineName} · ${shell.directory}${running ? " · Running command" : ""}`}
+        title={`${machineName} · ${shell.directory}`} onClick={select} onKeyDown={move}
         className="flex min-w-0 items-center gap-(--s2) whitespace-nowrap ps-(--s3)">
         <SquareTerminal className="size-[13px] shrink-0 opacity-75" aria-hidden /><span className="truncate">{name}</span>
-        {snapshot?.shellCommand === "running" ? <span className="size-[6px] shrink-0 rounded-full bg-(--ok)" title="Running command" />
+        {running ? <span className="size-[6px] shrink-0 rounded-full bg-(--ok)" title="Running command" />
           : shell.worktree_of && <span className="text-(--fg3)">· worktree</span>}
       </button>
-      <button type="button" aria-label={`Close ${name} terminal`} disabled={offline} onClick={close}
-        className={cn("ms-(--s2) grid size-(--s4) shrink-0 place-items-center rounded-(--r-row) text-(--fg3) hover:bg-(--press) hover:text-(--fg) disabled:opacity-35",
-          !active && "opacity-0 focus-visible:opacity-100 group-hover:opacity-100")}><X className="size-2.5" aria-hidden /></button>
+      <button type="button" aria-label={`Close ${name} terminal`} title={`Close ${machineName} · ${shell.directory}`} tabIndex={active ? 0 : -1} disabled={offline} onClick={close}
+        className={cn("grid min-h-(--ctl-h-sm) min-w-(--ctl-h-sm) shrink-0 place-items-center rounded-(--r-row) text-(--fg3) hover:bg-(--press) hover:text-(--fg) disabled:opacity-35",
+          !active && "opacity-0 focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100")}><X className="size-3" aria-hidden /></button>
     </div>
   )
 }
@@ -251,20 +289,25 @@ function ShellTab({ shell, machine, terminal: selectedTerminal, active, offline,
 const idleSubscribe = () => () => {}
 const emptySnapshot = () => undefined
 
-function PanelScreen({ terminal, visible, onExit }: { terminal: TerminalSession; visible: boolean; onExit: () => void }) {
+function PanelScreen({ terminal, visible, phone, location, shellCommand, onExit }: { terminal: TerminalSession; visible: boolean; phone: boolean; location: string; shellCommand: SessionInfo["state"]["shell_command"]; onExit: () => void }) {
   const stage = useRef<HTMLDivElement>(null)
   const snapshot = useSyncExternalStore(terminal.subscribe, terminal.getSnapshot)
   useEffect(() => {
     const element = stage.current
     if (!visible || !element) return
-    terminal.attach(element, true)
+    terminal.attach(element, { panel: true, focus: !phone && !document.activeElement?.matches("[role=tab]") })
     return () => terminal.detach(element)
-  }, [terminal, visible])
+  }, [terminal, visible, phone])
   useEffect(() => {
     if (snapshot.ended) onExit()
   }, [snapshot.ended, onExit])
   return (
     <>
+      <div className="flex shrink-0 items-center gap-(--s3) bg-(--chrome) px-(--s4) py-(--s1) text-(length:--fs-xs) text-(--fg2)">
+        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{location}</span>
+        {(snapshot.shellCommand ?? shellCommand) === "running" && <span role="status" className="shrink-0">Running command</span>}
+        {phone && <button type="button" className="h-(--ctl-h-sm) rounded-(--r-ctl) px-(--s2) hover:bg-(--hover) disabled:opacity-50" disabled={!snapshot.canType} onClick={() => terminal.focus()}>Keyboard</button>}
+      </div>
       {snapshot.banner && <Banner>{snapshot.banner}</Banner>}
       <TerminalScreen stageRef={stage} busy={snapshot.busy} terminal={terminal} />
     </>

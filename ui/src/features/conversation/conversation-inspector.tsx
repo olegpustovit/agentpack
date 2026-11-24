@@ -4,7 +4,7 @@ import { Section } from "@/components/kit/data"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { useSessionCommands } from "@/features/sessions/actions"
-import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
+import { ConfirmAlert, ConfirmAlertContent, Sheet, SheetContent, SheetTitle } from "@/components/kit/overlays"
 import { api, errorText } from "@/lib/api"
 import type { GoalState, SessionInfo } from "@/lib/api-types"
 import { clock, goalElapsedMs, goalStateWords } from "@/lib/goal"
@@ -16,8 +16,9 @@ import { cn } from "@/lib/utils"
 import type { ThreadState } from "./model"
 import type { GoalAction } from "./goal-sheet"
 import { subagentRunning, subagentStats } from "./subagent-card"
-import { fileLabel, groupByPath, listDiffChanges, reviewPrompt, type ReviewComment } from "./diff-summary"
+import { groupByPath, listDiffChanges, reviewPrompt, type ReviewComment } from "./diff-summary"
 import { projectDirectory } from "@/features/sessions/git"
+import { ChatConfigControls, type useChatConfig } from "./chat-config"
 
 const ToolDiffBody = lazy(() => import("./tool-diff").then((module) => ({ default: module.ToolDiffBody })))
 
@@ -53,6 +54,8 @@ export function ConversationInspector({
   onOpenSubagent,
   onSendComments,
   sendingComments,
+  branch,
+  chatConfig,
   git,
 }: {
   thread: ThreadState
@@ -71,6 +74,8 @@ export function ConversationInspector({
   onOpenSubagent?: (id: string) => void
   onSendComments?: (text: string, sent: () => void) => void
   sendingComments?: boolean
+  branch?: string
+  chatConfig?: ReturnType<typeof useChatConfig>
   /** Worktree and Pull request sections, shown above Session. */
   git?: ReactNode
 }) {
@@ -91,13 +96,14 @@ export function ConversationInspector({
     sessionCapabilities?.fork !== undefined && sessionCapabilities.fork !== null
   const all = listDiffChanges(thread.items)
   const [scope, setScope] = useState<"turn" | "all">("turn")
-  const [confirming, setConfirming] = useState(false)
-  const [revertError, setRevertError] = useState<string>()
+  const [confirming, setConfirming] = useState<{ turn: number; paths: string[] }>()
+  const [revertError, setRevertError] = useState<{ turn: number; message: string }>()
   const lastTurn = Math.max(0, ...all.map((c) => c.turn))
   const scoped = scope === "turn" ? all.filter((c) => c.turn === lastTurn) : all
   const changes = groupByPath(scoped)
   // The selected file's edits in scope; switching scope away from it closes the review.
   const [selected, setSelected] = useState<string>()
+  const [quickLook, setQuickLook] = useState(false)
   const selectedBlocks = scoped.filter((c) => c.path === selected).map((c) => c.block)
   const reviewing = selectedBlocks.length > 0
   // Drafts are pane state: the pane is keyed by session, so they never leak between sessions.
@@ -159,7 +165,7 @@ export function ConversationInspector({
   return (
     <aside
       data-slot="conversation-inspector"
-      aria-label="Session details"
+      aria-label="Chat details"
       hidden={!open}
       className={cn(
         "shrink-0 flex-col overflow-auto border-l-[0.5px] border-(--sep) bg-(--page) w-(--inspector-w) p-0",
@@ -171,6 +177,12 @@ export function ConversationInspector({
       {/* Xcode-style inspector: dividers run the full width between sections, never above the first one,
           and every section carries the same inset, so the column reads as one ruled list. */}
       <div id="conversation-inspector-content" className="flex min-w-0 flex-col text-(length:--fs-sm) [&>*]:px-(--s5) [&>section]:py-(--s5) [&>section:first-of-type]:border-t-0 [&>section:first-of-type]:pt-(--s6)">
+        {(chatConfig?.modelOption || chatConfig?.effortOption) && (
+          <Section title="Model and effort">
+            <ChatConfigControls config={chatConfig} harness={info?.harness} starting={info?.conversation_state === "starting"}
+              needsYou={thread.needs_you} needsUpdate={Boolean(readOnly)} controls="model" />
+          </Section>
+        )}
         {thread.context_limit !== undefined && thread.context_tokens !== undefined && (
           <Section title="Context">
             <div role="meter" aria-label="Context used" aria-valuemin={0} aria-valuemax={thread.context_limit} aria-valuenow={thread.context_tokens} className="mb-(--s4) h-1.5 overflow-hidden rounded-full bg-(--track)">
@@ -237,14 +249,14 @@ export function ConversationInspector({
         {all.length > 0 && (
           <Section title="Changes">
             <div className="flex flex-col gap-(--s3)">
+              {branch && <p className="text-(--fg2) [overflow-wrap:anywhere]">Branch {branch}</p>}
+              <h3 className="text-(length:--fs-xs) font-semibold text-(--fg2)">Review</h3>
               <SegmentedControl aria-label="Changes scope" value={[scope]} onValueChange={(v) => v[0] && setScope(v[0] as "turn" | "all")}>
                 <SegmentedControlItem value="turn">{lastTurn > 0 ? `Turn ${lastTurn}` : "Latest"}</SegmentedControlItem>
                 <SegmentedControlItem value="all">All</SegmentedControlItem>
               </SegmentedControl>
               <ul className="-mx-(--s2) flex flex-col">
-                {changes.map((change) => {
-                  const { name, folder } = fileLabel(change.path, info?.directory)
-                  return (
+                {changes.map((change) => (
                     <li key={change.path}>
                       <button
                         type="button"
@@ -263,22 +275,19 @@ export function ConversationInspector({
                         }}
                       >
                         <FileCode2 aria-hidden className="size-(--s4) shrink-0 text-(--fg3)" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate">{name}</span>
-                          {folder && <span className="block truncate text-(length:--fs-xs) text-(--fg3)">{folder}</span>}
-                        </span>
+                        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{change.path}</span>
                         <span className="shrink-0 text-(length:--fs-xs) tabular-nums">
                           <span className="text-(--ok-word)">+{change.add}</span> <span className="text-(--danger-word)">−{change.del}</span>
                         </span>
                       </button>
                     </li>
-                  )
-                })}
+                ))}
               </ul>
               {reviewing && (
                 // shortcut: line numbers count from the start of each edit, because ACP diffs carry no file offset;
                 // switch to file lines once the gateway records where each edit starts.
                 <div data-slot="inspector-diff">
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setQuickLook(true)}>Quick Look</Button>
                   <Suspense>
                     <ToolDiffBody
                       content={selectedBlocks}
@@ -294,6 +303,15 @@ export function ConversationInspector({
                   </Suspense>
                 </div>
               )}
+              <Sheet open={quickLook && reviewing} onOpenChange={setQuickLook}>
+                {quickLook && reviewing && (
+                  <SheetContent className="w-[min(88vw,800px)]">
+                    <SheetTitle>Quick Look</SheetTitle>
+                    <p className="text-(length:--fs-sm) text-(--fg2) [overflow-wrap:anywhere]">{selected}</p>
+                    <Suspense><ToolDiffBody content={selectedBlocks} /></Suspense>
+                  </SheetContent>
+                )}
+              </Sheet>
               {comments.length > 0 && (
                 <div className="flex justify-end">
                   <Button
@@ -309,23 +327,31 @@ export function ConversationInspector({
               )}
               {scope === "turn" && lastTurn > 0 && sessionId && (
                 <>
-                  <Button type="button" size="sm" className="self-start" disabled={readOnly} onClick={() => setConfirming(true)}>
+                  <h3 className="text-(length:--fs-xs) font-semibold text-(--fg2)">Write</h3>
+                  <Button type="button" size="sm" className="self-start" disabled={readOnly} onClick={() => setConfirming({ turn: lastTurn, paths: changes.map((change) => change.path) })}>
                     Revert turn {lastTurn}…
                   </Button>
-                  {revertError && <p role="alert" className="text-(length:--fs-sm) text-(--danger-word)">{revertError}</p>}
-                  <ConfirmAlert open={confirming} onOpenChange={setConfirming}>
+                  {revertError?.turn === lastTurn && <p role="alert" className="text-(length:--fs-sm) text-(--danger-word)">{revertError.message} Open the file diff to review the changes.</p>}
+                  <ConfirmAlert open={!!confirming} onOpenChange={(open) => !open && setConfirming(undefined)}>
                     {confirming && (
                       <ConfirmAlertContent
-                        title={`Revert turn ${lastTurn}?`}
-                        description="Restores the files this turn changed. Refused if any of them changed since."
+                        title={`Revert turn ${confirming.turn}?`}
+                        description={(
+                          <>
+                            Restores these files. If they changed since this turn, review the diff before trying again.
+                            <span className="mt-(--s2) block max-h-[25dvh] overflow-auto text-left [overflow-wrap:anywhere]">
+                              {confirming.paths.map((path) => <span key={path} className="block">{path}</span>)}
+                            </span>
+                          </>
+                        )}
                         destructiveLabel="Revert"
                         onConfirm={() => {
-                          setConfirming(false)
+                          setConfirming(undefined)
                           setRevertError(undefined)
-                          api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/revert`, { machine, method: "POST", body: { turn: lastTurn } }).then(
-                            () => hud.success(`Reverted turn ${lastTurn}`),
+                          api(`/api/sessions/${encodeURIComponent(sessionId)}/conversation/revert`, { machine, method: "POST", body: { turn: confirming.turn } }).then(
+                            () => hud.success(`Reverted turn ${confirming.turn}`),
                             (error: unknown) =>
-                              setRevertError(errorText(error, "Couldn't revert this turn.")),
+                              setRevertError({ turn: confirming.turn, message: errorText(error, "Couldn't revert this turn.") }),
                           )
                         }}
                       />

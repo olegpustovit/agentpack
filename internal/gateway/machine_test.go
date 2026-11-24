@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -86,6 +87,45 @@ func TestLatestReleaseIsCachedAndValidated(t *testing.T) {
 	if version, status, err := g.updateTarget(t.Context()); version != "0.10.1-dev.10" || status != http.StatusOK || err != nil {
 		t.Fatalf("mesh target %q status %d error %v", version, status, err)
 	}
+	t.Run("reports update progress for the requested version", func(t *testing.T) {
+		downloading := make(chan struct{})
+		advance := make(chan struct{})
+		restarting := make(chan struct{})
+		finish := make(chan struct{})
+		defer func() {
+			close(advance)
+			close(finish)
+			g.operations.Wait()
+		}()
+		g.options.Update = func(_ context.Context, _ string, progress func(UpdatePhase)) error {
+			progress(UpdateDownloading)
+			close(downloading)
+			<-advance
+			progress(UpdateRestarting)
+			close(restarting)
+			<-finish
+			return nil
+		}
+		post := httptest.NewRecorder()
+		g.serveGatewayUpdate(post, httptest.NewRequest(http.MethodPost, "/api/node/update", nil))
+		if post.Code != http.StatusOK {
+			t.Fatalf("start: %d", post.Code)
+		}
+		assertPhase := func(phase UpdatePhase) {
+			t.Helper()
+			get := httptest.NewRecorder()
+			g.serveUpdateStatus(get, httptest.NewRequest(http.MethodGet, "/api/node/update", nil))
+			var status gatewayUpdateStatus
+			if err := json.Unmarshal(get.Body.Bytes(), &status); err != nil || status.State != "running" || status.Version != "0.10.1-dev.10" || status.Phase != phase {
+				t.Fatalf("status: %+v, %v", status, err)
+			}
+		}
+		<-downloading
+		assertPhase(UpdateDownloading)
+		advance <- struct{}{}
+		<-restarting
+		assertPhase(UpdateRestarting)
+	})
 
 	reset()
 	tag = "v1.2.3; rm -rf /"

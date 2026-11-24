@@ -1,20 +1,23 @@
 import { useQuery } from "@tanstack/react-query"
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, Link } from "@tanstack/react-router"
 import { Activity, useEffect, useState } from "react"
 import { search } from "@/lib/search"
 import { conversationEventsQuery } from "@/features/conversation/queries"
 import { useEventsConnected } from "@/features/events/use-events"
-import { useMachines } from "@/features/machines/queries"
-import { sessionDetail, sessionLabel } from "@/features/sessions/group"
-import { sessionsQuery } from "@/features/sessions/queries"
+import { identityQuery, useMachines } from "@/features/machines/queries"
+import { lastActivity, rowKey, sessionDetail, sessionLabel } from "@/features/sessions/group"
+import { sessionRowQuery, sessionsQuery } from "@/features/sessions/queries"
+import { markSeen } from "@/features/sessions/session-status"
 import { useStartSession } from "@/features/sessions/start"
 import { viewSwitchNeedsResume } from "@/features/sessions/view-switch"
 import { rememberSession } from "@/features/shell/views"
-import { unavailableMessage, UnavailableTerminal } from "@/features/terminal/unavailable"
-import { api, LOCAL } from "@/lib/api"
+import { ToolbarTitle } from "@/features/shell/toolbar-slot"
+import { unavailableMessage } from "@/features/terminal/unavailable"
+import { ApiError, LOCAL, routeMissing } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
-import { Spinner } from "@/components/kit/feedback"
-import { Button } from "@/components/ui/button"
+import { Empty, Spinner } from "@/components/kit/feedback"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { relativeTime } from "@/lib/format"
 
 // Loaded on demand so xterm and the conversation UI stay out of the initial bundle. Not
 // React.lazy: React holds a Suspense reveal for ~300 ms, which every session open paid.
@@ -77,28 +80,31 @@ function SessionRoute() {
   const live = useEventsConnected()
   const machines = useMachines()
   const host = machines.find((item) => item.id === machine)
-  const { data } = useQuery(sessionsQuery(live))
-  const listedInfo = data?.find((session) => session.id === sessionId)
+  const identity = useQuery(identityQuery).data
+  const sessions = useQuery(sessionsQuery(live))
+  const { data } = sessions
+  const listedInfo = data?.find((session) =>
+    session.id === sessionId && (session.node_id && session.node_id !== identity?.node.id ? session.node_id : LOCAL) === machine)
   const detail = useQuery({
-    queryKey: ["m", LOCAL, "session-row", machine, sessionId],
-    queryFn: async () => {
-      const row = await api<SessionInfo>(`/api/sessions/${encodeURIComponent(sessionId)}`, { machine })
-      return row?.id === sessionId && row.state ? row : null
-    },
-    enabled: data !== undefined && !listedInfo,
-    staleTime: 15_000,
-    retry: false,
+    ...sessionRowQuery(machine, sessionId),
+    enabled: !sessions.isPending && !listedInfo,
   })
   const info = listedInfo ?? detail.data ?? undefined
-  const loading = !info && (!data || detail.isPending)
+  const loading = !info && (sessions.isPending || detail.isPending)
   const stale = info?.reachable === false || host?.online === false
   const message = unavailableMessage(info, stale)
-  const { q, group, sub } = Route.useSearch()
-  const ended = !!data && !loading && !info
+  const { q, group, tab, sub } = Route.useSearch()
+  const listed = info && { ...info, machine, machineName: host?.name ?? machine, offline: stale }
+  const activity = listed && lastActivity(listed)
+  const markable = listed?.transport === "acp" && listed.provisionalStart !== "claim"
+  const seenKey = listed && rowKey(listed)
+  const known = Boolean(info)
   useEffect(() => {
-    rememberSession(ended ? undefined : { machine, sessionId, search: { q, group } })
-  }, [ended, machine, sessionId, q, group])
-  const listed = info && host ? { ...info, machine, machineName: host.name, offline: stale } : undefined
+    if (known) rememberSession({ machine, sessionId, search: { q, group } })
+  }, [known, machine, sessionId, q, group])
+  useEffect(() => {
+    if (markable && seenKey) markSeen(seenKey, activity)
+  }, [markable, seenKey, activity])
   const [warmChats, setWarmChats] = useState<Array<{ machine: string; sessionId: string }>>([])
   const acp = info?.transport === "acp"
   useEffect(() => {
@@ -110,13 +116,39 @@ function SessionRoute() {
   }, [acp, machine, message, sessionId])
   const { pane: ConversationPane, failed: conversationFailed } = usePane(loadPane.conversation, panes.conversation, acp)
   const startingTerminal = !acp && info?.provisionalStart === "claim"
-  const { pane: TerminalPane, failed: terminalFailed } = usePane(loadPane.terminal, panes.terminal, !acp && !loading)
-  if (message) return <UnavailableTerminal message={message} />
-  // The pane depends on the transport, so wait for the list rather than guess Terminal
-  // (which would load xterm and attach a socket to a chat session).
-  if (loading && !stale) return <PaneLoading label="Loading session…" />
+  const { pane: TerminalPane, failed: terminalFailed } = usePane(loadPane.terminal, panes.terminal, Boolean(info && !acp && !message && !startingTerminal))
   const title = listed && sessionLabel(listed)
-  const subtitle = listed && sessionDetail(listed).split(" · ").slice(listed.name ? 0 : 1).join(" · ")
+  const lastSeen = info?.last_sync || activity
+  const hostName = host?.name ?? (machine === LOCAL ? "this machine" : machine)
+  const seenOn = lastSeen && Number.isFinite(Date.parse(lastSeen)) ? ` · Last seen ${relativeTime(new Date(lastSeen))}` : ""
+  const subtitle = listed && (stale ? `${hostName}${seenOn}` : sessionDetail(listed).split(" · ").slice(listed.name ? 0 : 1).join(" · "))
+  if (loading) return <PaneLoading label="Looking up session…" />
+  if (!info || message) {
+    const needsUpdate = routeMissing(detail.error)
+    const unavailable = detail.error && !(detail.error instanceof ApiError && detail.error.status === 404)
+    const heading = title || (stale ? `${hostName} is offline` : needsUpdate ? "Session lookup needs an update" : unavailable ? "Couldn't look up this session" : "Session not found")
+    return (
+      <>
+        {title && <ToolbarTitle title={title} subtitle={subtitle || undefined} />}
+        <div className="flex min-h-0 flex-col items-center gap-(--s4) overflow-y-auto px-(--s4) py-(--s6)">
+          <Empty title={heading}>
+            {message ? `${hostName}${seenOn} · ${message}`
+              : stale ? "This gateway has no saved row for the session."
+              : needsUpdate ? "Update Agentpack to open sessions outside the list."
+              : unavailable ? `Couldn't load metadata for the session on ${hostName}.`
+              : `There is no saved session with this ID on ${hostName}.`}
+          </Empty>
+          <div className="flex flex-wrap gap-(--s3)">
+            <Link to="/sessions" search={{ q, group, tab }} className={buttonVariants({ size: "sm" })}>Return to sessions</Link>
+            {(stale || unavailable) && <Button type="button" size="sm" onClick={() => {
+              void sessions.refetch()
+              if (!listedInfo) void detail.refetch()
+            }}>Retry</Button>}
+          </div>
+        </div>
+      </>
+    )
+  }
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1">
@@ -156,7 +188,7 @@ function SessionRoute() {
             sessionId={sessionId}
             title={title || undefined}
             subtitle={subtitle || undefined}
-            listed={!data || !!info}
+            listed
           />
         ) : (
           <PaneLoading label={acp ? "Loading conversation…" : "Loading terminal…"} failed={acp ? conversationFailed : terminalFailed} />

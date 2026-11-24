@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { getRouteApi } from "@tanstack/react-router"
 import { KeyValue, Section } from "@/components/kit/data"
 import { Empty, RowSkeleton } from "@/components/kit/feedback"
 import { Field, FieldError, FieldGrid, FieldLabel } from "@/components/kit/forms"
@@ -7,6 +8,7 @@ import { SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useEventsConnected } from "@/features/events/use-events"
+import { identityQuery, useMachines } from "@/features/machines/queries"
 import { api, LOCAL } from "@/lib/api"
 import { plural, relativeTime } from "@/lib/format"
 import { hud } from "@/lib/hud"
@@ -25,30 +27,39 @@ const issueQuery = (fingerprint: string) => queryOptions({
 
 // State events refetch diagnostics; the poll covers only a dropped stream.
 const pollUnlessLive = (live: boolean) => (live ? false : 30_000)
+const route = getRouteApi("/_app/settings/$pane")
 
 export function DiagnosticsPane() {
-  const [status, setStatus] = useState<IssueFilter>("open")
-  const [selected, setSelected] = useState("")
+  const { issue: selected, status: statusParam } = route.useSearch()
+  const navigate = route.useNavigate()
+  const [highlighted, setHighlighted] = useState(selected)
+  const status = issueFilters.find((filter) => filter === statusParam) ?? "open"
   return (
     <Pane title="Diagnostics">
       {selected ? (
-        <IssueDetail key={selected} fingerprint={selected} back={() => setSelected("")} />
+        <IssueDetail key={selected} fingerprint={selected} back={() => {
+          setHighlighted(selected)
+          void navigate({ replace: true, search: (previous) => ({ ...previous, issue: undefined }) })
+        }} />
       ) : (
         <div className="flex min-w-0 flex-col gap-(--s4)">
           <SegmentedControl aria-label="Issue status" value={[status]} onValueChange={(values) => {
             const next = issueFilters.find((item) => item === values[0])
-            if (next) setStatus(next)
+            if (next) void navigate({ replace: true, search: (previous) => ({ ...previous, status: next === "open" ? undefined : next }) })
           }}>
             {issueFilters.map((item) => <SegmentedControlItem key={item} value={item}>{issueLabels[item]}</SegmentedControlItem>)}
           </SegmentedControl>
-          <IssueList status={status} select={setSelected} />
+          <IssueList status={status} highlighted={highlighted} select={(issue) => {
+            setHighlighted(issue)
+            void navigate({ search: (previous) => ({ ...previous, issue }) })
+          }} />
         </div>
       )}
     </Pane>
   )
 }
 
-function IssueList({ status, select }: { status: IssueFilter; select: (fingerprint: string) => void }) {
+function IssueList({ status, highlighted, select }: { status: IssueFilter; highlighted?: string; select: (fingerprint: string) => void }) {
   const issues = useQuery({ ...issuesQuery(status), refetchInterval: pollUnlessLive(useEventsConnected()) })
   if (issues.error) return <LoadError what="diagnostic issues" error={issues.error} retry={() => void issues.refetch()} />
   if (!issues.data) return <RowSkeleton lines={2} />
@@ -56,7 +67,7 @@ function IssueList({ status, select }: { status: IssueFilter; select: (fingerpri
   return (
     <SourceList aria-label="Diagnostic issues">
       {issues.data.map((issue) => (
-        <SourceRow key={issue.fingerprint} onClick={() => select(issue.fingerprint)} className="h-auto min-h-(--row-h-2) flex-col items-stretch gap-(--s1) py-(--s2)">
+        <SourceRow key={issue.fingerprint} selected={issue.fingerprint === highlighted} autoFocus={issue.fingerprint === highlighted} onClick={() => select(issue.fingerprint)} className="h-auto min-h-(--row-h-2) flex-col items-stretch gap-(--s1) py-(--s2)">
           <span className="truncate" title={issue.title}>{issue.title}</span>
           <span className="truncate text-(length:--fs-sm) text-(--fg2)">
             {issueStatus(issue)} · {plural(issue.count, "occurrence")} · {plural(issue.counts.length, "machine")} · {relativeTime(new Date(issue.last_seen))}
@@ -72,6 +83,8 @@ type IssueChange = { action: "resolve" | "reopen" | "ignore"; version?: string; 
 function IssueDetail({ fingerprint, back }: { fingerprint: string; back: () => void }) {
   const queryClient = useQueryClient()
   const result = useQuery({ ...issueQuery(fingerprint), refetchInterval: pollUnlessLive(useEventsConnected()) })
+  const machines = useMachines()
+  const local = useQuery(identityQuery).data?.node
   const [resolving, setResolving] = useState(false)
   const [version, setVersion] = useState("")
   const [note, setNote] = useState("")
@@ -90,17 +103,18 @@ function IssueDetail({ fingerprint, back }: { fingerprint: string; back: () => v
   })
   const issue = result.data
   const error = validation || update.error?.message
+  const machineName = (id: string) => local?.id === id ? local.name : machines.find((machine) => machine.id === id)?.name
   return (
     <div className="flex min-w-0 flex-col gap-(--s5)">
       <div><Button variant="ghost" autoFocus onClick={back}>Back to issues</Button></div>
       {result.error ? <LoadError what="the issue" error={result.error} retry={() => void result.refetch()} /> : !issue ? <RowSkeleton lines={2} /> : <>
-        <h3 className="break-words font-semibold">{issue.title}</h3>
+        <h2 className="break-words font-semibold">{issue.title}</h2>
         <dl className="flex min-w-0 flex-col gap-(--s3)">
           <KeyValue label="Status">{issueStatus(issue)}</KeyValue>
           <KeyValue label="Occurrences">{issue.count.toLocaleString()}</KeyValue>
+          <KeyValue label="Machines">{issue.counts.map((count) => machineName(count.node_id) ?? count.node_id).join(", ")}</KeyValue>
           <KeyValue label="First seen"><time dateTime={issue.first_seen}>{new Date(issue.first_seen).toLocaleString()}</time></KeyValue>
           <KeyValue label="Last seen"><time dateTime={issue.last_seen}>{new Date(issue.last_seen).toLocaleString()}</time></KeyValue>
-          <KeyValue label="Fingerprint"><code className="break-all">{issue.fingerprint}</code></KeyValue>
           {issue.resolved_version && <KeyValue label="Fix version">{issue.resolved_version}</KeyValue>}
           {issue.note && <KeyValue label="Note">{issue.note}</KeyValue>}
         </dl>
@@ -129,18 +143,22 @@ function IssueDetail({ fingerprint, back }: { fingerprint: string; back: () => v
             </FieldGrid>
           </form>
         ) : (
-          <div className="flex flex-wrap gap-(--s3)">
-            {issue.status !== "resolved" && <Button disabled={update.isPending} onClick={() => { update.reset(); setResolving(true) }}>Resolve…</Button>}
-            {issue.status !== "open" && <Button disabled={update.isPending} onClick={() => update.mutate({ action: "reopen" })}>Reopen</Button>}
-            {issue.status !== "ignored" && <Button variant="ghost" disabled={update.isPending} onClick={() => update.mutate({ action: "ignore" })}>Ignore</Button>}
+          <div className="flex flex-col gap-(--s3)">
+            {issue.status !== "resolved" && <div className="flex flex-wrap items-center gap-(--s3)"><Button aria-describedby="resolve-effect" disabled={update.isPending} onClick={() => { update.reset(); setResolving(true) }}>Resolve…</Button><span id="resolve-effect" className="text-(length:--fs-sm) text-(--fg2)">Record the version that contains the fix.</span></div>}
+            {issue.status !== "open" && <div className="flex flex-wrap items-center gap-(--s3)"><Button aria-describedby="reopen-effect" disabled={update.isPending} onClick={() => update.mutate({ action: "reopen" })}>Reopen</Button><span id="reopen-effect" className="text-(length:--fs-sm) text-(--fg2)">Put this issue back in the Open list.</span></div>}
+            {issue.status !== "ignored" && <div className="flex flex-wrap items-center gap-(--s3)"><Button aria-describedby="ignore-effect" variant="ghost" disabled={update.isPending} onClick={() => update.mutate({ action: "ignore" })}>Ignore</Button><span id="ignore-effect" className="text-(length:--fs-sm) text-(--fg2)">Move it to Ignored. You can reopen it later.</span></div>}
           </div>
         )}
         <Section title="Machines">
           <dl className="flex min-w-0 flex-col gap-(--s3)">
-            {issue.counts.map((count) => <KeyValue key={count.node_id} label="Machine"><code className="break-all">{count.node_id}</code> · {plural(count.count, "occurrence")} · {count.last_version || "Version unknown"}</KeyValue>)}
+            {issue.counts.map((count) => <KeyValue key={count.node_id} label={machineName(count.node_id) ?? "Machine"}><code className="break-all">{count.node_id}</code> · {plural(count.count, "occurrence")} · {count.last_version || "Version unknown"}</KeyValue>)}
           </dl>
         </Section>
-        {issue.sample && <Section title="Sample event"><pre className="max-w-full overflow-auto whitespace-pre-wrap break-words text-(length:--fs-sm)">{JSON.stringify(issue.sample, null, 2)}</pre></Section>}
+        {issue.sample && <details className="min-w-0 rounded-(--r-pop) border-[0.5px] border-(--sep) p-(--s4)">
+          <summary className="cursor-pointer font-medium">Sample event</summary>
+          <p className="mt-(--s3) break-all text-(length:--fs-sm) text-(--fg2)">Fingerprint <code>{issue.fingerprint}</code></p>
+          <pre className="mt-(--s3) max-w-full overflow-auto whitespace-pre-wrap break-words text-(length:--fs-sm)">{JSON.stringify(issue.sample, null, 2)}</pre>
+        </details>}
         {!!issue.recent_traces?.length && <Section title="Recent traces"><ul className="flex flex-col gap-(--s2)">{issue.recent_traces.map((trace) => <li key={trace}><code className="break-all">{trace}</code></li>)}</ul></Section>}
       </>}
     </div>

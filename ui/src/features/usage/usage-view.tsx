@@ -1,13 +1,18 @@
 import { useState } from "react"
+import { useQuery } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
 import { ChevronLeft, ChevronRight, Folder, Server, Cpu, X } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, KeyValue, Meter, Section } from "@/components/kit/data"
-import { Banner, RowSkeleton } from "@/components/kit/feedback"
+import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
+import { PopupSelect } from "@/components/kit/forms"
 import { SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
 import { Button } from "@/components/ui/button"
 import { LimitsSummary } from "@/features/limits/limits-view"
 import { AgentTile } from "@/components/kit/agent-tile"
+import { useEventsConnected } from "@/features/events/use-events"
+import { topologyQuery, useMachines } from "@/features/machines/queries"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
+import { useIsPhone } from "@/features/shell/use-is-phone"
 import { routeMissing } from "@/lib/api"
 import { basename, plural } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -17,13 +22,19 @@ import {
   averageOf,
   bucketEnd,
   bucketLabel,
+  bucketOf,
   bucketize,
   changeOf,
+  comparisonWindowLabel,
+  costCoverage,
+  exactRangeLabel,
   fmt,
   inView,
   metrics,
   rangeName,
+  reportsCost,
   totalsBy,
+  usageDataState,
   type Kind,
   type Metric,
   type Range,
@@ -46,11 +57,28 @@ const dimensionKey: Record<Dimension, (row: UsageHour) => string> = {
 const dimensionTitle: Record<Dimension, string> = { project: "Projects", agent: "Agents", machine: "Machines", model: "Models" }
 const subtitle: Record<View["kind"], string> = { overview: "All machines", project: "Project", machine: "Machine", agent: "Agent" }
 
+const rangeItems: { value: Range; label: string }[] = [
+  { value: "day", label: "Day" },
+  { value: "week", label: "Week" },
+  { value: "month", label: "Month" },
+]
+
+const metricItems: { value: Metric; label: string }[] = (Object.entries(metrics) as [Metric, (typeof metrics)[Metric]][]).map(([value, entry]) => ({
+  value,
+  label: entry.label,
+}))
+
 export function UsageView({ view }: { view: View }) {
+  const isPhone = useIsPhone()
+  const live = useEventsConnected()
+  const machines = useMachines()
   const usage = useUsage()
-  const { metric, win, query, now } = usage
+  const { metric, win, previous, query, now } = usage
   const names = useNames(query.data)
+  const coverage = query.data?.coverage
+  const topology = useQuery({ ...topologyQuery(live), enabled: query.isSuccess && !coverage }).data
   const [hover, setHover] = useState<number | null>(null)
+  const [asTable, setAsTable] = useState(false)
   // A pinned bar belongs to one window; another range or period starts unpinned.
   const windowKey = `${win.range}:${win.starts[0]}`
   const [pin, setPin] = useState<{ key: string; index: number } | null>(null)
@@ -60,7 +88,8 @@ export function UsageView({ view }: { view: View }) {
   const navigate = useNavigate()
 
   const rows = usage.rows.filter((row) => inView(row, view))
-  const previousTotal = usage.previousRows.filter((row) => inView(row, view)).reduce((sum, row) => sum + metrics[metric].value(row), 0)
+  const previousRows = usage.previousRows.filter((row) => inView(row, view))
+  const previousTotal = previousRows.reduce((sum, row) => sum + metrics[metric].value(row), 0)
   const byAgent = view.kind !== "agent"
   const stack = byAgent ? dimensionKey.agent : dimensionKey.model
   const { totals, series } = bucketize(rows, win, metric, stack)
@@ -70,90 +99,270 @@ export function UsageView({ view }: { view: View }) {
   const sessions = (query.data?.sessions ?? []).filter((session) => inView(session, view) && activeIn(session, win.starts[0]!, win.end))
   const title = view.kind === "overview" || !view.id ? "Usage" : names.of(view.kind as Dimension, view.id)
   const period = rangeName(win)
+  const exactRange = exactRangeLabel(win)
+  const compareWindow = comparisonWindowLabel(previous)
   const shown = hover ?? pinned
   const pinnedSessions = pinned === null ? sessions : sessions.filter((session) => activeIn(session, win.starts[pinned]!, bucketEnd(win, pinned)))
+  const costBuckets = new Set(rows.filter((row) => row.cost_micros >= 0).map((row) => bucketOf(win, row.hour * 1000)))
+  const valueLabel = (index: number | null) => metric === "cost" && (index === null ? !costBuckets.size : !costBuckets.has(index))
+    ? "Not reported"
+    : fmt(index === null ? total : totals[index]!, unit)
+
+  const inScope = (id: string) => view.kind !== "machine" || !view.id || names.machineId(view.id) === names.machineId(id)
+  const shortDate = (date: string) => new Date(date).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+  const incomplete = coverage
+    ? coverage.filter((entry) => entry.state !== "current" && inScope(entry.node_id)).map((entry) => {
+        const name = names.machine(entry.node_id)
+        const status = entry.state === "offline" ? "offline" : entry.state === "stale" ? "sync delayed" : "waiting for first sync"
+        return `${name} ${status}${entry.last_sync ? ` (last synced ${shortDate(entry.last_sync)})` : ""}`
+      })
+    : machines.filter((machine) => !machine.online && inScope(machine.id)).map((machine) => {
+        const lastSeen = topology?.peers.find((peer) => peer.id === machine.id)?.last_seen
+        return `${machine.name} offline${lastSeen ? ` since ${shortDate(lastSeen)}` : ""}`
+      })
+  const dataState = usageDataState({ pending: query.isPending, error: Boolean(query.error), hasData: rows.length > 0 || sessions.length > 0, incompleteCount: incomplete.length })
+
+  const hasFilters = view.kind !== "overview" || usage.range !== "week" || usage.back > 0 || metric !== "out" || pinned !== null
+  const updateSearch = (patch: { range?: Range; back?: number; metric?: Metric }) =>
+    void navigate({
+      to: ".",
+      search: (prev: Record<string, unknown>) => ({
+        ...prev,
+        ...(patch.range !== undefined ? { range: patch.range === "week" ? undefined : patch.range } : {}),
+        ...(patch.back !== undefined ? { back: patch.back || undefined } : {}),
+        ...(patch.metric !== undefined ? { metric: patch.metric === "out" ? undefined : patch.metric } : {}),
+      }),
+      replace: true,
+    })
+
+  const resetAll = () => {
+    setPinned(null)
+    void navigate({ to: "/usage", search: { range: undefined, back: undefined, metric: undefined }, replace: true })
+  }
+
+  const bucketItems = [
+    { value: "all", label: win.range === "day" ? "All hours" : "All days" },
+    ...win.starts.map((_, index) => ({ value: String(index), label: bucketLabel(win, index, true) })),
+  ]
+
+  const scopeValue = view.kind === "overview" || !view.id ? "overview" : `${view.kind}:${view.id}`
+  const scopeItems = [
+    { value: "overview", label: "Overview" },
+    { value: "limits", label: "Limits" },
+    ...[...totalsBy(usage.rows, metric, dimensionKey.project)].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => ({ value: `project:${id}`, label: `Project · ${names.project(id)}` })),
+    ...[...totalsBy(usage.rows, metric, dimensionKey.machine)].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => ({ value: `machine:${id}`, label: `Machine · ${names.machine(id)}` })),
+    ...[...totalsBy(usage.rows, metric, dimensionKey.agent)].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => ({ value: `agent:${id}`, label: `Agent · ${names.agent(id)}` })),
+  ]
+  if (view.kind !== "overview" && view.id && !scopeItems.some((item) => item.value === scopeValue)) {
+    scopeItems.splice(2, 0, { value: scopeValue, label: `${subtitle[view.kind]} · ${title}` })
+  }
+
+  function chooseScope(next: string) {
+    if (next === "overview") {
+      void navigate({ to: "/usage", search: true })
+      return
+    }
+    if (next === "limits") {
+      void navigate({ to: "/usage/limits", search: true })
+      return
+    }
+    const colon = next.indexOf(":")
+    if (colon <= 0) return
+    const kind = next.slice(0, colon) as "project" | "machine" | "agent"
+    const id = next.slice(colon + 1)
+    void navigate({ to: "/usage/$kind/$id", params: { kind, id }, search: true })
+  }
+
+  const emptyRange = rows.length === 0 && sessions.length === 0
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ToolbarTitle title={title} subtitle={`${subtitle[view.kind]} · ${period}`} />
-      <RangeControls range={usage.range} back={usage.back} period={period} />
+      {!isPhone && <RangeControls range={usage.range} back={usage.back} period={period} />}
       {routeMissing(query.error) ? (
         <Banner tone="warn">This gateway needs an update to show usage.</Banner>
       ) : (
-        query.error && <Banner tone="danger">{`Couldn't load usage: ${query.error.message}`}</Banner>
+        query.error && (
+          <Banner tone="danger" action={<Button type="button" size="sm" variant="ghost" onClick={() => void query.refetch()}>Retry</Button>}>
+            {`Unavailable · Couldn't load usage: ${query.error.message}`}
+          </Banner>
+        )
       )}
+      {dataState === "partial" && <Banner>{`Partial: ${incomplete.join(", ")}`}</Banner>}
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-295 px-(--s7) py-(--s6) max-[760px]:p-(--s4)">
-          <section aria-label="Usage chart">
-            <div className="flex min-w-0 flex-wrap items-end gap-(--s5)">
-              <div data-slot="usage-hero" className="min-w-0 flex-1" aria-live="polite">
-                <p className="text-(length:--fs-sm) text-(--fg2)">{shown === null ? period : bucketLabel(win, shown, true)}</p>
-                <p className="my-0.5 text-[28px] leading-tight font-semibold tracking-tight tabular-nums">{fmt(shown === null ? total : totals[shown]!, unit)}</p>
-                <p className="text-(length:--fs-sm) text-(--fg2) tabular-nums">
-                  {shown === null ? heroDetail(average, total, previousTotal, unit, win.range, metric) : bucketDetail(totals[shown]!, total, period, sessions.filter((session) => activeIn(session, win.starts[shown]!, bucketEnd(win, shown))).length)}
-                </p>
+          {isPhone && (
+            <div aria-label="Usage filters" className="mb-(--s4) flex flex-wrap items-center gap-(--s2)">
+              <div className="flex items-center gap-(--s1)">
+                <Button variant="ghost" size="icon" aria-label="Previous period" onClick={() => updateSearch({ back: usage.back + 1 })}>
+                  <ChevronLeft />
+                </Button>
+                <span className="text-(length:--fs-sm) font-medium tabular-nums">{period}</span>
+                <Button variant="ghost" size="icon" aria-label="Next period" disabled={usage.back === 0} onClick={() => updateSearch({ back: usage.back - 1 })}>
+                  <ChevronRight />
+                </Button>
               </div>
-              <MetricTabs metric={metric} rows={rows} previous={usage.previousRows.filter((row) => inView(row, view))} onPick={(value) => void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, metric: value === "out" ? undefined : value }), replace: true })} />
+              <PopupSelect label="Range" value={usage.range} items={rangeItems} onValueChange={(value) => updateSearch({ range: value as Range, back: 0 })} />
+              <PopupSelect label="Metric" value={metric} items={metricItems} onValueChange={(value) => updateSearch({ metric: value as Metric })} />
+              <PopupSelect label="Scope" value={scopeValue} items={scopeItems} onValueChange={chooseScope} />
+              {hasFilters && (
+                <Button type="button" size="sm" variant="ghost" onClick={resetAll}>
+                  Reset
+                </Button>
+              )}
             </div>
-            {query.isPending ? (
-              <RowSkeleton lines={2} className="mt-(--s5) h-[190px]" />
-            ) : (
-              <UsageChart
-                win={win}
-                series={series}
-                totals={totals}
-                average={average}
-                kind={unit}
-                label={`${label} by ${byAgent ? "agent" : "model"}, ${period}`}
-                color={color}
-                hover={hover}
-                pinned={pinned}
-                onHover={setHover}
-                onPin={setPinned}
+          )}
+
+          {dataState === "error" ? null : dataState === "loading" ? (
+            <div className="flex flex-col gap-(--s3)">
+              <p className="text-(length:--fs-sm) text-(--fg2)">Loading…</p>
+              <RowSkeleton lines={2} className="h-[190px]" />
+            </div>
+          ) : emptyRange ? (
+            <div className="flex flex-col gap-(--s6)">
+              <div data-slot="usage-hero" className="min-w-0 flex-1" aria-live="polite">
+                <h2 className="text-(length:--fs-sm) font-medium text-(--fg2)">{`${label} · ${period}`}</h2>
+                <p className="text-(length:--fs-xs) text-(--fg3)">{exactRange}</p>
+              </div>
+              <Empty title={dataState === "partial" ? "No synced usage in this range" : "No usage in this range"}>
+                {dataState === "partial" ? "Waiting for usage from the remaining machines." : `No recorded activity for ${exactRange}.`}
+              </Empty>
+              {(view.kind === "overview" || view.kind === "agent") && (
+                <div className="grid gap-x-(--s7) gap-y-(--s6) min-[1100px]:grid-cols-2">
+                  <LimitsSummary agent={view.kind === "agent" ? view.id : undefined} />
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              <section aria-label="Usage chart">
+                <div className="flex min-w-0 flex-wrap items-end gap-(--s5)">
+                  <div data-slot="usage-hero" className="min-w-0 flex-1" aria-live="polite">
+                    <h2 className="text-(length:--fs-sm) font-medium text-(--fg2)">
+                      {`${label} · ${shown === null ? period : bucketLabel(win, shown, true)}`}
+                    </h2>
+                    <p className="text-(length:--fs-xs) text-(--fg3)">{exactRange}</p>
+                    <p className="my-0.5 text-[28px] leading-tight font-semibold tracking-tight tabular-nums">{valueLabel(shown)}</p>
+                    <p className="text-(length:--fs-sm) text-(--fg2) tabular-nums">
+                      {metric === "cost" && (shown === null ? !costBuckets.size : !costBuckets.has(shown))
+                        ? shown === null && costCoverage(sessions)
+                        : shown === null
+                          ? heroDetail(average, total, previousTotal, unit, win.range, compareWindow, metric === "cost" ? costCoverage(sessions) : "")
+                          : bucketDetail(totals[shown]!, total, period, sessions.filter((session) => activeIn(session, win.starts[shown]!, bucketEnd(win, shown))).length)}
+                    </p>
+                  </div>
+                  {!isPhone && (
+                    <MetricTabs metric={metric} rows={rows} previous={previousRows} onPick={(value) => updateSearch({ metric: value })} />
+                  )}
+                </div>
+
+                <div className="mt-(--s3) flex flex-wrap items-center gap-(--s3)">
+                  {pinned !== null && (
+                    <span className="inline-flex h-(--ctl-h-sm) items-center gap-(--s2) rounded-full bg-(--accent-soft) ps-(--s3) pe-(--s2) text-(length:--fs-sm) text-(--accent)">
+                      {`Filtered to ${bucketLabel(win, pinned, true)}`}
+                      <button type="button" onClick={() => setPinned(null)} className="rounded-full px-(--s1) font-medium hover:bg-(--accent-fill) hover:text-(--accent-fg)">
+                        Clear
+                      </button>
+                    </span>
+                  )}
+                  <PopupSelect
+                    label={win.range === "day" ? "Select hour" : "Select day"}
+                    value={pinned === null ? "all" : String(pinned)}
+                    items={bucketItems}
+                    onValueChange={(value) => setPinned(value === "all" ? null : Number(value))}
+                  />
+                  <Button type="button" size="sm" variant="ghost" aria-pressed={asTable} onClick={() => setAsTable((current) => !current)}>
+                    {asTable ? "Show as chart" : "Show as table"}
+                  </Button>
+                </div>
+
+                {asTable ? (
+                  <div className="mt-(--s4)">
+                    <DataGrid aria-label={`${label} by ${win.range === "day" ? "hour" : "day"}`}>
+                      <DataGridHead>
+                        <tr>
+                          <DataGridHeaderCell>{win.range === "day" ? "Hour" : "Day"}</DataGridHeaderCell>
+                          <DataGridHeaderCell className="text-right">{label}</DataGridHeaderCell>
+                          <DataGridHeaderCell className="w-24 text-right">Filter</DataGridHeaderCell>
+                        </tr>
+                      </DataGridHead>
+                      <tbody>
+                        {win.starts.map((_, index) => {
+                          const selected = pinned === index
+                          return (
+                            <DataGridRow key={win.starts[index]} aria-selected={selected}>
+                              <DataGridCell>{bucketLabel(win, index, true)}</DataGridCell>
+                              <DataGridCell className="text-right tabular-nums">{valueLabel(index)}</DataGridCell>
+                              <DataGridCell className="text-right">
+                                <Button type="button" size="sm" variant="ghost" onClick={() => setPinned(selected ? null : index)}>
+                                  {selected ? "Clear" : "Filter"}
+                                </Button>
+                              </DataGridCell>
+                            </DataGridRow>
+                          )
+                        })}
+                      </tbody>
+                    </DataGrid>
+                  </div>
+                ) : (
+                  <UsageChart
+                    win={win}
+                    series={series}
+                    totals={totals}
+                    average={metric === "cost" && !costBuckets.size ? undefined : average}
+                    kind={unit}
+                    label={`${label} by ${byAgent ? "agent" : "model"}, ${period}`}
+                    color={color}
+                    hover={hover}
+                    pinned={pinned}
+                    onHover={setHover}
+                    onPin={setPinned}
+                  />
+                )}
+                <ul aria-label="Legend" className="mt-(--s4) flex flex-wrap gap-x-(--s6) gap-y-(--s2)">
+                  {series.map((entry, index) => (
+                    <li key={entry.key}>
+                      <Legend entry={entry} color={color(entry.key, index)} unit={unit} name={byAgent ? names.agent(entry.key) : names.model(entry.key)} link={byAgent ? entry.key : undefined} />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+
+              <div className="mt-(--s7)">
+                {win.range !== "day" && <UsageHeatmap rows={rows} win={win} metric={metric} series={series} name={byAgent ? names.agent : names.model} />}
+              </div>
+
+              <div className="mt-(--s7) grid gap-x-(--s7) gap-y-(--s6) min-[1100px]:grid-cols-2">
+                {view.kind === "overview" ? <LimitsSummary /> : <Summary rows={rows} sessions={sessions} view={view} names={names} />}
+                <MostUsed rows={rows} view={view} metric={metric} names={names} />
+                {view.kind === "agent" && <LimitsSummary agent={view.id} />}
+                <TokenMix rows={rows} />
+                <Efficiency rows={rows} sessions={sessions} />
+              </div>
+
+              <SessionsTable
+                className="mt-(--s6)"
+                sessions={pinnedSessions}
+                view={view}
+                names={names}
+                pinned={pinned === null ? undefined : bucketLabel(win, pinned, true)}
+                onClear={() => setPinned(null)}
               />
-            )}
-            <ul aria-label="Legend" className="mt-(--s4) flex flex-wrap gap-x-(--s6) gap-y-(--s2)">
-              {series.map((entry, index) => (
-                <li key={entry.key}>
-                  <Legend entry={entry} color={color(entry.key, index)} unit={unit} name={byAgent ? names.agent(entry.key) : names.model(entry.key)} link={byAgent ? entry.key : undefined} />
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <div className="mt-(--s7)">
-            {win.range !== "day" && <UsageHeatmap rows={rows} win={win} metric={metric} series={series} name={byAgent ? names.agent : names.model} />}
-          </div>
-
-          <div className="mt-(--s7) grid gap-x-(--s7) gap-y-(--s6) min-[1100px]:grid-cols-2">
-            {view.kind === "overview" ? <LimitsSummary /> : <Summary rows={rows} sessions={sessions} view={view} names={names} />}
-            <MostUsed rows={rows} view={view} metric={metric} names={names} />
-            {view.kind === "agent" && <LimitsSummary agent={view.id} />}
-            <TokenMix rows={rows} />
-            <Efficiency rows={rows} sessions={sessions} />
-          </div>
-
-          <SessionsTable
-            className="mt-(--s6)"
-            sessions={pinnedSessions}
-            view={view}
-            names={names}
-            pinned={pinned === null ? undefined : bucketLabel(win, pinned, true)}
-            onClear={() => setPinned(null)}
-          />
+            </>
+          )}
         </div>
       </div>
     </div>
   )
 }
 
-function heroDetail(average: number, total: number, previous: number, unit: Kind, range: Range, metric: Metric) {
+function heroDetail(average: number, total: number, previous: number, unit: Kind, range: Range, compareWindow: string, coverage: string) {
   const change = changeOf(total, previous)
-  const since = range === "day" ? "the day before" : `last ${range}`
+  const since = range === "day" ? `the day before (${compareWindow})` : `last ${range} (${compareWindow})`
   return [
     `${range === "day" ? "Hourly" : "Daily"} average ${fmt(average, unit)}`,
     change !== undefined && `${change >= 0 ? "↑" : "↓"} ${Math.abs(change)}% from ${since}`,
-    metric === "cost" && "Codex and Cursor don't report cost",
+    coverage,
   ].filter(Boolean).join(" · ")
 }
 
@@ -219,7 +428,7 @@ function Summary({ rows, sessions, view, names }: { rows: UsageHour[]; sessions:
         <KeyValue label="Turns">{fmt(sum((row) => row.turns), "count")}</KeyValue>
         <KeyValue label="Output tokens">{fmt(sum((row) => row.output_tokens))}</KeyValue>
         <KeyValue label="All tokens">{fmt(sum(allTokens))}</KeyValue>
-        <KeyValue label="Reported cost">{reported ? fmt(sum((row) => row.cost_micros) / 1e6, "cost") : "Not reported"}</KeyValue>
+        <KeyValue label="Reported cost">{reported ? fmt(sum(metrics.cost.value), "cost") : "Not reported"}</KeyValue>
         <KeyValue label="Agent time">{fmt(sum((row) => row.agent_ms) / 60_000, "time")}</KeyValue>
         <KeyValue label={`Most used ${other}`}>{leader === undefined ? "—" : names.of(other, leader)}</KeyValue>
         <KeyValue label="Last active">{last ? new Date(last).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}</KeyValue>
@@ -295,8 +504,8 @@ function MetricTabs({ metric, rows, previous, onPick }: { metric: Metric; rows: 
         return (
           <button key={key} type="button" aria-pressed={metric === key} onClick={() => onPick(key)}
             className="group flex min-w-24 flex-col items-start rounded-(--r-ctl) px-(--s4) py-(--s2) text-start outline-none transition-colors duration-(--dur-1) hover:bg-(--hover) focus-visible:ring-2 focus-visible:ring-(--accent) aria-pressed:bg-(--accent-soft) aria-pressed:shadow-[inset_0_-2px_0_var(--accent)]">
-            <span className="text-(length:--fs-xs) text-(--fg2) group-aria-pressed:text-(--accent)">{entry.label}</span>
-            <span className="text-(length:--fs-lg) font-semibold tabular-nums group-aria-pressed:text-(--accent)">{fmt(total, entry.kind)}</span>
+            <span className="text-(length:--fs-xs) text-(--fg2) group-aria-pressed:text-(--fg)">{entry.label}</span>
+            <span className="text-(length:--fs-lg) font-semibold tabular-nums group-aria-pressed:text-(--fg)">{key === "cost" && !reportsCost(rows) ? "Not reported" : fmt(total, entry.kind)}</span>
             <span className="text-(length:--fs-xs) text-(--fg3) tabular-nums">{change === undefined ? "—" : `${change > 0 ? "↑" : change < 0 ? "↓" : ""} ${Math.abs(change)}%`}</span>
           </button>
         )
@@ -369,7 +578,7 @@ function SessionsTable({ sessions, view, names, pinned, onClear, className }: { 
           {pinned && (
             <span className="inline-flex h-(--ctl-h-sm) items-center gap-(--s2) rounded-full bg-(--accent-soft) ps-(--s3) pe-(--s2) font-normal text-(--accent)">
               {pinned}
-              <button type="button" aria-label="Show every day" onClick={onClear} className="grid size-3.5 place-items-center rounded-full hover:bg-(--accent) hover:text-(--accent-fg)">
+              <button type="button" aria-label="Show every day" onClick={onClear} className="grid size-3.5 place-items-center rounded-full hover:bg-(--accent-fill) hover:text-(--accent-fg)">
                 <X aria-hidden className="size-3" />
               </button>
             </span>
@@ -381,7 +590,7 @@ function SessionsTable({ sessions, view, names, pinned, onClear, className }: { 
         <DataGridHead>
           <tr>
             {columns.map((column) => (
-              <DataGridHeaderCell key={column.key} aria-sort={sort.key === column.key ? (sort.dir > 0 ? "ascending" : "descending") : undefined} className={cn(column.numeric && "text-right", column.key === "title" && "w-[34%]")}>
+              <DataGridHeaderCell key={column.key} resizeLabel={column.label} aria-sort={sort.key === column.key ? (sort.dir > 0 ? "ascending" : "descending") : undefined} className={cn(column.numeric && "text-right", column.key === "title" && "w-[34%]")}>
                 <button type="button" onClick={() => setSort({ key: column.key, dir: sort.key === column.key ? (-sort.dir as 1 | -1) : -1 })} className="cursor-default hover:text-(--fg)">
                   {column.label}
                   {sort.key === column.key && <span aria-hidden className="ms-0.5 text-[9px]">{sort.dir > 0 ? "▲" : "▼"}</span>}

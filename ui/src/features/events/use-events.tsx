@@ -1,7 +1,9 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react"
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { LOCAL } from "@/lib/api"
+import type { TailnetNode } from "@/lib/api-types"
 import { configQuery } from "@/lib/config"
+import { hud } from "@/lib/hud"
 import type { ConversationPage } from "@/features/conversation/queries"
 
 type EventMessage = { topic: string; node?: string; tables?: string[] }
@@ -58,31 +60,53 @@ export function reconnectDelay(attempt: number): number {
 }
 
 // Events missed while disconnected: every replicated family plus each machine's live queries.
-function catchUpAll(queryClient: QueryClient) {
-  invalidate(queryClient, ["m"])
-  for (const key of ALL_STATE_FAMILIES) if (key[0] !== "m") invalidate(queryClient, key)
+async function catchUpAll(queryClient: QueryClient, recoveryStillCurrent?: () => boolean) {
+  const reads = recoveryStillCurrent
+    ? queryClient.getQueryCache().findAll({ queryKey: ["m"], type: "active" }).map((query) => ({
+        query, updates: query.state.dataUpdateCount,
+      }))
+    : []
+  await Promise.all([invalidate(queryClient, ["m"]), ...ALL_STATE_FAMILIES.filter((key) => key[0] !== "m").map((key) => invalidate(queryClient, key))])
+  if (!recoveryStillCurrent?.()) return
+  const peers = new Set(reads.filter(({ query, updates }) => query.state.dataUpdateCount > updates).map(({ query }) => query.queryKey[1]))
+  const nodes = queryClient.getQueryData<TailnetNode[]>(["nodes"])
+  const refreshed = Array.isArray(nodes) ? nodes.filter((node) => peers.has(node.id)).map((node) => node.name) : []
+  hud.success(refreshed.length ? `Live updates resumed · Refreshed ${refreshed.join(", ")}` : "Live updates resumed")
 }
 
 const EventsContext = createContext(false)
+const PausedEventsContext = createContext<{ lastReceivedAt?: number; reconnect: () => void } | null>(null)
 
 // True while the /api/events stream is open. Polling queries read it to stop their timers.
 export function useEventsConnected(): boolean {
   return useContext(EventsContext)
 }
 
+export function usePausedEvents() {
+  return useContext(PausedEventsContext)
+}
+
 function invalidate(queryClient: QueryClient, queryKey: string[]) {
-  void queryClient.invalidateQueries({ queryKey, refetchType: "active" }, { cancelRefetch: false })
+  return queryClient.invalidateQueries({ queryKey, refetchType: "active" }, { cancelRefetch: false })
 }
 
 function dispatch(queryClient: QueryClient, msg: EventMessage) {
   if (msg.topic === "state") {
-    for (const key of stateFamilies(msg.tables)) invalidate(queryClient, key)
+    for (const key of stateFamilies(msg.tables)) {
+      invalidate(queryClient, key)
+      if (msg.node && msg.node !== LOCAL && key[0] === "m" && key[2] === "library") {
+        invalidate(queryClient, ["m", msg.node, "library"])
+      }
+    }
     return
   }
   if (msg.node && msg.node !== LOCAL && (msg.topic === "sessions" || msg.topic === "limits")) {
     invalidate(queryClient, ["m", LOCAL, msg.topic])
   }
-  if (msg.topic === "replication") invalidate(queryClient, ["replication"])
+  if (msg.topic === "replication") {
+    invalidate(queryClient, ["replication"])
+    invalidate(queryClient, ["m", LOCAL, "usage"])
+  }
   if (msg.topic === "diagnostics") return invalidate(queryClient, ["diagnostics"])
   if (msg.topic === "nodes") {
     invalidate(queryClient, ["nodes"])
@@ -120,8 +144,12 @@ export function EventsProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
   const multiplexed = useQuery(configQuery).data?.conversation_events === true
   const [connected, setConnected] = useState(false)
+  const [paused, setPaused] = useState<{ lastReceivedAt?: number }>()
+  const [reconnectRequest, setReconnectRequest] = useState(0)
   const [conversation, setConversation] = useState<ConversationSubscription>()
   const catchUp = useRef(true)
+  const interrupted = useRef(false)
+  const lastReceivedAt = useRef<number | undefined>(undefined)
   const subscribe = (subscription: ConversationSubscription) => {
     setConversation(subscription)
     return () => setConversation((current) => current === subscription ? undefined : current)
@@ -150,20 +178,30 @@ export function EventsProvider({ children }: { children: ReactNode }) {
         const query = new URLSearchParams({ session: chat.sessionId, owner: chat.machine, since: String(since) })
         path += `?${query}`
       }
-      source = new EventSource(path)
-      source.onopen = () => {
+      const stream = new EventSource(path)
+      source = stream
+      stream.onopen = () => {
+        if (source !== stream) return
         attempt = 0
+        lastReceivedAt.current = Date.now()
+        setPaused(undefined)
         connection(true)
         if (catchUp.current) {
           catchUp.current = false
-          catchUpAll(queryClient)
+          const recovering = interrupted.current
+          interrupted.current = false
+          void catchUpAll(queryClient, recovering ? () => source === stream && !interrupted.current : undefined)
         }
       }
-      source.onerror = () => {
+      stream.onerror = () => {
+        if (source !== stream) return
         connection(false)
         catchUp.current = true
+        interrupted.current = true
+        const last = lastReceivedAt.current
+        setPaused((current) => current ?? { lastReceivedAt: last })
         // A chat stream reopens with a fresh `since`; a plain stream the browser gave up on reopens too.
-        if (chat || source?.readyState === EventSource.CLOSED) {
+        if (chat || stream.readyState === EventSource.CLOSED) {
           close()
           if (!document.hidden) {
             retry = setTimeout(open, reconnectDelay(attempt))
@@ -171,14 +209,21 @@ export function EventsProvider({ children }: { children: ReactNode }) {
           }
         }
       }
-      source.onmessage = (event: MessageEvent<string>) =>
+      stream.onmessage = (event: MessageEvent<string>) => {
+        if (source !== stream) return
+        lastReceivedAt.current = Date.now()
         dispatch(queryClient, JSON.parse(event.data) as EventMessage)
+      }
       if (chat) {
-        source.addEventListener("conversation", (event: MessageEvent<string>) => chat.onEntry(event.data))
-        source.addEventListener("conversation_truncated", chat.onTruncated)
-        source.addEventListener("conversation_gap", chat.onGap)
-        source.addEventListener("conversation_derived", (event: MessageEvent<string>) => chat.onDerived(event.data))
-        source.addEventListener("conversation_fallback", chat.onFallback)
+        stream.addEventListener("conversation", (event: MessageEvent<string>) => {
+          if (source !== stream) return
+          lastReceivedAt.current = Date.now()
+          chat.onEntry(event.data)
+        })
+        stream.addEventListener("conversation_truncated", chat.onTruncated)
+        stream.addEventListener("conversation_gap", chat.onGap)
+        stream.addEventListener("conversation_derived", (event: MessageEvent<string>) => chat.onDerived(event.data))
+        stream.addEventListener("conversation_fallback", chat.onFallback)
       }
     }
     const onVisibility = () => {
@@ -195,10 +240,12 @@ export function EventsProvider({ children }: { children: ReactNode }) {
       document.removeEventListener("visibilitychange", onVisibility)
       close()
     }
-  }, [conversation, multiplexed, queryClient])
+  }, [conversation, multiplexed, queryClient, reconnectRequest])
   return (
     <EventsContext value={connected}>
-      <ConversationEventsContext value={multiplexed ? subscribe : undefined}>{children}</ConversationEventsContext>
+      <PausedEventsContext value={paused ? { ...paused, reconnect: () => setReconnectRequest((n) => n + 1) } : null}>
+        <ConversationEventsContext value={multiplexed ? subscribe : undefined}>{children}</ConversationEventsContext>
+      </PausedEventsContext>
     </EventsContext>
   )
 }

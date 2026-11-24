@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { AgentpackWithRevisions, Package, ProjectMCP, ProjectPackage, ProjectRow, Revision } from "@/lib/api-types"
-import { arrangeLibrary, buildLibrary, packageName, parseFilter, parseSort, type LibraryInput, type LibraryMachine, type LibraryView, type PackageItem } from "./model"
+import { arrangeLibrary, buildLibrary, packageName, parseFilter, parseSort, updateCheckSummary, type LibraryInput, type LibraryMachine, type LibraryView, type PackageItem } from "./model"
 
 const oracle: LibraryMachine = { id: "local", name: "oracle-vm" }
 const studio: LibraryMachine = { id: "n2", name: "mac-studio" }
@@ -257,5 +257,25 @@ describe("one row per package", () => {
     expect(packageName("github.com/acme/tools/.skills/humanizer")).toBe("humanizer")
     expect(packageName("github.com/acme/research/plugin")).toBe("research")
     expect(packageName("github.com/acme/tools", "Given Name")).toBe("Given Name")
+  })
+})
+
+describe("updateCheckSummary", () => {
+  it("never reports Up to date when any source failed", () => {
+    const partial = updateCheckSummary({ checked: 12, failed: 2, updates: 0 })
+    expect(partial.hasFailures).toBe(true)
+    expect(partial.label).toBe("Checked 12 · 2 failed · Retry failed")
+    expect(partial.label).not.toContain("Up to date")
+
+    const mixed = updateCheckSummary({ checked: 12, failed: 2, updates: 1 })
+    expect(mixed.hasFailures).toBe(true)
+    expect(mixed.label).toBe("Checked 12 · 1 update · 2 failed · Retry failed")
+    expect(mixed.label).not.toContain("Up to date")
+  })
+
+  it("reports Up to date only after a complete check with zero failures", () => {
+    expect(updateCheckSummary({ checked: 4, failed: 0, updates: 0 })).toEqual({ label: "Up to date", hasFailures: false })
+    expect(updateCheckSummary({ checked: 4, failed: 0, updates: 2 })).toEqual({ label: "2 updates", hasFailures: false })
+    expect(updateCheckSummary({ checked: 0, failed: 0, updates: 0 })).toEqual({ label: "Nothing to check", hasFailures: false })
   })
 })

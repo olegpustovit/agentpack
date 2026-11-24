@@ -244,22 +244,28 @@ func (g *Gateway) registerAgents(mux routeRegistrar) {
 // forwarding an account. Bare peer identities and unknown actors are denied.
 // The local CLI retains setup and shutdown authority before the first account exists.
 func (g *Gateway) requireOwner(w http.ResponseWriter, r *http.Request) bool {
-	actor, ok := session.ActorFrom(r.Context())
-	allowed := false
-	if ok && (actor.Kind == "browser" || actor.Kind == "local" || actor.Kind == "mcp" || actor.Kind == "peer" && actor.Account) {
-		err := g.store.Reader.QueryRowContext(r.Context(), `SELECT EXISTS(
-			SELECT 1 FROM users WHERE email=? AND role='owner' AND disabled=0
-		) OR (? AND NOT EXISTS(SELECT 1 FROM users))`, actor.User, actor.Kind == "local" && !actor.Account).Scan(&allowed)
-		if err != nil {
-			if event := obs.From(r.Context()); event != nil {
-				event.Fail(err)
-			}
+	allowed, err := g.isOwner(r.Context())
+	if err != nil {
+		if event := obs.From(r.Context()); event != nil {
+			event.Fail(err)
 		}
 	}
 	if !allowed {
 		http.Error(w, "only the owner can change this", http.StatusForbidden)
 	}
 	return allowed
+}
+
+func (g *Gateway) isOwner(ctx context.Context) (bool, error) {
+	actor, ok := session.ActorFrom(ctx)
+	if !ok || !(actor.Kind == "browser" || actor.Kind == "local" || actor.Kind == "mcp" || actor.Kind == "peer" && actor.Account) {
+		return false, nil
+	}
+	var allowed bool
+	err := g.store.Reader.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM users WHERE email=? AND role='owner' AND disabled=0
+	) OR (? AND NOT EXISTS(SELECT 1 FROM users))`, actor.User, actor.Kind == "local" && !actor.Account).Scan(&allowed)
+	return allowed, err
 }
 
 // reloadSignedOutChats restarts this node's running chats of harness that stopped for a sign-in, now

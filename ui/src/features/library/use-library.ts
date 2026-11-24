@@ -28,7 +28,15 @@ export function useLibrary(): { inputs: LibraryInput[]; items: LibraryItem[]; lo
   return { inputs, items: buildLibrary(inputs), loading: queries.some((query) => query.firstLoadPending), failures }
 }
 
-export type LatestByModule = { byModule: Record<string, LatestVersion>; checking: boolean; failed: boolean; refetch: () => void }
+export type LatestByModule = {
+  byModule: Record<string, LatestVersion>
+  checking: boolean
+  failed: boolean
+  checkedCount: number
+  failedCount: number
+  refetch: () => void
+  refetchFailed: () => void
+}
 
 // The newest version of each source, keyed by lowercase module. Nothing is asked until `enabled`.
 export function useLatest(inputs: LibraryInput[], modules: string[], enabled: boolean): LatestByModule {
@@ -37,14 +45,21 @@ export function useLatest(inputs: LibraryInput[], modules: string[], enabled: bo
     queries: requests.map((request) => ({ ...latestQuery(request), enabled })),
     combine: (results) => {
       const byModule: Record<string, LatestVersion> = {}
+      let failedCount = 0
       results.forEach((result, index) => {
         if (result.data) byModule[requests[index]!.module.toLowerCase()] = result.data
+        if (result.isError) failedCount += 1
       })
       return {
         byModule,
-        checking: results.some((result) => result.isFetching),
-        failed: results.some((result) => result.isError),
+        checking: enabled && results.some((result) => result.isPending || result.isFetching),
+        failed: failedCount > 0,
+        checkedCount: requests.length,
+        failedCount,
         refetch: () => results.forEach((result) => void result.refetch()),
+        refetchFailed: () => results.forEach((result) => {
+          if (result.isError) void result.refetch()
+        }),
       }
     },
   })

@@ -149,7 +149,7 @@ func TestGatewayPackageRestartChoice(t *testing.T) {
 	var restarts []bool
 	g := &Gateway{store: auth.store, auth: auth, origin: origin, local: network.NodeRecord{Secret: strings.Repeat("x", 64)}, options: GatewayOptions{
 		Home: home,
-		Install: func(_ context.Context, gotDirectory, spec string, restart bool) error {
+		Install: func(_ context.Context, gotDirectory, spec string, restart bool, _ string) error {
 			if gotDirectory != directory || spec != "github.com/example/pack@abcdef" {
 				t.Fatalf("unexpected install: %s %s", gotDirectory, spec)
 			}

@@ -31,6 +31,7 @@ const (
 )
 
 var ErrNotFound = errors.New("registry item not found")
+var ErrPreviewChanged = errors.New("the project changed. Review the change again")
 
 type Store struct {
 	root    string
@@ -150,10 +151,11 @@ type CaptureInput struct {
 }
 
 type DiffResult struct {
-	Add    []string `json:"add"`
-	Update []string `json:"update"`
-	Remove []string `json:"remove"`
-	Mode   string   `json:"mode"`
+	Add           []string `json:"add"`
+	Update        []string `json:"update"`
+	Remove        []string `json:"remove"`
+	Mode          string   `json:"mode"`
+	PreviewDigest string   `json:"preview_digest,omitempty"`
 }
 
 type bindings struct {
@@ -525,9 +527,12 @@ func (s *Store) Preview(id, revisionID, directory string) (Revision, DiffResult,
 		return Revision{}, DiffResult{}, ErrNotFound
 	}
 	diff := DiffResult{Add: []string{}, Update: []string{}, Remove: []string{}, Mode: target.Mode}
-	current, err := captureProject(directory)
-	if err == nil {
-		currentLock, e := decodeLock(current.Lock)
+	current, err := readReviewSnapshot(directory)
+	if err != nil {
+		return Revision{}, DiffResult{}, err
+	}
+	if current.hadManifest && current.hadLock {
+		currentLock, e := decodeLock(current.lock)
 		if e != nil {
 			return Revision{}, DiffResult{}, e
 		}
@@ -536,14 +541,13 @@ func (s *Store) Preview(id, revisionID, directory string) (Revision, DiffResult,
 			return Revision{}, DiffResult{}, e
 		}
 		diff = diffLocks(currentLock, targetLock, target.Mode)
-	} else if errors.Is(err, os.ErrNotExist) {
+	} else {
 		targetLock, e := decodeLock([]byte(target.Lock))
 		if e != nil {
 			return Revision{}, DiffResult{}, e
 		}
 		diff = diffLocks(lockfile.PackLock{}, targetLock, target.Mode)
-	} else {
-		return Revision{}, DiffResult{}, err
 	}
+	diff.PreviewDigest = current.digest(directory, "restore:"+id+":"+revisionID)
 	return *target, diff, nil
 }

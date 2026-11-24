@@ -21,6 +21,10 @@ export type TerminalSnapshot = {
   mouseOwned: boolean
   shellCommand?: TerminalState["shell_command"]
   ended: boolean
+  connected: boolean
+  canType: boolean
+  rows?: number
+  columns?: number
 }
 
 type ControlMessage = {
@@ -172,7 +176,7 @@ export class TerminalSession {
   }
 
   // First attach opens the terminal and the socket. Later attaches only move the element back in.
-  attach(stage: HTMLElement, panel = false) {
+  attach(stage: HTMLElement, { panel = false, focus = true } = {}) {
     this.#stage = stage
     this.#panel = panel
     this.#panelGrid = ""
@@ -186,7 +190,7 @@ export class TerminalSession {
     this.#expose()
     this.#refit()
     // Arrow keys walk the list and open rows on the way. Taking focus here would send the next arrow to the agent.
-    if (!document.activeElement?.matches("[data-source-row]:focus-visible")) this.#term?.focus()
+    if (focus && !document.activeElement?.matches("[data-source-row]:focus-visible")) this.#term?.focus()
     this.#publish()
   }
 
@@ -261,6 +265,10 @@ export class TerminalSession {
       mouseOwned: term ? term.modes.mouseTrackingMode !== "none" : false,
       shellCommand: this.#state?.shell_command,
       ended: this.#state?.running === false && !this.#state.restarting,
+      connected: this.#socket?.readyState === WebSocket.OPEN && this.#replayComplete && this.#state?.running === true,
+      canType: this.#controls(),
+      rows: this.#state?.rows,
+      columns: this.#state?.columns,
     }
   }
 

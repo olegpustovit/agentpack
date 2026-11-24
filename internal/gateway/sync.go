@@ -190,6 +190,7 @@ func ReleaseMain(ctx context.Context, home, node string, epoch int64) error {
 
 var (
 	errSyncNeedsUpdate = errors.New("peer needs update")
+	errSyncNeedsTrust  = errors.New("replication requires enrollment on both machines")
 	errSyncReset       = errors.New("peer database was restored")
 )
 
@@ -219,7 +220,10 @@ func fetchStatePage(ctx context.Context, client *http.Client, target *url.URL, s
 		}
 		return page, errSyncNeedsUpdate
 	}
-	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusForbidden {
+	if response.StatusCode == http.StatusForbidden {
+		return page, errSyncNeedsTrust
+	}
+	if response.StatusCode == http.StatusNotFound {
 		return page, errSyncNeedsUpdate
 	}
 	if response.StatusCode != http.StatusOK {
@@ -496,6 +500,7 @@ func (g *Gateway) runStatePeer(ctx context.Context, peer string, wake <-chan str
 			failure = err.Error()
 			contact.Error = failure
 			contact.NeedsUpdate = errors.Is(err, errSyncNeedsUpdate)
+			contact.NeedsTrust = errors.Is(err, errSyncNeedsTrust)
 			event.Fail(err)
 			wait = min(delay, interval)
 			delay = min(delay*2, interval)

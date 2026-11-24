@@ -134,9 +134,57 @@ test("the latest version from GitHub offers an update per project and for all of
   await expect(versions.getByRole("row", { name: /Latest/ })).toContainText("acme/alpha")
   const installed = page.getByRole("table", { name: "Installed in" })
   await expect(installed.getByRole("button", { name: "Update to 9999aaa" })).toHaveCount(12)
-  await page.getByRole("button", { name: "Update 12 projects" }).click()
+  await page.getByRole("button", { name: "Update 12 projects…" }).click()
+  // The review lists every target and writes nothing until confirmed.
+  const review = page.getByRole("dialog")
+  await expect(review.getByRole("list", { name: "Projects to update" }).getByRole("listitem")).toHaveCount(12)
+  expect(posted).toHaveLength(0)
+  await review.getByRole("button", { name: "Update 12 projects", exact: true }).click()
   await expect.poll(() => posted.length).toBe(12)
   expect(new Set(posted)).toEqual(new Set([`${alpha}@${latest}`]))
+})
+
+test("LIB-04: Update runs 2 concurrent targets per machine, keeps restart off by default, and retries only failed projects", async ({ page }) => {
+  const latest = "9999aaa" + "0".repeat(33)
+  await page.route("**/api/library/latest**", (route) => route.fulfill({ json: { commit: latest, committed_at: "2026-10-30T10:00:00Z", current: [], exact: true } }))
+  let inFlightLocal = 0
+  let maxLocal = 0
+  let failDelta = true
+  const bodies: { directory: string; restart: boolean }[] = []
+  await page.route("**/api/packages**", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    const url = new URL(route.request().url())
+    const body = route.request().postDataJSON() as { directory: string; restart: boolean }
+    bodies.push(body)
+    const isLocal = !url.searchParams.get("node")
+    if (isLocal) {
+      inFlightLocal++
+      maxLocal = Math.max(maxLocal, inFlightLocal)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      inFlightLocal--
+    }
+    if (failDelta && body.directory === "/srv/host-a/delta-app") {
+      return route.fulfill({ status: 500, json: { error: "Disk full during update" } })
+    }
+    return route.fulfill({ json: { installed: true } })
+  })
+
+  await page.goto(`/library/package/${alpha}`)
+  await page.getByRole("button", { name: "Update 12 projects…" }).click()
+  const review = page.getByRole("dialog")
+  await expect(review.getByRole("checkbox", { name: /Restart affected agents/ })).not.toBeChecked()
+  await review.getByRole("button", { name: "Update 12 projects", exact: true }).click()
+  await expect(review.getByRole("button", { name: "Retry failed (1)" })).toBeVisible()
+  await expect(review).toContainText("11 updated · 1 failed")
+  await expect(review).toContainText("Disk full during update")
+  expect(maxLocal).toBeLessThanOrEqual(2)
+  expect(bodies.every((entry) => entry.restart === false)).toBe(true)
+
+  failDelta = false
+  bodies.length = 0
+  await review.getByRole("button", { name: "Retry failed (1)" }).click()
+  await expect(review.getByRole("button", { name: "Done" })).toBeVisible()
+  expect(bodies).toEqual([{ directory: "/srv/host-a/delta-app", spec: `${alpha}@${latest}`, restart: false }])
 })
 
 test("a GitHub lookup that fails keeps the versions the machines know", async ({ page }) => {
@@ -146,40 +194,100 @@ test("a GitHub lookup that fails keeps the versions the machines know", async ({
   await expect(page.getByRole("table", { name: "Versions" }).locator("tbody tr")).toHaveCount(2)
 })
 
-test("a conflict shows both values and sends the choices, and nothing resolves until each has one", async ({ page }) => {
-  const revisions = [rev("h1", "left", "2026-10-20T10:00:00Z", []), rev("h2", "right", "2026-10-21T10:00:00Z", [])]
+test("LIB-09: a conflict renders radio candidates with machine/time, conflict count, and Retry on load failure", async ({ page }) => {
+  const revisions = [
+    { ...rev("h1", "left", "2026-10-20T10:00:00Z", []), source_node: "host-a" },
+    { ...rev("h2", "right", "2026-10-21T10:00:00Z", []), source_node: "oracle-vm" },
+  ]
   await page.route("**/api/library/agentpacks**", (route) => route.fulfill({ json: [{ agentpack: { id: "pk1", name: "Pack", revisions: ["h1", "h2"], heads: ["h1", "h2"] }, revisions }] }))
+  let failLoad = true
   let sent: unknown
-  await page.route("**/api/library/agentpacks/pk1/conflict**", (route) =>
-    route.fulfill({ json: { heads: ["h1", "h2"], fields: [{ path: "lock:packages/x", name: "github.com/acme/x", base: "aaa", values: { h1: "left111", h2: "right22" } }] } }),
-  )
+  await page.route("**/api/library/agentpacks/pk1/conflict**", (route) => {
+    if (failLoad) return route.fulfill({ status: 500, body: "conflict load error" })
+    return route.fulfill({
+      json: {
+        heads: ["h1", "h2"],
+        fields: [
+          { path: "lock:packages/x", name: "github.com/acme/x", base: "aaa", values: { h1: "left111", h2: "right22" } },
+          { path: "lock:packages/y", name: "github.com/acme/y", base: "bbb", values: { h1: "old111", h2: "new222" } },
+        ],
+      },
+    })
+  })
   await page.route("**/api/library/agentpacks/pk1/resolve**", (route) => {
     sent = route.request().postDataJSON()
     return route.fulfill({ json: { id: "merged" } })
   })
   await page.goto("/library/agentpack/pk1")
+  await expect(page.getByText(/Couldn't load conflict details/)).toBeVisible()
+  failLoad = false
+  await page.getByRole("button", { name: "Retry" }).click()
+
+  await expect(page.getByText("1 of 2 conflicts")).toBeVisible()
+  await expect(page.getByText("2 of 2 conflicts")).toBeVisible()
+  const firstGroup = page.getByRole("radiogroup", { name: "github.com/acme/x" })
+  await expect(firstGroup).toBeVisible()
+  await expect(firstGroup).toContainText("oracle-vm")
   const resolve = page.getByRole("button", { name: "Resolve conflict" })
   await expect(resolve).toBeDisabled()
-  await page.getByRole("button", { name: "right22" }).click()
+  await firstGroup.getByRole("radio", { name: /right22/ }).check()
+  await expect(resolve).toBeDisabled()
+  await page.getByRole("radiogroup", { name: "github.com/acme/y" }).getByRole("radio", { name: /new222/ }).check()
   await resolve.click()
-  await expect.poll(() => sent).toEqual({ heads: ["h1", "h2"], choices: { "lock:packages/x": "h2" } })
+  await expect.poll(() => sent).toEqual({ heads: ["h1", "h2"], choices: { "lock:packages/x": "h2", "lock:packages/y": "h2" } })
 })
 
-test("MCP inspector shows launcher, status, version and one row per project", async ({ page }) => {
+test("LIB-08: MCP inspector separates Version pin and Account connection and folds to a list on phone", async ({ page, isMobile }) => {
   await page.goto("/library/mcp/foo-tools")
   const server = page.locator("dl").first()
   await expect(server).toContainText("npm")
+  await expect(server).toContainText("Version pin")
   await expect(server).toContainText("Pinned")
   await expect(server).toContainText("1.2.3")
+  await expect(server).toContainText("Account connection")
   await expect(page.getByText("12 projects", { exact: true })).toBeVisible()
-  await expect(page.locator('[data-slot="data-grid"] tbody tr')).toHaveCount(12)
+  if (isMobile) {
+    const list = page.getByRole("list", { name: "Used in" })
+    await expect(list.getByRole("listitem")).toHaveCount(12)
+    await expect(list.getByRole("listitem").first()).toContainText("Version pin:")
+    await expect(list.getByRole("listitem").first()).toContainText("Account connection:")
+    const overflow = await list.evaluate((el) => el.scrollWidth > el.clientWidth)
+    expect(overflow).toBe(false)
+  } else {
+    await expect(page.locator('[data-slot="data-grid"] tbody tr')).toHaveCount(12)
+  }
 })
 
-test("agentpack inspector diffs the newest revision and switches revisions from history", async ({ page }) => {
+test("LIB-07: agentpack inspector diffs with pins, warns on unknown ?revision without substituting, and switches revisions", async ({ page }) => {
   await page.goto("/library/agentpack/pk1")
-  await expect(page.getByRole("list", { name: "Changes from previous revision" }).getByRole("listitem")).toHaveText(["~beta", "+gamma"])
+  await expect(page.getByRole("list", { name: "Changes from previous revision" }).getByRole("listitem")).toHaveText([
+    "~Update beta 1111111 → 2222222",
+    "+Add gamma 3333333",
+  ])
+  await expect(page.getByRole("list", { name: "Revision history" })).toContainText("Update beta")
 
   await page.getByRole("button", { name: /Initial/ }).click()
   await expect(page).toHaveURL(/\/library\/agentpack\/pk1\?revision=rev1$/)
   await expect(page.getByText("First saved revision.", { exact: true })).toBeVisible()
+
+  await page.goto("/library/agentpack/pk1?revision=r4")
+  await expect(page.getByText(/Requested revision r4 is unavailable/)).toBeVisible()
+  await expect(page.getByRole("list", { name: "Revision history" }).locator('[aria-pressed="true"]')).toHaveCount(0)
+  await page.getByRole("button", { name: "Show latest" }).click()
+  await expect(page).toHaveURL(/\/library\/agentpack\/pk1\?revision=rev2$/)
+  await expect(page.getByRole("list", { name: "Revision history" }).locator('[aria-pressed="true"]')).toHaveCount(1)
+})
+
+test.describe("phone viewport", () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+
+  test("LIB-08 on phone: MCP Used in folds to a list with no horizontal overflow and both statuses as text", async ({ page }) => {
+    await page.goto("/library/mcp/foo-tools")
+    const list = page.getByRole("list", { name: "Used in" })
+    await expect(list.getByRole("listitem")).toHaveCount(12)
+    await expect(list.getByRole("listitem").first()).toContainText("Version pin: Pinned · 1.2.3")
+    await expect(list.getByRole("listitem").first()).toContainText("Account connection: No shared login")
+    const overflow = await list.evaluate((el) => el.scrollWidth > el.clientWidth)
+    expect(overflow).toBe(false)
+  })
 })
