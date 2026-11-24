@@ -14,7 +14,110 @@ import (
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/registry"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
+
+func (g *Gateway) registerProjects(mux routeRegistrar) {
+	mux.HandleFunc("GET /api/recent", g.serveRecent)
+	mux.HandleFunc("DELETE /api/recent", g.serveForgetRecent)
+	mux.HandleFunc("GET /api/packages", g.servePackages)
+	mux.HandleFunc("PUT /api/projects/settings", g.saveProjectSettings)
+	mux.HandleFunc("GET /api/projects", g.serveProjects)
+	mux.HandleFunc("GET /api/folders", g.serveFolders)
+	mux.HandleFunc("POST /api/folders", serveCreateFolder)
+	mux.HandleFunc("GET /api/folders/found", g.serveFoundFolders)
+	mux.HandleFunc("POST /api/packages", g.serveInstallPackage)
+	mux.HandleFunc("POST /api/mcp/servers", g.serveInstallMCP)
+}
+
+func (g *Gateway) serveRecent(w http.ResponseWriter, r *http.Request) {
+	value, err := g.meshRecent(r.Context(), r.URL.Query().Get("node"))
+	if err != nil {
+		meshReadError(w, r, err)
+		return
+	}
+	network.WriteJSON(w, value)
+}
+
+func (g *Gateway) serveForgetRecent(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Directory string `json:"directory"`
+		Harness   string `json:"harness"`
+		Mode      string `json:"mode"`
+	}
+	if !network.ReadJSON(w, r, &input) {
+		return
+	}
+	if err := network.ForgetRecent(r.Context(), g.store, session.SessionInfo{Directory: input.Directory, Harness: input.Harness, Mode: input.Mode}); err != nil {
+		fail(w, r, err)
+		return
+	}
+	network.WriteJSON(w, map[string]bool{"forgotten": true})
+}
+
+func (g *Gateway) servePackages(w http.ResponseWriter, r *http.Request) {
+	directory := r.URL.Query().Get("directory")
+	if !g.knownDirectory(r.Context(), directory) {
+		http.Error(w, "choose a recent folder from this node", 400)
+		return
+	}
+	contents, err := g.options.Packages(r.Context(), directory)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	network.WriteJSON(w, contents.Packages)
+}
+
+func (g *Gateway) serveProjects(w http.ResponseWriter, r *http.Request) {
+	value, err := g.projects(r.Context())
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	network.WriteJSON(w, value)
+}
+
+func (g *Gateway) serveInstallPackage(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Directory string `json:"directory"`
+		Spec      string `json:"spec"`
+		Restart   *bool  `json:"restart"`
+	}
+	if !network.ReadJSON(w, r, &input) {
+		return
+	}
+	if !g.knownDirectory(r.Context(), input.Directory) || input.Spec == "" {
+		http.Error(w, "choose a recent folder and package", 400)
+		return
+	}
+	if err := g.options.Install(r.Context(), input.Directory, input.Spec, input.Restart == nil || *input.Restart); err != nil {
+		fail(w, r, err)
+		return
+	}
+	network.WriteJSON(w, map[string]bool{"installed": true})
+}
+
+func (g *Gateway) serveInstallMCP(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		registry.MCPServerInput
+		Directory string `json:"directory"`
+		Restart   *bool  `json:"restart"`
+	}
+	if !network.ReadJSON(w, r, &input) {
+		return
+	}
+	if !g.knownDirectory(r.Context(), input.Directory) || input.Name == "" {
+		http.Error(w, "choose a recent folder and MCP server", 400)
+		return
+	}
+	err := g.options.InstallMCP(r.Context(), input.Directory, input.MCPServerInput, input.Restart == nil || *input.Restart)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	network.WriteJSON(w, map[string]bool{"installed": true})
+}
 
 type ProjectLaunch struct {
 	Harness  string    `json:"harness"`

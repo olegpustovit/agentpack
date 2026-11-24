@@ -10,7 +10,42 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/paths"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
+
+func (g *Gateway) registerGatewayLifecycle(mux routeRegistrar) {
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { network.WriteJSON(w, map[string]bool{"ok": true}) })
+	mux.HandleFunc("POST /api/node/stop", func(w http.ResponseWriter, r *http.Request) {
+		if err := SetGatewayEnabled(g.options.Home, false); err != nil {
+			fail(w, r, err)
+			return
+		}
+		network.WriteJSON(w, map[string]bool{"stopping": true})
+		g.stop()
+	})
+	mux.HandleFunc("POST /api/node/stop-agents", func(w http.ResponseWriter, r *http.Request) {
+		sessions, err := network.SessionsIn(r.Context(), g.store.Reader, g.options.Home)
+		skipped := 0
+		if err == nil {
+			actor, ok := session.ActorFrom(r.Context())
+			if !ok {
+				actor = session.BrowserActor(g.auth.email(r))
+			}
+			for _, session := range sessions {
+				if session.Transport == "shell" || session.Transport == "acp" && !actor.CanWriteSession(session) {
+					skipped++
+					continue
+				}
+				err = errors.Join(err, network.StopWorker(r.Context(), g.options.Home, session.ID))
+			}
+		}
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		network.WriteJSON(w, map[string]any{"stopped": true, "skipped": skipped})
+	})
+}
 
 type AccountStatus struct {
 	Joining       bool   `json:"joining,omitempty"`

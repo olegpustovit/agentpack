@@ -14,6 +14,12 @@ import (
 	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
+func (g *Gateway) registerTelemetry(mux routeRegistrar) {
+	mux.HandleFunc("POST /api/telemetry", g.telemetry)
+	mux.HandleFunc("GET /api/debug/timings", g.readChatTimings)
+	mux.HandleFunc("POST /api/debug/timings", g.writeChatTiming)
+}
+
 type telemetryWindow struct {
 	since time.Time
 	count int

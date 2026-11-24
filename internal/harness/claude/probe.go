@@ -45,7 +45,6 @@ func ProbeBundle(ctx context.Context, bundleDir, workspace, sourceID, lockDigest
 	if len(packaged) > 0 {
 		plan = packaged[0]
 	}
-	expected := plan.Skills
 	exe, err := base.Claude.Resolve()
 	if err != nil {
 		return environment.Receipt{}, err
@@ -84,13 +83,10 @@ func ProbeBundle(ctx context.Context, bundleDir, workspace, sourceID, lockDigest
 	receipt.DiagnosticRefs = append(receipt.DiagnosticRefs, versionEvidence)
 
 	if versionErr != nil {
-		err = versionErr
-	}
-	if err != nil {
 		receipt.Termination.Status = "failed"
 		receipt.Findings = append(receipt.Findings, environment.Finding{
 			Code: "PROBE_FAILED", Severity: environment.SeverityError, Target: "claude",
-			Message: err.Error(), Evidence: environment.EvidenceUnknown,
+			Message: versionErr.Error(), Evidence: environment.EvidenceUnknown,
 			Remedy: "install claude or set CLAUDE_CODE_PATH; re-run agentpack probe --agent claude",
 		})
 		receipt.OverallStatus = "error"
@@ -121,6 +117,11 @@ func ProbeBundle(ctx context.Context, bundleDir, workspace, sourceID, lockDigest
 		diagnosticEnv = append(diagnosticEnv, "SystemRoot="+os.Getenv("SystemRoot"))
 	}
 
+	err = observePluginCatalog(ctx, exe, bundleDir, workspace, diagnosticEnv, plan, &receipt)
+	return receipt, err
+}
+
+func observePluginCatalog(ctx context.Context, exe, bundleDir, workspace string, diagnosticEnv []string, plan base.PackagedNames, receipt *environment.Receipt) error {
 	listPlan := base.ProbePlan{
 		Executable: exe,
 		Argv:       []string{"--bare", "--plugin-dir", bundleDir, "plugin", "list", "--json"},
@@ -135,7 +136,7 @@ func ProbeBundle(ctx context.Context, bundleDir, workspace, sourceID, lockDigest
 	listResult, err := base.RunProbe(ctx, listPlan)
 	listEvidence, saveErr := base.SaveProbeEvidence(workspace, receipt.ReceiptID, "plugin-list", listResult)
 	if saveErr != nil {
-		return receipt, saveErr
+		return saveErr
 	}
 	receipt.DiagnosticRefs = append(receipt.DiagnosticRefs, listEvidence)
 	receipt.Termination.NativeExitCode = listResult.ExitCode
@@ -143,7 +144,7 @@ func ProbeBundle(ctx context.Context, bundleDir, workspace, sourceID, lockDigest
 		receipt.Termination.Status = "failed"
 		receipt.OverallStatus = "error"
 		receipt.Findings = append(receipt.Findings, environment.Finding{Code: "PROBE_FAILED", Severity: environment.SeverityError, Target: "claude", Message: err.Error(), Evidence: environment.EvidenceUnknown, Remedy: "verify native CLI and staged plugin; rerun explicit probe"})
-		return receipt, nil
+		return nil
 	}
 
 	var plugins []pluginEntry
@@ -157,7 +158,7 @@ func ProbeBundle(ctx context.Context, bundleDir, workspace, sourceID, lockDigest
 			Message: "native plugin inventory schema is invalid or incomplete", Evidence: environment.EvidenceUnknown,
 		})
 		receipt.OverallStatus = "unknown"
-		return receipt, nil
+		return nil
 	}
 
 	receipt.Properties = append(receipt.Properties, environment.ObservedProperty{Scope: "controlled_projection", Category: "plugin", Property: "catalog_complete", Value: true, Evidence: environment.EvidenceObserved, Method: "native_catalog", EvidenceRef: listEvidence})
@@ -188,13 +189,12 @@ func ProbeBundle(ctx context.Context, bundleDir, workspace, sourceID, lockDigest
 			Evidence: environment.EvidenceObserved,
 			Remedy:   "run agentpack sync then probe again with the staged Claude bundle",
 		})
-		if sessionValidated(version) {
+		if sessionValidated(receipt.Target.NativeVersion) {
 			// Staging can drop every packaged skill that a project skill replaces; the session still shows who holds the names.
-			plan.Skills = expected
-			observeSession(ctx, exe, bundleDir, workspace, diagnosticEnv, plan, &receipt)
+			observeSession(ctx, exe, bundleDir, workspace, diagnosticEnv, plan, receipt)
 		}
 		receipt.OverallStatus = "ready_with_warnings"
-		return receipt, nil
+		return nil
 	}
 
 	detailsPlan := base.ProbePlan{
@@ -207,10 +207,16 @@ func ProbeBundle(ctx context.Context, bundleDir, workspace, sourceID, lockDigest
 		Network:    "none_required",
 		WriteScope: "managed_diagnostic_storage",
 	}
+	return observePluginDetails(ctx, detailsPlan, bundleDir, plan, receipt)
+}
+
+func observePluginDetails(ctx context.Context, detailsPlan base.ProbePlan, bundleDir string, plan base.PackagedNames, receipt *environment.Receipt) error {
+	version := receipt.Target.NativeVersion
+	expected := plan.Skills
 	details, err := base.RunProbe(ctx, detailsPlan)
-	detailsEvidence, saveErr := base.SaveProbeEvidence(workspace, receipt.ReceiptID, "plugin-details", details)
+	detailsEvidence, saveErr := base.SaveProbeEvidence(detailsPlan.Cwd, receipt.ReceiptID, "plugin-details", details)
 	if saveErr != nil {
-		return receipt, saveErr
+		return saveErr
 	}
 	receipt.DiagnosticRefs = append(receipt.DiagnosticRefs, detailsEvidence)
 	if err != nil || details.ExitCode != 0 {
@@ -226,7 +232,7 @@ func ProbeBundle(ctx context.Context, bundleDir, workspace, sourceID, lockDigest
 			Evidence: environment.EvidenceUnknown,
 		})
 		receipt.OverallStatus = "unknown"
-		return receipt, nil
+		return nil
 	}
 	receipt.Termination.NativeExitCode = details.ExitCode
 	skills, parseErr := parseSkillInventory(details.Stdout)
@@ -235,15 +241,14 @@ func ProbeBundle(ctx context.Context, bundleDir, workspace, sourceID, lockDigest
 		if !sessionValidated(version) {
 			receipt.Findings = append(receipt.Findings, environment.Finding{Code: "OBSERVATION_PARTIAL", Severity: environment.SeverityError, Target: "claude", Message: parseErr.Error(), Evidence: environment.EvidenceUnknown})
 			receipt.OverallStatus = "unknown"
-			return receipt, nil
+			return nil
 		}
 		// A very large bundle abbreviates its inventory line. The plugin listing is then
 		// unusable, but the session catalog still names every skill.
 		receipt.Findings = append(receipt.Findings, environment.Finding{Code: "OBSERVATION_PARTIAL", Severity: environment.SeverityWarning, Target: "claude", Message: "plugin inventory unreadable (" + parseErr.Error() + "); using the session catalog only", Evidence: environment.EvidenceUnknown})
-		plan.Skills = expected
-		observeSession(ctx, exe, bundleDir, workspace, diagnosticEnv, plan, &receipt)
+		observeSession(ctx, detailsPlan.Executable, bundleDir, detailsPlan.Cwd, detailsPlan.Env, plan, receipt)
 		receipt.OverallStatus = "ready_with_warnings"
-		return receipt, nil
+		return nil
 	}
 	receipt.Coverage = []environment.CoverageNote{{
 		Category: "plugin", Scope: "controlled_projection", Completeness: "complete",
@@ -270,12 +275,12 @@ func ProbeBundle(ctx context.Context, bundleDir, workspace, sourceID, lockDigest
 				plan.Skills = append(plan.Skills, name)
 			}
 		}
-		observeSession(ctx, exe, bundleDir, workspace, diagnosticEnv, plan, &receipt)
+		observeSession(ctx, detailsPlan.Executable, bundleDir, detailsPlan.Cwd, detailsPlan.Env, plan, receipt)
 	} else {
 		receipt.Coverage = append(receipt.Coverage, environment.CoverageNote{Category: "skill", Scope: "workspace_session", Completeness: "none", Reason: "session catalog parser is validated for 2.1.296 and later 2.1 releases"})
 	}
 	receipt.OverallStatus = "ready_with_warnings"
-	return receipt, nil
+	return nil
 }
 
 func sessionValidated(version string) bool {

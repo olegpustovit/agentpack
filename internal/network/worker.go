@@ -159,32 +159,29 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		return 1, fmt.Errorf("listen for worker attachments: %w", err)
 	}
 	defer listener.Close()
-	validate, err := guardWorkerFolders(&launch)
+	worker := workerRuntime{home: home, directory: directory, store: store, launch: launch, listener: listener, cancel: cancelWorker}
+	return worker.run(ctx, startCtx, started, ready)
+}
+
+type workerRuntime struct {
+	home, directory string
+	store           *state.Store
+	launch          WorkerLaunch
+	listener        net.Listener
+	cancel          context.CancelCauseFunc
+}
+
+func (worker *workerRuntime) run(ctx, startCtx context.Context, started *obs.Event, ready func(string) error) (code int, result error) {
+	launch := &worker.launch
+	store, directory := worker.store, worker.directory
+	validate, err := guardWorkerFolders(launch)
 	if err != nil {
 		return 1, err
 	}
 	// agentSession is the terminal agent's own session, which a restart resumes; empty at first launch.
 	agentSession := func() string { return "" }
 	start := func(rows, columns uint16) (*Session, error) {
-		if err := validate(); err != nil {
-			return nil, err
-		}
-		// Each launch publishes its new fingerprint after staging succeeds.
-		if err := os.Remove(filepath.Join(directory, "environment")); err != nil && !os.IsNotExist(err) {
-			return nil, err
-		}
-		command := exec.Command(launch.Program, resumeArguments(launch, agentSession)...)
-		environment := launch.Environment
-		if environment == nil {
-			environment = os.Environ()
-		}
-		command.Dir, command.Env = launch.Directory, append(append([]string(nil), environment...), "AGENTPACK_SESSION=1", "AGENTPACK_SESSION_ID="+filepath.Base(directory))
-		command.Env = append(command.Env, "AGENTPACK_TRACE="+obs.ParseTraceParent(obs.TraceParent(ctx)).ID)
-		session, err := StartSession(command, rows, columns)
-		if session != nil {
-			session.shell = launch.Transport == "shell"
-		}
-		return session, err
+		return worker.startTerminal(ctx, validate, agentSession, rows, columns)
 	}
 	var pty *Session
 	var conversation *ConversationSession
@@ -192,98 +189,39 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	var handler *WorkerHTTP
 	var server *http.Server
 	defer func() {
-		stop, cancel := context.WithTimeout(context.Background(), workerStopGrace)
-		if handler != nil {
-			_ = handler.Stop(stop)
-		} else if pty != nil {
-			_ = pty.Stop(stop)
-		}
-		cancel()
-		// Keep answering the liveness probe until the worker's final state is stored.
-		terminal := launch.Session.State
-		if handler != nil && handler.current() != nil {
-			terminal = handler.current().State()
-		}
-		terminal.ExitCode = code
-		if err := session.EndSession(context.Background(), store.DB, launch.Session.ID, terminal); err != nil {
-			_, event := obs.Start(ctx, "worker", "persist_end")
-			event.Set("session_id", launch.Session.ID)
-			event.Fail(err)
-			event.End()
-			result = errors.Join(result, err)
-		}
-		if server != nil {
-			drain, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = server.Shutdown(drain)
-			if handler != nil {
-				_ = handler.Shutdown(drain)
-			}
-			_ = server.Close()
-		}
+		worker.finish(ctx, server, handler, pty, code, &result)
 	}()
-	if launch.Transport == "acp" {
-		launch.Session.Transport = "acp"
+
+	record, err := worker.sessionRecord(ctx)
+	if err != nil {
+		return 1, err
 	}
-	pending := launch.Session
-	// A new claim on an agent session is recorded only once its owner is verified; a resumed chat's
-	// row already holds it, and keeps it so a failed start can be resumed again.
-	if stored, err := session.StoredSession(ctx, store.Reader, launch.Session.ID); err != nil || stored.AgentSessionID != pending.AgentSessionID {
-		pending.AgentSessionID = ""
-	}
-	if err := session.UpsertSession(ctx, store.DB, pending); err != nil {
-		return 1, fmt.Errorf("register session: %w", err)
-	}
-	var secret [32]byte
-	if _, err := rand.Read(secret[:]); err != nil {
-		return 1, fmt.Errorf("generate worker secret: %w", err)
-	}
-	record := WorkerRecord{Session: launch.Session, ID: filepath.Base(directory), PID: os.Getpid(), Address: listener.Addr().String(), Secret: hex.EncodeToString(secret[:])}
 	var readyHTTP atomic.Pointer[WorkerHTTP]
 	serveDone := make(chan error, 1)
 	serve := func(httpHandler http.Handler) {
 		server = &http.Server{Handler: httpHandler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
-		obs.Go("worker.http", func() { serveDone <- server.Serve(listener) })
+		obs.Go("worker.http", func() { serveDone <- server.Serve(worker.listener) })
 	}
 	// An instant start's row stays "starting" until the worker serves; see Republish after ready.
 	var starting atomic.Bool
 	starting.Store(launch.Session.ConversationState == "starting")
 	if launch.Transport == "acp" {
-		agent = &acpAgent{home: home, store: store, launch: &launch, record: record, directory: directory, cancel: cancelWorker}
-		prepared, err := prepareACPWorker(ctx, store, record, directory, &starting, cancelWorker, serve, &readyHTTP)
+		agent = &acpAgent{home: worker.home, store: store, launch: launch, record: record, directory: directory, cancel: worker.cancel}
+		prepared, err := prepareACPWorker(ctx, store, record, directory, &starting, worker.cancel, serve, &readyHTTP)
 		if err != nil {
 			return 1, err
 		}
-		launch.tools = NewChatTools(home, filepath.Base(directory))
+		launch.tools = NewChatTools(worker.home, filepath.Base(directory))
 		if launch.tools.Close != nil {
 			defer launch.tools.Close()
 		}
-		conversation, agent.cleanup, err = startACPConversation(startCtx, launch, directory, prepared)
+		conversation, agent.cleanup, err = startACPConversation(startCtx, *launch, directory, prepared)
 		if err != nil {
 			return 1, err
 		}
-		// What this agent launched with, the base later changes are compared with; off the start path.
-		if environment, ok := agent.environment(); ok {
-			obs.Go("worker.record_environment", func() {
-				if _, _, err := environment.record(); err != nil {
-					_, event := obs.Start(ctx, "worker", "record_environment")
-					event.Set("session_id", record.ID)
-					event.Fail(err)
-					event.End()
-				}
-			})
-		}
+		agent.recordInitialEnvironment(ctx)
 		if agent.cleanup != nil {
-			defer func() {
-				// Under the lifecycle lock, after any restart in progress: a restart that swapped the
-				// agent is cleaned up here, and none can start a new one afterwards.
-				if handler != nil {
-					handler.lifecycle.Lock()
-					defer handler.lifecycle.Unlock()
-					handler.stopping = true
-				}
-				agent.close()
-			}()
+			defer agent.closeForShutdown()
 		}
 		// Restart must load the forked ID rather than fork its source again.
 		launch.ForkSessionID = ""
@@ -301,22 +239,8 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			return 1, err
 		}
 	}
-	record.Session = launch.Session
-	if launch.Transport == "acp" {
-		record.Session.Transport = "acp"
-		record.Session.AgentSessionID = launch.Session.AgentSessionID
-	}
-	if pty != nil {
-		record.Session.State = pty.State()
-		record.Session.LastUsed = time.Now().UTC()
-	}
-	if err := session.UpsertSession(ctx, store.DB, record.Session); err != nil {
-		return 1, fmt.Errorf("register session: %w", err)
-	}
-	if server == nil {
-		if err := PublishWorkerEndpoint(directory, record); err != nil {
-			return 1, err
-		}
+	if err := worker.publishSession(ctx, &record, pty, server == nil); err != nil {
+		return 1, err
 	}
 	wireConversation := func(current *ConversationSession) {
 		wireWorkerConversation(ctx, store, record, directory, launch.Session.Goal, current)
@@ -358,16 +282,88 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if agent != nil {
 		conversation = agent.current()
 	}
+	republishWorkerState(ctx, record.ID, conversation)
+	started.End()
+	return waitForWorker(ctx, handler, serveDone)
+}
+
+func (worker *workerRuntime) startTerminal(ctx context.Context, validate func() error, agentSession func() string, rows, columns uint16) (*Session, error) {
+	launch, directory := &worker.launch, worker.directory
+	if err := validate(); err != nil {
+		return nil, err
+	}
+	// Each launch publishes its new fingerprint after staging succeeds.
+	if err := os.Remove(filepath.Join(directory, "environment")); err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	command := exec.Command(launch.Program, resumeArguments(*launch, agentSession)...)
+	environment := launch.Environment
+	if environment == nil {
+		environment = os.Environ()
+	}
+	command.Dir, command.Env = launch.Directory, append(append([]string(nil), environment...), "AGENTPACK_SESSION=1", "AGENTPACK_SESSION_ID="+filepath.Base(directory))
+	command.Env = append(command.Env, "AGENTPACK_TRACE="+obs.ParseTraceParent(obs.TraceParent(ctx)).ID)
+	session, err := StartSession(command, rows, columns)
+	if session != nil {
+		session.shell = launch.Transport == "shell"
+	}
+	return session, err
+}
+
+func (worker *workerRuntime) sessionRecord(ctx context.Context) (WorkerRecord, error) {
+	launch, store := &worker.launch, worker.store
+	if launch.Transport == "acp" {
+		launch.Session.Transport = "acp"
+	}
+	pending := launch.Session
+	// A new claim on an agent session is recorded only once its owner is verified; a resumed chat's
+	// row already holds it, and keeps it so a failed start can be resumed again.
+	if stored, err := session.StoredSession(ctx, store.Reader, launch.Session.ID); err != nil || stored.AgentSessionID != pending.AgentSessionID {
+		pending.AgentSessionID = ""
+	}
+	if err := session.UpsertSession(ctx, store.DB, pending); err != nil {
+		return WorkerRecord{}, fmt.Errorf("register session: %w", err)
+	}
+	var secret [32]byte
+	if _, err := rand.Read(secret[:]); err != nil {
+		return WorkerRecord{}, fmt.Errorf("generate worker secret: %w", err)
+	}
+	return WorkerRecord{Session: launch.Session, ID: filepath.Base(worker.directory), PID: os.Getpid(), Address: worker.listener.Addr().String(), Secret: hex.EncodeToString(secret[:])}, nil
+}
+
+func (worker *workerRuntime) publishSession(ctx context.Context, record *WorkerRecord, pty *Session, publishEndpoint bool) error {
+	launch := &worker.launch
+	record.Session = launch.Session
+	if launch.Transport == "acp" {
+		record.Session.Transport = "acp"
+		record.Session.AgentSessionID = launch.Session.AgentSessionID
+	}
+	if pty != nil {
+		record.Session.State = pty.State()
+		record.Session.LastUsed = time.Now().UTC()
+	}
+	if err := session.UpsertSession(ctx, worker.store.DB, record.Session); err != nil {
+		return fmt.Errorf("register session: %w", err)
+	}
+	if publishEndpoint {
+		return PublishWorkerEndpoint(worker.directory, *record)
+	}
+	return nil
+}
+
+func republishWorkerState(ctx context.Context, id string, conversation *ConversationSession) {
 	if conversation != nil {
 		// Through the log's writer, so the state follows every batch already stored and none overwrites a newer one.
 		if err := conversation.Log.Republish(); err != nil {
 			_, event := obs.Start(ctx, "worker", "persist_state")
-			event.Set("session_id", record.ID)
+			event.Set("session_id", id)
 			event.Fail(err)
 			event.End()
 		}
 	}
-	started.End()
+}
+
+func waitForWorker(ctx context.Context, handler *WorkerHTTP, serveDone <-chan error) (int, error) {
 	select {
 	case <-ctx.Done():
 		if context.Cause(ctx) == session.ErrSessionArchived {
@@ -392,6 +388,38 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 		}
 		code, err := handler.current().Wait(context.Background())
 		return code, errors.Join(err, handler.err)
+	}
+}
+
+func (worker *workerRuntime) finish(ctx context.Context, server *http.Server, handler *WorkerHTTP, pty *Session, code int, result *error) {
+	stop, cancel := context.WithTimeout(context.Background(), workerStopGrace)
+	if handler != nil {
+		_ = handler.Stop(stop)
+	} else if pty != nil {
+		_ = pty.Stop(stop)
+	}
+	cancel()
+	// Keep answering the liveness probe until the worker's final state is stored.
+	terminal := worker.launch.Session.State
+	if handler != nil && handler.current() != nil {
+		terminal = handler.current().State()
+	}
+	terminal.ExitCode = code
+	if err := session.EndSession(context.Background(), worker.store.DB, worker.launch.Session.ID, terminal); err != nil {
+		_, event := obs.Start(ctx, "worker", "persist_end")
+		event.Set("session_id", worker.launch.Session.ID)
+		event.Fail(err)
+		event.End()
+		*result = errors.Join(*result, err)
+	}
+	if server != nil {
+		drain, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(drain)
+		if handler != nil {
+			_ = handler.Shutdown(drain)
+		}
+		_ = server.Close()
 	}
 }
 
@@ -522,6 +550,31 @@ type acpAgent struct {
 	handler   *WorkerHTTP
 	wire      func(*ConversationSession)
 	cleanup   func()
+}
+
+func (agent *acpAgent) recordInitialEnvironment(ctx context.Context) {
+	// What this agent launched with, the base later changes are compared with; off the start path.
+	if environment, ok := agent.environment(); ok {
+		obs.Go("worker.record_environment", func() {
+			if _, _, err := environment.record(); err != nil {
+				_, event := obs.Start(ctx, "worker", "record_environment")
+				event.Set("session_id", agent.record.ID)
+				event.Fail(err)
+				event.End()
+			}
+		})
+	}
+}
+
+func (agent *acpAgent) closeForShutdown() {
+	// Under the lifecycle lock, after any restart in progress: a restart that swapped the
+	// agent is cleaned up here, and none can start a new one afterwards.
+	if handler := agent.handler; handler != nil {
+		handler.lifecycle.Lock()
+		defer handler.lifecycle.Unlock()
+		handler.stopping = true
+	}
+	agent.close()
 }
 
 // close stops the agent process, once.

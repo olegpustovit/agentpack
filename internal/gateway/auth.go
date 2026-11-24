@@ -20,6 +20,14 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+func (g *Gateway) registerAuth(mux routeRegistrar) {
+	mux.HandleFunc("GET /api/status", g.auth.status)
+	mux.HandleFunc("POST /api/claim", g.auth.claim)
+	mux.HandleFunc("POST /api/login", g.auth.login)
+	mux.HandleFunc("POST /api/logout", g.logout)
+	mux.HandleFunc("POST /api/logout-all", g.auth.logoutAll)
+}
+
 const browserSessionLifetime = 30 * 24 * time.Hour
 
 // browserSessionSlide is how stale a session expiry may get before a request extends it.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"path/filepath"
 
@@ -13,6 +14,21 @@ import (
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/session"
 )
+
+func (g *Gateway) registerConfig(mux routeRegistrar) {
+	buildID := g.options.UIBuildID
+	if buildID == "" {
+		files, _ := fs.Sub(webDist, "webdist")
+		buildID = uiBuildID(files)
+	}
+	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
+		config := map[string]any{"ui_build_id": buildID, "conversation_events": true, "conversation_config_log": true}
+		if g.localBrowserTiming(r) {
+			config["debug_chat_timings"] = true
+		}
+		network.WriteJSON(w, config)
+	})
+}
 
 func (g *Gateway) serveAgentSnapshot(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
