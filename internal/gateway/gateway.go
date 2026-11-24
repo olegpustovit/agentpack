@@ -681,7 +681,8 @@ func (g *Gateway) routes() routeMux {
 		if input.Hidden != nil && *input.Hidden {
 			archived, _ := sessionRow(r.Context(), r.PathValue("id"))
 			changed, err := network.HideSession(r.Context(), g.store, g.options.Home, r.PathValue("id"))
-			if changed && err == nil {
+			// Only this machine's worktrees can be removed here; a remote path names nothing local.
+			if local, nodeErr := g.nodeID(r.Context()); changed && err == nil && nodeErr == nil && archived.NodeID == local {
 				g.removeArchivedWorktree(r.Context(), archived)
 			}
 			switch {
