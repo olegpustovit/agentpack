@@ -154,7 +154,6 @@ function SessionRoute() {
             key={`${machine}/${sessionId}`}
             machine={machine}
             sessionId={sessionId}
-            info={info}
             title={title || undefined}
             subtitle={subtitle || undefined}
             listed={!data || !!info}

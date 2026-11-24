@@ -57,15 +57,16 @@ export function SaveAgentpackSheet({ open, onOpenChange }: { open: boolean; onOp
       <SheetContent>
         {current ? (
           <>
-            <Field>
-              <FieldLabel>Project</FieldLabel>
-              <PopupSelect label="Project" value={current.value} items={eligible} onValueChange={setChoice} />
-            </Field>
             <SaveForm
               key={current.value}
               row={{ machine: current.machine.id, machineName: current.machine.name, directory: current.project.directory, mode: current.project.launches[0]?.mode ?? "default" }}
               onDone={() => onOpenChange(false)}
-            />
+            >
+              <Field>
+                <FieldLabel>Project</FieldLabel>
+                <PopupSelect label="Project" value={current.value} items={eligible} onValueChange={setChoice} />
+              </Field>
+            </SaveForm>
           </>
         ) : (
           <>
@@ -93,7 +94,7 @@ function InstallMCPForm({ server, onDone }: { server: MCPServerInput; onDone: ()
   const machines = useMachines()
   const projects = useMachineQueries(projectsQuery)
   const [choice, setChoice] = useState<string>()
-  const [restart, setRestart] = useState(true)
+  const [restart, setRestart] = useState(false)
   const eligible = machines.filter((machine) => machine.online).flatMap((machine) =>
     (projects.byMachine[machine.id]?.data ?? [])
       .filter((project) => project.available)
@@ -134,7 +135,7 @@ function InstallMCPForm({ server, onDone }: { server: MCPServerInput; onDone: ()
             <span aria-hidden className="w-30 shrink-0" />
             <label className="flex items-center gap-(--s3) text-(length:--fs-sm)">
               <Checkbox checked={restart} onCheckedChange={setRestart} />
-              Restart affected agents
+              Restart affected agents now
             </label>
           </Field>
         </FieldGrid>
@@ -156,7 +157,7 @@ function AddPackageForm({ onDone, initialMachine, initialDirectory, initialSpec 
   const projects = useMachineQueries(projectsQuery)
   const [spec, setSpec] = useState(initialSpec ?? "")
   const [picked, setPicked] = useState<Record<string, boolean>>({})
-  const [restart, setRestart] = useState(true)
+  const [restart, setRestart] = useState(false)
   const [choice, setChoice] = useState<string | undefined>(initialMachine && initialDirectory ? `${initialMachine}\0${initialDirectory}` : undefined)
   const [blank, setBlank] = useState(false)
   const fixed = Boolean(initialDirectory)
@@ -230,7 +231,9 @@ function AddPackageForm({ onDone, initialMachine, initialDirectory, initialSpec 
             </Field>
           )}
           {current && known.length > 0 && (
-            <div role="group" aria-label="Known packages" className="max-h-60 overflow-y-auto">
+            <Field className="items-start">
+            <FieldLabel className="pt-(--s1)">From Library</FieldLabel>
+            <div role="group" aria-label="Known packages" className="max-h-60 min-w-0 flex-1 overflow-y-auto">
               {known.map((item) => {
                 const state = destinationState({ module: item.module, commit: item.commit, name: item.name, cache_key: "" }, current.target)
                 return (
@@ -242,16 +245,17 @@ function AddPackageForm({ onDone, initialMachine, initialDirectory, initialSpec 
                 )
               })}
             </div>
+            </Field>
           )}
           <Field>
             <FieldLabel htmlFor="add-spec">Package</FieldLabel>
-            <Input id="add-spec" placeholder="module@commit" value={spec} onChange={(event) => setSpec(event.target.value)} autoFocus />
+            <Input id="add-spec" placeholder="github.com/owner/repo/path@ref" value={spec} onChange={(event) => setSpec(event.target.value)} autoFocus />
           </Field>
           <Field>
             <span aria-hidden className="w-30 shrink-0" />
             <label className="flex items-center gap-(--s3) text-(length:--fs-sm)">
               <Checkbox checked={restart} onCheckedChange={setRestart} />
-              Restart affected agents
+              Restart affected agents now
             </label>
           </Field>
         </FieldGrid>

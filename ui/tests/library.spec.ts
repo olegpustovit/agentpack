@@ -164,9 +164,10 @@ test("Discover installs an MCP server into a chosen project; an older peer reads
   await expect(dialog).toContainText("Couldn't install new-server: Needs update")
   await dialog.getByRole("combobox", { name: "Project" }).click()
   await page.getByRole("option", { name: /agentpack/ }).click()
+  await expect(dialog.getByRole("checkbox", { name: "Restart affected agents now" })).not.toBeChecked()
   await dialog.getByRole("button", { name: "Install", exact: true }).click()
   await expect(dialog).toBeHidden()
-  expect(posted.at(-1)).toEqual({ node: "local", body: { ...server, directory: "/home/oleg/agentpack", restart: true } })
+  expect(posted.at(-1)).toEqual({ node: "local", body: { ...server, directory: "/home/oleg/agentpack", restart: false } })
 })
 
 test("sort popup writes sort to the URL", async ({ page }) => {
@@ -176,11 +177,9 @@ test("sort popup writes sort to the URL", async ({ page }) => {
   await expect(page).toHaveURL(/\/library\?sort=updated$/)
 })
 
-test("status bar shows library totals on /library and not on /sessions", async ({ page }) => {
+test("the Library toolbar shows item and machine totals", async ({ page }) => {
   await page.goto("/library")
-  await expect(page.getByRole("contentinfo", { includeHidden: true })).toContainText("4 items · 1 skill · 0 plugins · 2 MCP")
-  await page.goto("/sessions")
-  await expect(page.getByRole("contentinfo", { includeHidden: true })).not.toContainText("items ·")
+  await expect(page.locator('[data-slot="toolbar"]')).toContainText("4 items on 2 machines")
 })
 
 test("remote MCP servers show their shared login and connect in place", async ({ page }) => {

@@ -6,14 +6,14 @@ import { cn } from "@/lib/utils";
 
 // Label column is 120 px (w-30) and right-aligned; stacks on phone widths.
 export function FieldGrid({ className, ...props }: ComponentProps<"div">) {
-  return <div data-slot="field-grid" className={cn("flex flex-col gap-(--s4)", className)} {...props} />;
+  return <div data-slot="field-grid" className={cn("flex flex-col gap-(--s5) max-[760px]:gap-(--s6)", className)} {...props} />;
 }
 
 export function Field({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
       data-slot="field"
-      className={cn("flex items-center gap-(--s4) max-[760px]:flex-col max-[760px]:items-stretch", className)}
+      className={cn("flex items-center gap-(--s4) max-[760px]:flex-col max-[760px]:items-stretch max-[760px]:gap-(--s2)", className)}
       {...props}
     />
   );
@@ -23,7 +23,7 @@ export function FieldLabel({ className, ...props }: ComponentProps<"label">) {
   return (
     <label
       data-slot="field-label"
-      className={cn("w-30 shrink-0 text-right text-(--fg2) max-[760px]:w-auto max-[760px]:text-left", className)}
+      className={cn("w-30 shrink-0 text-right text-(--fg2) max-[760px]:w-auto max-[760px]:text-left max-[760px]:text-(length:--fs-sm) max-[760px]:font-medium", className)}
       {...props}
     />
   );

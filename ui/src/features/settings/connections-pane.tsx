@@ -125,7 +125,7 @@ function ConnectionRow({ connection, single, first = false }: { connection: Conn
       </Menu>
       <ConfirmAlert open={removing} onOpenChange={setRemoving}>
         {removing && <ConfirmAlertContent
-          title={`Remove ${connection.label}?`}
+          title={connection.match ? `Remove the ${serverName(connection.match)} login “${connection.label}”?` : `Remove “${connection.label}”?`}
           description={first && !single
             ? "Agents on every machine lose this login at their next launch, and the next login becomes the default. A signed-in token is also revoked where the server supports it."
             : "Agents on every machine lose this login at their next launch. A signed-in token is also revoked where the server supports it."}
@@ -161,9 +161,9 @@ function RevokeAll() {
       </div>
       <ConfirmAlert open={confirming} onOpenChange={setConfirming}>
         {confirming && <ConfirmAlertContent
-          title="Sign out of every MCP login?"
-          description="Each signed-in server is revoked on every machine and needs Reconnect before agents can use it."
-          destructiveLabel="Sign out of all"
+          title="Sign out of all MCP logins?"
+          description="Every signed-in server is revoked on every machine and must be reconnected before agents can use it. Token headers stay."
+          destructiveLabel="Sign out everywhere"
           onConfirm={() => { setConfirming(false); revoke.mutate() }}
         />}
       </ConfirmAlert>

@@ -153,13 +153,7 @@ test("an offline machine says so in a banner", async ({ page }) => {
   await expect(page.getByText("lab-pi is offline. No projects are cached.")).toBeVisible()
 })
 
-test("status bar totals projects and sessions on the machines routes only", async ({ page }) => {
-  // The totals are in the status bar, hidden under 760 px, so run at desktop width.
-  await page.setViewportSize({ width: 1280, height: 800 })
-  await page.goto("/machines/local")
-  await expect(page.getByText("3 projects · 2 sessions")).toBeVisible()
-
-  await page.goto("/sessions")
-  await expect(page.getByRole("link", { name: "New session", exact: true })).toBeVisible()
-  await expect(page.getByText(/ projects · /)).toHaveCount(0)
+test("the Topology toolbar summarizes reachable and offline machines", async ({ page }) => {
+  await page.goto("/machines/topology")
+  await expect(page.locator('[data-slot="toolbar"]')).toContainText("1 reachable · 1 offline")
 })

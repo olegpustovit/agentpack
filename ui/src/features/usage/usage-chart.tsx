@@ -105,11 +105,13 @@ export function UsageChart({
           const x = i * slot + (slot - bar) / 2
           const scale = (H - BOTTOM - TOP) / top
           return (
-            <g key={i} opacity={pinned !== null && pinned !== i ? 0.35 : 1}>
+            // Keyed by the window: bars rise once when the range or period changes, never on hover.
+            <g key={`${win.range}:${win.starts[0]}:${i}`} className="bar-grow transition-opacity duration-(--dur-1)" style={{ animationDelay: `${Math.min(i * 10, 200)}ms` }} opacity={pinned !== null && pinned !== i ? 0.35 : 1}>
               {parts.map((part, j) => {
                 const y0 = H - BOTTOM - (part.below + part.value) * scale
                 const height = part.value * scale - (j ? 1.5 : 0) // a hairline of background between stacked fills
-                const r = Math.min(3, bar / 2, height)
+                // A sliver thinner than the gap has negative height; clamp so the path stays valid.
+                const r = Math.max(0, Math.min(3, bar / 2, height))
                 return j === parts.length - 1 ? (
                   <path key={part.key} fill={color(part.key, part.index)} d={`M${x},${y0 + height}V${y0 + r}q0,-${r} ${r},-${r}h${bar - 2 * r}q${r},0 ${r},${r}V${y0 + height}Z`} />
                 ) : (

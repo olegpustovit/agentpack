@@ -80,8 +80,8 @@ export function SourceRow({
       "data-selected": selected ? "true" : undefined,
       "aria-current": selected ? "true" : undefined,
       className: cn(
-        "group/row flex h-(--row-h) w-full min-w-0 items-center gap-(--s3) rounded-(--r-row) px-(--s3) text-left text-(length:--fs) text-(--fg) outline-none hover:bg-(--hover) focus-visible:ring-2 focus-visible:ring-(--accent) max-[760px]:h-8",
-        "data-selected:bg-(--sel-inactive) group-focus-within/list:data-selected:bg-(--accent) group-focus-within/list:data-selected:text-(--accent-fg)",
+        "group/row flex h-(--row-h) w-full min-w-0 items-center gap-(--s3) rounded-(--r-row) px-(--s3) text-left text-(length:--fs) text-(--fg) outline-none hover:bg-(--hover) focus-visible:ring-2 focus-visible:ring-(--accent)",
+        "data-selected:bg-(--page) data-selected:shadow-(--e-ctl) group-focus-within/list:data-selected:bg-(--accent) group-focus-within/list:data-selected:text-(--accent-fg)",
         className,
       ),
       ...props,
@@ -148,7 +148,7 @@ export function SearchField({ className, ...props }: ComponentProps<"input">) {
       />
       <Input
         type="search"
-        className={cn("border-transparent bg-(--track) ps-(--s7) pe-(--s3)", className)}
+        className={cn("border-transparent bg-(--track) ps-[calc(var(--fs)+var(--s3)*2)] pe-(--s3)", className)}
         {...props}
         ref={ref}
       />

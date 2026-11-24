@@ -9,7 +9,7 @@ export function AppWindow({ className, ...props }: ComponentProps<"div">) {
       <div
         data-slot="app-window"
         className={cn(
-          "grid h-dvh grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden bg-(--window) text-(length:--fs) text-(--fg)",
+          "grid h-dvh grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden bg-(--canvas) text-(length:--fs) text-(--fg)",
           className,
         )}
         {...props}
@@ -23,7 +23,7 @@ export function Toolbar({ className, ...props }: ComponentProps<"header">) {
     <header
       data-slot="toolbar"
       className={cn(
-        "flex h-(--bar-h) min-w-0 items-center gap-(--s3) border-b-[0.5px] border-(--sep) bg-(--chrome) px-(--s4) max-[760px]:h-11",
+        "flex min-w-0 items-center gap-(--s3) bg-(--chrome) max-[760px]:border-b-[0.5px] max-[760px]:border-(--sep)",
         className,
       )}
       {...props}
@@ -32,22 +32,5 @@ export function Toolbar({ className, ...props }: ComponentProps<"header">) {
 }
 
 export function ToolbarButton({ className, ...props }: ComponentProps<typeof Button>) {
-  return <Button variant="ghost" size="icon" className={cn("shrink-0", className)} {...props} />;
-}
-
-export function StatusBar({ className, ...props }: ComponentProps<"footer">) {
-  return (
-    <footer
-      data-slot="status-bar"
-      className={cn(
-        "flex h-(--status-h) min-w-0 items-center gap-(--s4) overflow-hidden border-t-[0.5px] border-(--sep) bg-(--chrome) px-(--s4) text-(length:--fs-sm) text-(--fg2) max-[760px]:hidden",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-export function StatusItem({ className, ...props }: ComponentProps<"span">) {
-  return <span data-slot="status-item" className={cn("min-w-0 truncate", className)} {...props} />;
+  return <Button variant="ghost" size="icon" className={cn("shrink-0 rounded-full [&_svg]:size-4", className)} {...props} />;
 }

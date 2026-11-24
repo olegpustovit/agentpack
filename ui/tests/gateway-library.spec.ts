@@ -8,15 +8,11 @@ async function mockLibraryBase(page: Page) {
   await page.route(/\/api\/library\/drafts(\?.*)?$/, (route) => route.fulfill({ json: [] }))
 }
 
-// The connection popover's Refresh invalidates every query, so offline state reaches the library.
-// The status bar is hidden on phones, so the refresh is done at desktop width and the viewport restored.
+// With /api/events aborted, nodesQuery polls every 30 s. Advance the fake clock so online/offline changes reach the library.
 async function refreshMachines(page: Page) {
-  const size = page.viewportSize()
-  await page.setViewportSize({ width: 1280, height: 800 })
-  await page.getByRole("contentinfo").getByRole("button", { name: /^Connected/ }).click()
-  await page.getByRole("button", { name: "Refresh", exact: true }).click()
-  await page.keyboard.press("Escape")
-  if (size) await page.setViewportSize(size)
+  const refreshed = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/nodes")
+  await page.clock.runFor(31_000)
+  await refreshed
 }
 
 test("Library keeps installed packages when an older peer has no Library API", async ({ page }) => {
@@ -116,6 +112,7 @@ test("save, rename, preview and restore an agentpack in the Library", async ({ p
 })
 
 test("offline package rows save drafts and require a fresh review before apply", async ({ page }) => {
+  await page.clock.install()
   await mockAPI(page)
   await mockLibraryBase(page)
   let online = true
@@ -218,6 +215,7 @@ test("replication requires explicit trust and reports sync progress per peer", a
 })
 
 test("offline restore saves the exact agentpack revision as a draft", async ({ page }) => {
+  await page.clock.install()
   await mockAPI(page)
   await mockLibraryBase(page)
   let online = true

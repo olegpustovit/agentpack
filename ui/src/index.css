@@ -2,63 +2,98 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+/* ───────────────────────── Folio tokens ─────────────────────────
+   Three layers. Components read layers 2 and 3 only.
+   1 Primitives   raw values, named by scale, never used by components
+   2 Semantic     what a value is for; each resolves per color-scheme with light-dark()
+   3 Density      metrics; one switch (pointer, width or data-density) moves compact → touch
+   Legacy names at the end alias layer 2 so existing components keep working. */
 :root{
+  color-scheme:light dark;
+
+  /* 1 · Primitives ───────────────────────────────────────────── */
+  /* Neutral: hue 265, chroma under .01 so it reads as graphite, not blue. */
+  --n-0:oklch(1 0 0);--n-25:oklch(.988 .001 265);--n-50:oklch(.972 .003 265);--n-75:oklch(.955 .004 265);
+  --n-100:oklch(.93 .005 265);--n-150:oklch(.9 .005 265);--n-200:oklch(.86 .006 265);--n-300:oklch(.75 .007 265);
+  --n-400:oklch(.64 .007 265);--n-500:oklch(.525 .008 265);--n-600:oklch(.45 .008 265);--n-700:oklch(.37 .007 265);
+  --n-750:oklch(.32 .006 265);--n-800:oklch(.275 .005 265);--n-850:oklch(.235 .004 265);--n-900:oklch(.205 .004 265);
+  --n-950:oklch(.175 .003 265);--n-1000:oklch(.145 .003 265);
+  --blue-500:oklch(.56 .19 258);--blue-300:oklch(.68 .15 258);
+  --green-500:oklch(.6 .15 150);--green-300:oklch(.74 .15 150);
+  --amber-500:oklch(.73 .15 70);--amber-300:oklch(.81 .14 75);
+  --red-500:oklch(.58 .21 27);--red-300:oklch(.7 .18 25);
+  --ink:oklch(.2 .01 265);
+
+  /* 2 · Semantic ─────────────────────────────────────────────── */
+  /* Two surfaces, one window: the canvas carries navigation; the page carries the work. */
+  --canvas:light-dark(var(--n-50),var(--n-1000));
+  --page:light-dark(var(--n-0),var(--n-900));
+  --raised:light-dark(var(--n-0),var(--n-850));             /* popovers, menus, sheets */
+  --sunken:light-dark(oklch(.2 .01 265 / 6%),oklch(1 0 0 / 7%)); /* tracks, search, code; translucent so it works on both surfaces */
+  --control-fill:light-dark(var(--n-0),var(--n-700));
+  --field-fill:light-dark(var(--n-0),oklch(1 0 0 / 5%));
+  --text-1:light-dark(var(--n-900),var(--n-25));
+  --text-2:light-dark(var(--n-600),var(--n-300));
+  --text-3:light-dark(var(--n-500),var(--n-400));            /* AA at 11 px on both surfaces */
+  --line:light-dark(oklch(.2 .01 265 / 11%),oklch(1 0 0 / 10%));
+  --line-soft:light-dark(oklch(.2 .01 265 / 6%),oklch(1 0 0 / 6%));
+  --hover:light-dark(oklch(.2 .01 265 / 5%),oklch(1 0 0 / 6%));
+  --press:light-dark(oklch(.2 .01 265 / 9%),oklch(1 0 0 / 11%));
+  --accent:light-dark(var(--blue-500),var(--blue-300));
+  --on-accent:var(--n-0);
+  --accent-tint:light-dark(oklch(.56 .19 258 / 11%),oklch(.68 .15 258 / 20%));
+  --ok:light-dark(var(--green-500),var(--green-300));
+  --warn:light-dark(var(--amber-500),var(--amber-300));
+  --danger:light-dark(var(--red-500),var(--red-300));
+  --idle:light-dark(var(--n-300),var(--n-500));
+  /* Elevation: a rim plus a contact shadow. No blur on surfaces content scrolls under. */
+  --e-ctl:0 .5px 1px light-dark(oklch(0 0 0 / 16%),oklch(0 0 0 / 45%)),0 0 0 .5px light-dark(oklch(0 0 0 / 9%),oklch(1 0 0 / 10%));
+  --e-page:0 0 0 .5px light-dark(oklch(0 0 0 / 9%),oklch(1 0 0 / 8%)),0 1px 2px light-dark(oklch(0 0 0 / 4%),oklch(0 0 0 / 40%)),0 6px 24px light-dark(oklch(0 0 0 / 3%),oklch(0 0 0 / 22%));
+  --e-pop:0 10px 30px light-dark(oklch(0 0 0 / 16%),oklch(0 0 0 / 50%)),0 0 0 .5px light-dark(oklch(0 0 0 / 12%),oklch(1 0 0 / 14%));
+  --e-sheet:0 24px 64px light-dark(oklch(0 0 0 / 22%),oklch(0 0 0 / 60%)),0 0 0 .5px light-dark(oklch(0 0 0 / 12%),oklch(1 0 0 / 14%));
+
   --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;
   --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  /* type */
-  --fs:13px;--fs-sm:12px;--fs-xs:11px;--fs-lg:15px;--lh:1.38;
-  /* metrics */
-  --bar-h:40px;--status-h:24px;--ctl-h:24px;--ctl-h-sm:20px;--row-h:26px;--row-h-2:38px;--head-h:22px;
-  --s1:2px;--s2:4px;--s3:6px;--s4:8px;--s5:12px;--s6:16px;--s7:20px;
-  --r-ctl:5px;--r-row:5px;--r-pop:8px;--r-sheet:10px;
+  /* Type roles, not sizes. Compact matches macOS; touch matches iOS minus one step. */
+  --t-caption:11px;--t-footnote:12px;--t-body:13px;--t-title:15px;--t-large:20px;--lh:1.38;
+  /* Space: 2 px steps up to 8, then 4. */
+  --s1:2px;--s2:4px;--s3:6px;--s4:8px;--s5:12px;--s6:16px;--s7:20px;--s8:24px;--s9:32px;
+  /* Radius: concentric. A child's radius is its parent's minus the gap between them. */
+  --r-xs:4px;--r-row:6px;--r-ctl:7px;--r-pop:10px;--r-page:12px;--r-sheet:16px;--r-pill:999px;
+  --gutter:8px;
+  /* Dialogs: one inset everywhere (header, body, footer, every column), one gap between sections. */
+  --dlg-pad:20px;--dlg-gap:16px;
+  --dur-1:120ms;--dur-2:200ms;--dur-3:320ms;--ease:cubic-bezier(.2,.8,.2,1);
+
+  /* 3 · Density: compact ─────────────────────────────────────── */
+  --bar-h:48px;--status-h:26px;--ctl-h:26px;--ctl-h-sm:22px;--row-h:28px;--row-h-2:40px;--head-h:26px;--tab-h:52px;
   --sidebar-w:264px;--list-w:300px;
-  /* surfaces (light) */
-  --window:oklch(.992 .001 260);
-  --chrome:oklch(.952 .003 260);
-  --sidebar:oklch(.968 .003 260);
-  --control:oklch(1 0 0);
-  --field:oklch(1 0 0);
-  --track:oklch(.915 .004 260);
-  --fg:oklch(.2 .004 260);
-  --fg2:oklch(.47 .006 260);
-  --fg3:oklch(.62 .005 260);
-  --sep:oklch(.885 .003 260);
-  --sep-soft:oklch(.93 .003 260);
-  --hover:oklch(.2 .01 260 / 6%);
-  --press:oklch(.2 .01 260 / 11%);
-  --accent:oklch(.57 .19 255);
-  --accent-fg:oklch(1 0 0);
-  --accent-soft:oklch(.57 .19 255 / 12%);
-  --sel-inactive:oklch(.9 .006 260);
-  --ok:oklch(.6 .15 150);--warn:oklch(.72 .15 70);--danger:oklch(.58 .21 27);--idle:oklch(.7 .004 260);
-  --shadow-ctl:0 .5px 1px oklch(0 0 0 / 18%),0 0 0 .5px oklch(0 0 0 / 10%);
-  --shadow-pop:0 10px 30px oklch(0 0 0 / 18%),0 0 0 .5px oklch(0 0 0 / 14%);
-  --shadow-card:0 1px 3px oklch(0 0 0 / 7%),0 0 0 .5px oklch(0 0 0 / 9%);
-  --shadow-composer:0 4px 16px oklch(0 0 0 / 9%),0 0 0 .5px oklch(0 0 0 / 13%);
-  --glass:oklch(.985 .001 260 / 84%);--code:oklch(.965 .003 260);
-  --scrim:oklch(0 0 0 / 22%);
-  --terminal-bg:#ffffff;--terminal-fg:#202124;
-  color-scheme:light;
+  --safe-t:env(safe-area-inset-top,0px);--safe-b:env(safe-area-inset-bottom,0px);--safe-l:env(safe-area-inset-left,0px);--safe-r:env(safe-area-inset-right,0px);
+
+  /* Legacy names → semantic. Migrate components, then delete this block. */
+  --window:var(--page);--chrome:var(--canvas);--sidebar:var(--canvas);--control:var(--control-fill);--field:var(--field-fill);--track:var(--sunken);
+  --fg:var(--text-1);--fg2:var(--text-2);--fg3:var(--text-3);--sep:var(--line);--sep-soft:var(--line-soft);
+  --accent-fg:var(--on-accent);--accent-soft:var(--accent-tint);--sel-inactive:light-dark(oklch(.2 .01 265 / 8%),oklch(1 0 0 / 10%));
+  --fs:var(--t-body);--fs-sm:var(--t-footnote);--fs-xs:var(--t-caption);--fs-lg:var(--t-title);
+  --shadow-ctl:var(--e-ctl);--shadow-pop:var(--e-pop);--shadow-card:var(--e-page);
+  --shadow-composer:0 4px 16px light-dark(oklch(0 0 0 / 8%),oklch(0 0 0 / 40%)),0 0 0 .5px light-dark(oklch(0 0 0 / 12%),oklch(1 0 0 / 15%));
+  --glass:light-dark(oklch(.985 .001 265 / 84%),oklch(.22 .001 265 / 84%));--code:var(--sunken);
+  --scrim:light-dark(oklch(0 0 0 / 32%),oklch(0 0 0 / 50%));
+  --terminal-bg:light-dark(#ffffff,#16181d);--terminal-fg:light-dark(#202124,#e6e8ed);
 }
-@media(prefers-color-scheme:dark){:root:not([data-theme=light]){
-  --window:oklch(.2 0 0);--chrome:oklch(.255 .002 260);--sidebar:oklch(.225 .002 260);--control:oklch(.43 .002 260);--field:oklch(.27 .002 260);--track:oklch(.3 .002 260);
-  --fg:oklch(.96 0 0);--fg2:oklch(.74 .004 260);--fg3:oklch(.58 .004 260);--sep:oklch(1 0 0 / 11%);--sep-soft:oklch(1 0 0 / 7%);
-  --hover:oklch(1 0 0 / 7%);--press:oklch(1 0 0 / 12%);--accent:oklch(.64 .17 255);--accent-soft:oklch(.64 .17 255 / 22%);--sel-inactive:oklch(1 0 0 / 11%);
-  --ok:oklch(.72 .15 150);--warn:oklch(.8 .14 75);--danger:oklch(.7 .18 25);--idle:oklch(.55 0 0);--terminal-bg:#171b22;--terminal-fg:#e6e8ed;
-  --shadow-ctl:0 .5px 1px oklch(0 0 0 / 40%),inset 0 .5px 0 oklch(1 0 0 / 10%);--shadow-pop:0 12px 36px oklch(0 0 0 / 50%),0 0 0 .5px oklch(1 0 0 / 14%);--scrim:oklch(0 0 0 / 40%);
-  --shadow-card:0 1px 3px oklch(0 0 0 / 30%),0 0 0 .5px oklch(1 0 0 / 10%);--shadow-composer:0 6px 22px oklch(0 0 0 / 40%),0 0 0 .5px oklch(1 0 0 / 15%);--glass:oklch(.22 .001 260 / 84%);--code:oklch(.245 .002 260);
-  color-scheme:dark}}
-:root[data-theme=dark]{
-  --window:oklch(.2 0 0);--chrome:oklch(.255 .002 260);--sidebar:oklch(.225 .002 260);--control:oklch(.43 .002 260);--field:oklch(.27 .002 260);--track:oklch(.3 .002 260);
-  --fg:oklch(.96 0 0);--fg2:oklch(.74 .004 260);--fg3:oklch(.58 .004 260);--sep:oklch(1 0 0 / 11%);--sep-soft:oklch(1 0 0 / 7%);
-  --hover:oklch(1 0 0 / 7%);--press:oklch(1 0 0 / 12%);--accent:oklch(.64 .17 255);--accent-soft:oklch(.64 .17 255 / 22%);--sel-inactive:oklch(1 0 0 / 11%);
-  --ok:oklch(.72 .15 150);--warn:oklch(.8 .14 75);--danger:oklch(.7 .18 25);--idle:oklch(.55 0 0);--terminal-bg:#171b22;--terminal-fg:#e6e8ed;
-  --shadow-ctl:0 .5px 1px oklch(0 0 0 / 40%),inset 0 .5px 0 oklch(1 0 0 / 10%);--shadow-pop:0 12px 36px oklch(0 0 0 / 50%),0 0 0 .5px oklch(1 0 0 / 14%);--scrim:oklch(0 0 0 / 40%);
-  --shadow-card:0 1px 3px oklch(0 0 0 / 30%),0 0 0 .5px oklch(1 0 0 / 10%);--shadow-composer:0 6px 22px oklch(0 0 0 / 40%),0 0 0 .5px oklch(1 0 0 / 15%);--glass:oklch(.22 .001 260 / 84%);--code:oklch(.245 .002 260);
-  color-scheme:dark}
+:root[data-theme=light]{color-scheme:light}
+:root[data-theme=dark]{color-scheme:dark}
+/* Touch density: the same roles, one step up, every control a thumb target. */
+@media (max-width:760px),(pointer:coarse){:root{
+  --t-caption:12px;--t-footnote:14px;--t-body:16px;--t-title:17px;--t-large:24px;--lh:1.4;
+  --bar-h:52px;--ctl-h:40px;--ctl-h-sm:32px;--row-h:44px;--row-h-2:58px;--head-h:34px;--r-ctl:10px;--r-row:10px}}
+:root[data-density=touch]{
+  --t-caption:12px;--t-footnote:14px;--t-body:16px;--t-title:17px;--t-large:24px;--lh:1.4;
+  --bar-h:52px;--ctl-h:40px;--ctl-h-sm:32px;--row-h:44px;--row-h-2:58px;--head-h:34px;--r-ctl:10px;--r-row:10px}
+/* Phone: one surface, full bleed; bars keep a faint tint like iOS bars. */
+@media (max-width:760px){:root{--canvas:var(--page);--chrome:light-dark(var(--n-25),var(--n-950))}}
 
 :root {
-  --tab-h: 49px; /* phone tab bar */
   --hud: oklch(.2 .004 260 / 92%);
   --hud-fg: oklch(.98 0 0);
   --ok-word: oklch(.42 .13 150);
@@ -187,6 +222,32 @@ a{color:inherit;text-decoration:none;text-underline-offset:2px}
 .hljs-emphasis{font-style:italic}.hljs-strong{font-weight:600}
 }
 
+
+@layer components {
+  /* Toolbar: unified with the window, pads under a translucent status bar and around window-controls-overlay. */
+  [data-slot=toolbar]{min-height:calc(var(--bar-h) + var(--safe-t));flex-wrap:wrap;padding-top:var(--safe-t);padding-left:max(var(--s5),var(--safe-l));padding-right:max(var(--s5),var(--safe-r));-webkit-app-region:drag;app-region:drag}
+  [data-slot=toolbar] :is(a,button,input,select,[role=button],[role=combobox]){-webkit-app-region:no-drag;app-region:no-drag}
+  @media (display-mode:window-controls-overlay){
+    [data-slot=toolbar]{height:max(var(--bar-h),env(titlebar-area-height,0px));padding-left:calc(env(titlebar-area-x,0px) + var(--s4));padding-right:calc(100vw - env(titlebar-area-x,0px) - env(titlebar-area-width,100vw) + var(--s4))}
+  }
+  [data-slot=tab-bar]{height:calc(var(--tab-h) + var(--safe-b));padding:0 var(--safe-r) var(--safe-b) var(--safe-l)}
+  @media (max-width:760px){
+    [data-slot=source-list]{padding-left:max(var(--s4),var(--safe-l));padding-right:max(var(--s4),var(--safe-r))}
+  }
+}
+
+@layer components {
+  /* A sheet's description belongs to its title: 4 px under it, not a full section gap. Only where the sheet's grid spaces them. */
+  :is([data-slot=dialog-content],[data-slot=dialog-content]>form)>[data-slot=dialog-title]+[data-slot=dialog-description]{margin-top:calc(var(--s2) - var(--dlg-gap))}
+}
+
+@layer base {
+  /* iOS zooms the whole app into any field under 16px. */
+  @media (max-width:760px), (pointer:coarse) { input,textarea,select{font-size:max(16px,1em)!important} }
+  /* Keyboard hints mean nothing without a keyboard. */
+  @media (hover:none) { kbd{display:none!important} }
+}
+
 @keyframes pane-loading { to { opacity: 1 } }
 
 @layer components {
@@ -220,6 +281,15 @@ a{color:inherit;text-decoration:none;text-underline-offset:2px}
   .md th{background:var(--code);font-weight:600;user-select:text;-webkit-user-select:text;cursor:auto}
 }
 
+/* Motion: three durations, one curve, at most 8 px of travel. Motion says where something came from or that it changed; it never loops except for progress. */
+@keyframes activity-in { from { opacity: 0; transform: translateY(3px) } }
+@keyframes bar-grow { from { transform: scaleY(0) } }
+@keyframes cell-in { from { opacity: 0 } }
+@layer components {
+  .activity-in{animation:activity-in var(--dur-2) var(--ease) both}
+  .bar-grow{transform-box:fill-box;transform-origin:bottom;animation:bar-grow var(--dur-3) var(--ease) both}
+  .cell-in{animation:cell-in var(--dur-3) var(--ease) both}
+}
 @keyframes dot-spin { to { rotate: 360deg } }
 @keyframes thread-enter { from { opacity: 0; transform: translateY(4px) } }
 @keyframes tool-enter { from { opacity: 0; transform: translateX(-3px) } }

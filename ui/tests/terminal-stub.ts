@@ -75,8 +75,8 @@ export async function stubApi(page: Page, sessions: () => unknown[], nodes: unkn
   await page.route(/\/api\/sessions(\?.*)?$/, (route) => route.fulfill({ json: sessions() }))
 }
 
-export function statusBar(page: Page) {
-  return page.locator('[data-slot="status-bar"]')
+export function readyStage(page: Page) {
+  return page.locator('div[aria-busy="false"]').filter({ has: page.locator(".xterm-screen") })
 }
 
 // The stage is aria-busy while the socket is connecting, replaying, or reconnecting.
@@ -86,9 +86,7 @@ export function busyStage(page: Page) {
 
 export async function openRoute(page: Page, path: string) {
   await page.goto(path)
-  await expect(statusBar(page)).toContainText("Shared input")
-  // "Shared input" shows as soon as the attach state arrives; the replay is done when the stage is idle.
-  await expect(busyStage(page)).toHaveCount(0)
+  await expect(readyStage(page)).toBeVisible()
 }
 
 // In-app navigation keeps the pool alive; a full page load would reset it.

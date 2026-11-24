@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
-import { Banner } from "@/components/kit/feedback"
-import { Button } from "@/components/ui/button"
+import { Bell, X } from "lucide-react"
 import { providerGroups, tightestWindow, type ProviderGroup } from "@/features/limits/model"
 import { limitsQuery } from "@/features/limits/queries"
 import { useReplicatedQueries, type Machine } from "@/features/machines/queries"
@@ -174,7 +173,7 @@ function offerDismissed(): boolean {
   }
 }
 
-// One-time offer above the session list while the browser has not been asked yet.
+// Offered where it matters: on the Needs you header, only while something needs you and the browser hasn't been asked.
 export function NotifyOffer() {
   const { permission, ask } = usePermission()
   const [dismissed, setDismissed] = useState(offerDismissed)
@@ -188,15 +187,15 @@ export function NotifyOffer() {
     setDismissed(true)
   }
   return (
-    <Banner
-      action={
-        <>
-          <Button type="button" variant="ghost" size="sm" onClick={close}>Not now</Button>
-          <Button type="button" variant="primary" size="sm" onClick={() => { ask(); close() }}>Turn on</Button>
-        </>
-      }
-    >
-      Get a notification when an agent needs you.
-    </Banner>
+    <span className="activity-in ms-auto flex shrink-0 items-center gap-(--s1)">
+      <button type="button" title="Get a notification when an agent needs you" onClick={() => { ask(); close() }}
+        className="flex h-(--ctl-h-sm) items-center gap-(--s2) rounded-full px-(--s3) text-(length:--fs-xs) font-semibold text-(--accent) outline-none hover:bg-(--accent-soft) focus-visible:ring-2 focus-visible:ring-(--accent)">
+        <Bell aria-hidden className="size-3.5" />Notify me
+      </button>
+      <button type="button" aria-label="Don't offer notifications" title="Don't offer notifications" onClick={close}
+        className="grid size-(--ctl-h-sm) place-items-center rounded-full text-(--fg3) outline-none hover:bg-(--hover) hover:text-(--fg2) focus-visible:ring-2 focus-visible:ring-(--accent)">
+        <X aria-hidden className="size-3" />
+      </button>
+    </span>
   )
 }

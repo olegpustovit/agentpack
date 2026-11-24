@@ -344,7 +344,6 @@ export function SessionList() {
         onClick={onClick}
         onContextMenu={onContextMenu}
       >
-        <NotifyOffer />
         {discovery.error && <Banner tone="warn">{`Can't look for other machines: ${discovery.error.message}`}</Banner>}
         {machines.map((machine) => {
           const error = !outdated.includes(machine) && queries.errors[machine.id]
@@ -362,6 +361,7 @@ export function SessionList() {
           <div>
             <GroupHeader>
               <span className="min-w-0 flex-1 truncate">{`Needs you · ${needsYou.length}`}</span>
+              <NotifyOffer />
             </GroupHeader>
             {needsYou.map((session) => renderRow(session))}
           </div>
@@ -431,11 +431,11 @@ function SessionConfirm({ confirm, onConfirm }: { confirm: Confirm; onConfirm: (
   }
   return (
     <ConfirmAlertContent
-      title={`${verb} ${sessionLabel(row)} in ${basename(row.directory) || "this folder"}?`}
+      title={`${verb} “${sessionLabel(row)}”?`}
       description={
         kind === "stop"
-          ? `On ${row.machineName}. The session stays in the list so you can resume it; use Archive to remove it.`
-          : `On ${row.machineName}. Its current conversation may end unless the agent supports resume.`
+          ? `In ${basename(row.directory) || "this folder"} on ${row.machineName}. The session stays in the list so you can resume it; Archive removes it.`
+          : `In ${basename(row.directory) || "this folder"} on ${row.machineName}. Its current turn may end unless the agent can resume.`
       }
       destructiveLabel={{ stop: "Stop agent", restart: "Restart agent" }[kind]}
       onConfirm={onConfirm}

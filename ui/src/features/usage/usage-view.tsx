@@ -3,12 +3,10 @@ import { Link, useNavigate } from "@tanstack/react-router"
 import { ChevronLeft, ChevronRight, Folder, Server, Cpu, X } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, KeyValue, Meter, Section } from "@/components/kit/data"
 import { Banner, RowSkeleton } from "@/components/kit/feedback"
-import { PopupSelect } from "@/components/kit/forms"
 import { SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
 import { Button } from "@/components/ui/button"
 import { LimitsSummary } from "@/features/limits/limits-view"
 import { AgentTile } from "@/components/kit/agent-tile"
-import { StatusSlot } from "@/features/status/status-bar"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { routeMissing } from "@/lib/api"
 import { basename, plural } from "@/lib/format"
@@ -34,6 +32,7 @@ import {
   type View,
 } from "./model"
 import { UsageChart } from "./usage-chart"
+import { TokenMix, UsageHeatmap } from "./usage-heatmap"
 import { seriesColor, useNames, useUsage, type Names } from "./use-usage"
 
 type Dimension = "project" | "agent" | "machine" | "model"
@@ -78,7 +77,6 @@ export function UsageView({ view }: { view: View }) {
     <div className="flex h-full min-h-0 flex-col">
       <ToolbarTitle title={title} subtitle={`${subtitle[view.kind]} · ${period}`} />
       <RangeControls range={usage.range} back={usage.back} period={period} />
-      <StatusSlot>{`${plural(sessions.length, "session")} · ${fmt(rows.reduce((sum, row) => sum + row.output_tokens, 0))} output tokens · ${period.toLowerCase()}`}</StatusSlot>
       {routeMissing(query.error) ? (
         <Banner tone="warn">This gateway needs an update to show usage.</Banner>
       ) : (
@@ -87,7 +85,7 @@ export function UsageView({ view }: { view: View }) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-295 px-(--s7) py-(--s6) max-[760px]:p-(--s4)">
           <section aria-label="Usage chart">
-            <div className="flex min-w-0 items-end gap-(--s5)">
+            <div className="flex min-w-0 flex-wrap items-end gap-(--s5)">
               <div data-slot="usage-hero" className="min-w-0 flex-1" aria-live="polite">
                 <p className="text-(length:--fs-sm) text-(--fg2)">{shown === null ? period : bucketLabel(win, shown, true)}</p>
                 <p className="my-0.5 text-[28px] leading-tight font-semibold tracking-tight tabular-nums">{fmt(shown === null ? total : totals[shown]!, unit)}</p>
@@ -95,7 +93,7 @@ export function UsageView({ view }: { view: View }) {
                   {shown === null ? heroDetail(average, total, previousTotal, unit, win.range, metric) : bucketDetail(totals[shown]!, total, period, sessions.filter((session) => activeIn(session, win.starts[shown]!, bucketEnd(win, shown))).length)}
                 </p>
               </div>
-              <PopupSelect label="Metric" value={metric} onValueChange={(value) => void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, metric: value === "out" ? undefined : value }), replace: true })} items={Object.entries(metrics).map(([value, entry]) => ({ value, label: entry.label }))} />
+              <MetricTabs metric={metric} rows={rows} previous={usage.previousRows.filter((row) => inView(row, view))} onPick={(value) => void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, metric: value === "out" ? undefined : value }), replace: true })} />
             </div>
             {query.isPending ? (
               <RowSkeleton lines={2} className="mt-(--s5) h-[190px]" />
@@ -123,10 +121,15 @@ export function UsageView({ view }: { view: View }) {
             </ul>
           </section>
 
-          <div className="mt-(--s6) grid gap-x-(--s7) gap-y-(--s6) min-[1100px]:grid-cols-2">
+          <div className="mt-(--s7)">
+            {win.range !== "day" && <UsageHeatmap rows={rows} win={win} metric={metric} series={series} name={byAgent ? names.agent : names.model} />}
+          </div>
+
+          <div className="mt-(--s7) grid gap-x-(--s7) gap-y-(--s6) min-[1100px]:grid-cols-2">
             {view.kind === "overview" ? <LimitsSummary /> : <Summary rows={rows} sessions={sessions} view={view} names={names} />}
             <MostUsed rows={rows} view={view} metric={metric} names={names} />
             {view.kind === "agent" && <LimitsSummary agent={view.id} />}
+            <TokenMix rows={rows} />
             <Efficiency rows={rows} sessions={sessions} />
           </div>
 
@@ -279,6 +282,26 @@ function MostUsed({ rows, view, metric, names }: { rows: UsageHour[]; view: View
         </ul>
       )}
     </Section>
+  )
+}
+
+// The metric switcher is the totals themselves: each tab shows its value and change, so choosing one is reading it.
+function MetricTabs({ metric, rows, previous, onPick }: { metric: Metric; rows: UsageHour[]; previous: UsageHour[]; onPick: (metric: Metric) => void }) {
+  return (
+    <div role="group" aria-label="Metric" className="flex shrink-0 gap-(--s1) max-[1100px]:w-full max-[1100px]:overflow-x-auto">
+      {(Object.entries(metrics) as [Metric, (typeof metrics)[Metric]][]).map(([key, entry]) => {
+        const total = rows.reduce((sum, row) => sum + entry.value(row), 0)
+        const change = changeOf(total, previous.reduce((sum, row) => sum + entry.value(row), 0))
+        return (
+          <button key={key} type="button" aria-pressed={metric === key} onClick={() => onPick(key)}
+            className="group flex min-w-24 flex-col items-start rounded-(--r-ctl) px-(--s4) py-(--s2) text-start outline-none transition-colors duration-(--dur-1) hover:bg-(--hover) focus-visible:ring-2 focus-visible:ring-(--accent) aria-pressed:bg-(--accent-soft) aria-pressed:shadow-[inset_0_-2px_0_var(--accent)]">
+            <span className="text-(length:--fs-xs) text-(--fg2) group-aria-pressed:text-(--accent)">{entry.label}</span>
+            <span className="text-(length:--fs-lg) font-semibold tabular-nums group-aria-pressed:text-(--accent)">{fmt(total, entry.kind)}</span>
+            <span className="text-(length:--fs-xs) text-(--fg3) tabular-nums">{change === undefined ? "—" : `${change > 0 ? "↑" : change < 0 ? "↓" : ""} ${Math.abs(change)}%`}</span>
+          </button>
+        )
+      })}
+    </div>
   )
 }
 

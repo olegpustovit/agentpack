@@ -1,7 +1,6 @@
-import { lazy, Suspense, type ComponentProps, type ReactNode } from "react";
+import { type ComponentProps, type ReactNode } from "react";
 import { CircleAlert, Info, TriangleAlert } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useHudRequested } from "@/lib/hud";
 import { cn } from "@/lib/utils";
 
 // Tones are told apart by glyph and weight, never by color alone.
@@ -39,13 +38,6 @@ export function Banner({
       {action}
     </div>
   );
-}
-
-const HudToaster = lazy(() => import("@/components/ui/sonner"));
-
-// Hud is the single toast surface. Its library loads with the first toast, so first paint does not carry it.
-export function Hud() {
-  return useHudRequested() ? <Suspense fallback={null}><HudToaster /></Suspense> : null;
 }
 
 export function Empty({

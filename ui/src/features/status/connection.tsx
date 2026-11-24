@@ -2,7 +2,6 @@ import { useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { StatusDot } from "@/components/kit/status-dot"
-import { StatusItem } from "@/components/kit/window"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useEventsConnected } from "@/features/events/use-events"
@@ -22,31 +21,28 @@ export function ConnectionItem() {
 
   // A network failure (not an HTTP status) means the gateway itself did not answer.
   const unreachable = nodes.error !== null && !(nodes.error instanceof ApiError)
-  if (!unreachable && !nodes.data && !nodes.error) return null
-
   const offline = machines.filter((machine) => !machine.online).length
+  // Healthy is the normal state and takes no space.
+  if (!unreachable && offline === 0) return null
   const label = unreachable
     ? "Gateway unreachable"
-    : [`Connected · ${plural(machines.length, "machine")}`, offline > 0 ? `${offline} offline` : null]
-        .filter(Boolean)
-        .join(" · ")
+    : `${plural(offline, "machine")} offline`
 
   return (
-    <StatusItem>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
-          render={<button type="button" className="inline-flex min-w-0 items-center gap-(--s3) rounded-(--r-row) hover:bg-muted" />}
+          render={<button type="button" className="activity-in inline-flex h-(--ctl-h) min-w-0 shrink-0 items-center gap-(--s3) rounded-full px-(--s3) text-(length:--fs-sm) text-(--fg2) hover:bg-(--hover)" />}
         >
           <span
             aria-hidden
             className={cn(
               "inline-block size-(--s3) shrink-0 rounded-full border",
-              unreachable ? "border-dashed border-(--fg3)" : "border-(--ok) bg-(--ok)",
+              "border-dashed border-(--fg3)", // shown only when something is down
             )}
           />
           <span className="truncate">{label}</span>
         </PopoverTrigger>
-        <PopoverContent side="top" align="start" className="w-70 p-(--s4)">
+        <PopoverContent side="bottom" align="end" className="w-70 rounded-(--r-pop) bg-(--raised) p-(--s4) shadow-(--e-pop) ring-0">
           <ul>
             {machines.map((machine) => {
               const peer = topology.data?.peers.find((item) => item.id === machine.id)
@@ -71,6 +67,5 @@ export function ConnectionItem() {
           </div>
         </PopoverContent>
       </Popover>
-    </StatusItem>
   )
 }

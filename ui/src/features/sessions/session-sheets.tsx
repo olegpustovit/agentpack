@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react"
+import { useState, type FormEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Field, FieldError, FieldGrid, FieldLabel, PopupSelect } from "@/components/kit/forms"
 import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
@@ -21,7 +21,7 @@ export function RowSheet({ sheet, onClose }: { sheet: SheetState | null; onClose
   return (
     <Sheet open={sheet !== null} onOpenChange={(open) => { if (!open) onClose() }}>
       {sheet && (
-        <SheetContent className={sheet.kind === "project" ? "w-xl sm:max-w-xl max-h-[calc(100dvh-var(--bar-h))]" : undefined}>
+        <SheetContent className={sheet.kind === "project" ? "w-160" : "w-90"}>
           {sheet.kind === "rename" && <RenameForm row={sheet.row} onDone={onClose} />}
           {sheet.kind === "project" && <ProjectSettings key={sheet.row.id} row={sheet.row} onDone={onClose} />}
         </SheetContent>
@@ -32,7 +32,7 @@ export function RowSheet({ sheet, onClose }: { sheet: SheetState | null; onClose
 
 function RenameForm({ row, onDone }: { row: ListedSession; onDone: () => void }) {
   const queryClient = useQueryClient()
-  const [name, setName] = useState(row.name ?? "")
+  const [name, setName] = useState(row.name || row.title || "")
   const [blank, setBlank] = useState(false)
   const listKey = sessionsQuery(false).queryKey
   const setListedName = (name: string | undefined) =>
@@ -69,8 +69,8 @@ function RenameForm({ row, onDone }: { row: ListedSession; onDone: () => void })
       <SheetTitle>Rename session</SheetTitle>
       <SheetDescription>{`${basename(row.directory)} · ${row.machineName}`}</SheetDescription>
       <FieldGrid>
-        <Field>
-          <FieldLabel htmlFor="session-name">Name</FieldLabel>
+        <Field className="flex-col items-stretch gap-(--s3)">
+          <FieldLabel htmlFor="session-name" className="w-auto text-left">Name</FieldLabel>
           <Input id="session-name" maxLength={80} value={name} onChange={(event) => setName(event.target.value)} autoFocus />
         </Field>
       </FieldGrid>
@@ -85,7 +85,7 @@ function RenameForm({ row, onDone }: { row: ListedSession; onDone: () => void })
 }
 
 // Captures the folder as a new agentpack, or as a new revision of one this machine holds.
-export function SaveForm({ row, onDone }: { row: SaveTarget; onDone: () => void }) {
+export function SaveForm({ row, onDone, children }: { row: SaveTarget; onDone: () => void; children?: ReactNode }) {
   const [name, setName] = useState(basename(row.directory))
   const [note, setNote] = useState("")
   const [blank, setBlank] = useState(false)
@@ -123,8 +123,9 @@ export function SaveForm({ row, onDone }: { row: SaveTarget; onDone: () => void 
   return (
     <form onSubmit={submit} className="contents">
       <SheetTitle>Save agentpack</SheetTitle>
-      <SheetDescription>{`Capture ${row.directory} on ${row.machineName}.`}</SheetDescription>
+      <SheetDescription>{existing ? `Adds a revision to ${existing.name}, from the ${row.mode || "default"} mode.` : `A new agentpack from the ${row.mode || "default"} mode of this folder.`}</SheetDescription>
       <FieldGrid>
+        {children}
         {packs.length > 0 && (
           <Field>
             <FieldLabel>Save to</FieldLabel>
@@ -145,10 +146,6 @@ export function SaveForm({ row, onDone }: { row: SaveTarget; onDone: () => void 
         <Field>
           <FieldLabel htmlFor="save-note">Revision note</FieldLabel>
           <Input id="save-note" maxLength={80} placeholder="What changed?" value={note} onChange={(event) => setNote(event.target.value)} />
-        </Field>
-        <Field>
-          <FieldLabel>Mode</FieldLabel>
-          <span className="min-w-0 truncate text-(--fg2)">{row.mode || "default"}</span>
         </Field>
       </FieldGrid>
       {message && <FieldError>{message}</FieldError>}

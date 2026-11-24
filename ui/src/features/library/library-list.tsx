@@ -8,7 +8,6 @@ import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@/components/kit/list"
 import { useMachineQueries, useMachines } from "@/features/machines/queries"
 import { projectsQuery } from "@/features/sessions/queries"
-import { StatusSlot } from "@/features/status/status-bar"
 import { plural } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { installedIn } from "./inspect"
@@ -167,7 +166,6 @@ export function LibraryList() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <StatusSlot>{`${plural(totals.all, "item")} · ${plural(totals.skill, "skill")} · ${plural(totals.plugin, "plugin")} · ${totals.mcp} MCP`}</StatusSlot>
       <ToolbarTitle title="Library" subtitle={`${plural(totals.all, "item")} on ${plural(machines.length, "machine")}`} />
       <ToolbarSlot>
         <Button type="button" aria-label={checked ?? "Check for updates"} disabled={latest.checking} onClick={() => (checking ? latest.refetch() : setChecking(true))}>

@@ -1,97 +1,91 @@
-# Gateway design system
+# Gateway design system — Folio kit
 
-The macOS kit for the gateway UI. Values live in `ui/src/index.css`; components live in `ui/src/components/kit/` (composed from the shadcn primitives in `ui/src/components/ui/`). Routes and screens are in `AGENTS.md` (Gateway UI) and `ui/SURFACE.md`.
+The Folio kit for the gateway web UI: a tinted **canvas** for navigation (toolbar, sidebar) and one raised **page** for the work. Tokens live in `ui/src/index.css`; components live in `ui/src/components/kit/` (composed from shadcn primitives on `@base-ui/react` in `ui/src/components/ui/`). Routes and screens are in `AGENTS.md` (Gateway UI) and `ui/SURFACE.md`.
 
-## Tokens
+## Token layers
 
-`ui/src/index.css` holds the legacy kit tokens unchanged: `--font`, `--mono`, `--fs*`, `--bar-h`, `--status-h`, `--ctl-h`, `--row-h*`, `--s1…7`, `--r-*` and all colors. Components use only these tokens. The kit adds the following. The dark-mode values override the light ones where noted:
+`ui/src/index.css` defines tokens in three layers. Components read layers 2 and 3 only (never hex values or primitives).
 
-```css
-:root {
-  --tab-h: 49px;              /* phone tab bar */
-  --hud: oklch(.2 .004 260 / 92%);
-  --hud-fg: oklch(.98 0 0);
-  --ok-word: oklch(.42 .13 150);
-  --warn-word: oklch(.47 .11 70);
-  --danger-word: oklch(.5 .2 27);
-}
-/* in both dark blocks */
---hud: oklch(.32 .002 260 / 94%);
---ok-word: oklch(.78 .15 150);
---warn-word: oklch(.83 .13 75);
---danger-word: oklch(.76 .16 25);
-```
+1. **Primitives** — Neutral graphite ramp `--n-0` … `--n-1000` (hue 265, chroma < 0.01), semantic hues (`--blue-500/300`, `--green-500/300`, `--amber-500/300`, `--red-500/300`), and `--ink`.
+2. **Semantic** — Each color resolves per `color-scheme` via `light-dark()` (no duplicated dark override blocks):
+   - **Surfaces:** `--canvas` (`--n-50` / `--n-1000`) holds the toolbar and sidebar; `--page` (`--n-0` / `--n-900`) is the one raised work surface (`--r-page` 12 px, `--e-page`); `--raised` (`--n-0` / `--n-850`) for popovers, menus, and sheets; translucent `--sunken` for tracks, search, and code; `--control-fill` and `--field-fill`.
+   - **Text & lines:** `--text-1`, `--text-2`, `--text-3` (AA ≥ 5.0:1 at 11 px on both surfaces); `--line` and `--line-soft` (0.5 px hairlines only); `--hover`, `--press`.
+   - **Accents & status:** `--accent`, `--on-accent`, `--accent-tint`, `--ok`, `--warn`, `--danger`, `--idle`, plus legible word tones (`--ok-word`, `--warn-word`, `--danger-word`) and diff fills (`--add*`, `--del*`).
+   - **Elevation:** `--e-ctl`, `--e-page`, `--e-pop`, `--e-sheet` (0.5 px rim + contact shadow). Blur stays on menus (`--menu`) only — never on surfaces content scrolls under.
+   - **Geometry & rhythm:** Space steps `--s1…--s9` (2, 4, 6, 8, 12, 16, 20, 24, 32 px), `--gutter` 8 px, dialog `--dlg-pad` 20 px and `--dlg-gap` 16 px. Concentric radii: `--r-xs` 4, `--r-row` 6, `--r-ctl` 7, `--r-pop` 10, `--r-page` 12, `--r-sheet` 16, `--r-pill` 999 px.
+   - **Charts:** `--series-1…--series-6` (Claude 1, Codex 2, Grok 3, Cursor 4, OMP 5, other 6 = `--fg3`). Bars are thin and rounded, average is a dashed `--fg3` rule, axis sits on the right; the Usage heatmap uses a neutral graphite ramp.
+3. **Density & safe areas** — Compact defaults switch to touch under `@media (max-width: 760px), (pointer: coarse)` or `:root[data-density=touch]`. `--safe-t/b/l/r` read `env(safe-area-inset-*, 0px)`. At `≤ 760 px` the window flattens to one full-bleed surface (`--canvas: var(--page)`) with a faint `--chrome` tint on the toolbar and tab bar.
 
-Charts use `--series-1` … `--series-6`, with light and dark values: one fixed colour per agent (Claude 1, Codex 2, Grok 3, Cursor 4, OMP 5, any other 6, which is `--fg3`), and the same slots in order for other series. Bars are thin and rounded, the average is a dashed `--fg3` rule, and the axis sits on the right.
-
-shadcn tokens map onto the kit tokens in the same file:
-
-```css
-:root {
-  --background: var(--window); --foreground: var(--fg);
-  --card: var(--window); --card-foreground: var(--fg);
-  --popover: var(--chrome); --popover-foreground: var(--fg);
-  --primary: var(--accent); --primary-foreground: var(--accent-fg);
-  --secondary: var(--control); --secondary-foreground: var(--fg);
-  --muted: var(--track); --muted-foreground: var(--fg2);
-  --accent-ui: var(--accent-soft);
-  --destructive: var(--danger);
-  --border: var(--sep); --input: var(--sep); --ring: var(--accent);
-  --radius: var(--r-ctl);
-}
-```
-
-The kit's `--accent` token and shadcn's `--accent` collide. In `@theme inline`, `--color-accent` points at `--accent-ui` and `--color-primary` points at `--primary` (which is `--accent`). Do not rename the kit tokens.
+**Legacy aliases & shadcn mapping:** Legacy names (`--window`, `--chrome`, `--sidebar`, `--control`, `--field`, `--track`, `--fg*`, `--sep*`, `--fs*`, `--shadow-*`) alias layer 2 so existing components keep working until migrated. shadcn tokens map onto the kit tokens; because `--accent` collides, `@theme inline` points `--color-accent` at `--accent-ui` (`--accent-soft`) and `--color-primary` at `--primary` (`--accent`). All base rules live inside `@layer base` so utilities always win.
 
 ## Metrics
 
-| Element | Desktop | At ≤ 760 px |
+| Element | Compact (desktop) | Touch (`≤ 760 px` or `pointer: coarse`) |
 |---|---|---|
-| Toolbar | 40 px | 44 px |
-| Status bar | 24 px | hidden, replaced by 49 px tab bar |
-| Text | 13 / 12 / 11 px | same |
-| Control | 24 px, small 20 px | 28 px |
-| Row | 26 px, two-line 38 px | 32 px, two-line 44 px |
-| Group header | 22 px | 24 px |
-| Sidebar | 264 px, 220–420 px | full pane |
-| List pane | 300 px | full pane |
-| Radius | control and row 5, popover 8, sheet 10 | same |
+| Toolbar (`--bar-h`) | 48 px | 52 px + `--safe-t` |
+| Tab bar (`--tab-h`) | hidden | 52 px + `--safe-b` |
+| Type (`--t-caption` / `footnote` / `body` / `title` / `large`) | 11 / 12 / 13 / 15 / 20 px | 12 / 14 / 16 / 17 / 24 px (`input/textarea/select` ≥ 16 px prevents iOS zoom) |
+| Control (`--ctl-h` / `--ctl-h-sm`) | 26 / 22 px | 40 / 32 px |
+| Row (`--row-h` / `--row-h-2`) | 28 / 40 px | 44 / 58 px |
+| Group header (`--head-h`) | 26 px | 34 px |
+| Radius (`--r-ctl` / `--r-row` / `--r-page` / `--r-sheet`) | 7 / 6 / 12 / 16 px | 10 / 10 / 12 / 16 px |
+| Sidebar / List pane | 264 px (220–420 px) / 300 px | full pane |
 | Tooltip delay | 700 ms | none |
 
-Separators are 0.5 px. Panes scroll on their own. There is no page scroll, no page heading and no marketing padding. Only values from these tokens may appear in components.
+Separators are 0.5 px. Panes scroll independently; there is no page scroll and no bottom status bar.
+
+### Dialog metrics
+
+- **Inset & spacing:** `--dlg-pad` 20 px on every edge and column (plus `--safe-b` on phone); `--dlg-gap` 16 px between sections; title → description 4 px (CSS adjacent rule on `[data-slot=dialog-title] + [data-slot=dialog-description]`).
+- **Widths:** S 360 px (`w-90`, e.g. Rename), M 480 px (`w-120`, default), L 640 px (`w-160`, Project settings), XL 900 px (New session). Phone renders full-width bottom sheets capped at `100dvh − --safe-t − --s4`.
+- **Footer (`SheetActions`):** Pinned sticky to the bottom with a 0.5 px hairline (`pinned={false}` when a sheet provides its own footer), optional left status line, Cancel + primary right (`min-w-20`); 44 px full-width buttons on phone clearing `--safe-b`. No close `✕`.
+- **Alerts (`ConfirmAlert`):** 300 px (`w-75`) centered on `--raised` + `--e-sheet`. macOS button order on desktop: Cancel left (focused), filled red destructive action right. On phone: stacked 44 px buttons, destructive first.
 
 ## Kit components
 
-Components live in `ui/src/components/kit/`.
+Components live in `ui/src/components/kit/` (shell pieces in `ui/src/features/shell/`).
 
 | Component | Built on | Rules |
 |---|---|---|
-| `AppWindow` | CSS grid | Rows: toolbar, content, status bar. Nothing else is a grid child |
-| `Toolbar`, `ToolbarButton` | `Button` | Borderless with hover fill. Leading order: sidebar toggle, view switcher, title. Trailing: view tools, gear |
-| `StatusBar`, `StatusItem` | plain | 24 px high on desktop, hidden at ≤ 760 px (see Metrics) |
-| `SourceList`, `SourceRow`, `GroupHeader` | plain + roving tabindex | Row is `<Link>` or button. Selected is gray when the list is unfocused and accent when focused. Trailing `⋯` visible on hover or selection. Session rows mark like Finder: ⌘-click (Ctrl elsewhere) toggles, Shift-click extends, Esc or a plain click clears; the menu of a marked row acts on all of them |
-| `SegmentedControl` | `ToggleGroup` | 24 px track, 20 px thumb |
-| `SearchField` | `Input` | Track fill, icon inset, `⌘F` focuses it |
-| `Field`, `FieldGrid` | `Input`, `Select` | 120 px right-aligned labels, 8 px row gap. One column on phone |
-| `Sheet` | `Dialog` | Drops from the toolbar. Title, body, then buttons bottom-right: Cancel, primary. Bottom sheet on phone. No close `✕` |
-| `ConfirmAlert` | `AlertDialog` | 280 px, centered. Title names the object. Stacked buttons, destructive first, Cancel focused |
-| `Menu`, `RowContextMenu` | `DropdownMenu`, `ContextMenu` | macOS 26 NSMenu: `--menu` material, 12 px corners, 5 px padding, 24 px rows with a 6 px pill, separators inset 16 px, shortcut white on the pill. A `danger` row is red and highlights `--menu-danger` |
-| `PopupSelect` | `Select` | Replaces every native `<select>`. Menu surface, checkmark in the left state column. `danger` items get their own group; while one is chosen the trigger is red with a shield |
-| `Banner` | plain | Inside a pane, top of its scroller. Icon, one sentence, optional action. Tones: info, warn, danger |
-| `Hud` | `sonner` | Top right under the toolbar, `--hud` fill, 4 s; never over the composer |
-| `StatusDot` | plain | See state vocabulary. Always with a word or `aria-label` plus tooltip |
-| `Inspector`, `InspectorHead`, `KeyValue`, `Section` | plain | Max width 1180 px, two columns at ≥ 1260 px |
-| `DataGrid` | `<table>` | Sticky 22 px header, 26 px rows, fixed layout, one flexible column |
-| `Meter` | `<meter>` | 6 px, accent fill. Warn at ≤ 20% left, danger at ≤ 5%. No meter when unknown |
+| `AppWindow` | CSS grid | 3 rows: toolbar, content, phone tab bar on `--canvas`. No bottom status bar |
+| `ListDetail` | `ResizablePanelGroup` | Desktop wraps content in one raised `[data-slot=page]` (`bg-(--page)`, `--r-page`, `--e-page`, inset by `--gutter`). Phone switches pane by route |
+| `Toolbar`, `ToolbarButton` | `Button` | Unified with `--canvas`, pads for `--safe-*` and Chrome/Edge `display-mode: window-controls-overlay` (`app-region: drag` / `no-drag`). Leading: sidebar toggle, capsule view switcher, title (`--t-title`). Trailing: connection indicator, activity viewer, route tools, settings gear |
+| `ConnectionItem` | `Popover` | Hidden while healthy. Appears in the toolbar with a dashed ring only when the gateway is unreachable or a machine is offline; opens the machine list with Refresh and View topology |
+| `ActivityViewer` | `Button` + lazy `Popover` | Toolbar activity capsule replacing toasts. Success shows in place for 4 s then folds into a history icon (last 20 outcomes, log popover lazy-loaded on first open). Failures persist with Retry and Dismiss (full-width row under the title on phone) |
+| `SourceList`, `SourceRow`, `GroupHeader` | plain + roving tabindex | Row is `<Link>` or button. Selected row rises to `--page` with `--e-ctl` when unfocused and `--accent` when the list is focused. Trailing `⋯` visible on hover or selection. Finder-style marking (⌘/Ctrl-click, Shift-click, Esc clears). `NotifyOffer` sits on the Needs-you header |
+| `TabBar` | `<nav>` | Phone only (`≤ 760 px`), 5 tabs, height `calc(--tab-h + --safe-b)`. Sessions tab carries an amber Needs-you badge |
+| `SegmentedControl` | `ToggleGroup` | `--ctl-h` track (`--sunken`), `--ctl-h-sm` thumb (`--control-fill` + `--e-ctl`) |
+| `SearchField` | `Input` | `--sunken` fill, inset icon, `⌘F` focuses it |
+| `Field`, `FieldGrid` | `Input`, `Select` | 120 px right-aligned labels, 12 px row gap (16 px stacked on phone) |
+| `Sheet`, `SheetActions` | `Dialog` | Drops 8 px from toolbar on desktop; bottom sheet on phone. Follows Dialog metrics above |
+| `ConfirmAlert` | `AlertDialog` | 300 px centered; title quotes the object name. Follows Dialog metrics above |
+| `Menu`, `RowContextMenu` | `DropdownMenu`, `ContextMenu` | macOS 26 NSMenu: `--menu` translucent material, 12 px corners, 5 px padding, `--ctl-h` rows with 6 px pill, separators inset 16 px. `danger` rows are red and highlight `--menu-danger` |
+| `PopupSelect` | `Select` | Replaces native `<select>`. Menu surface with left check column; `danger` items get their own group and turn the trigger red with a shield |
+| `Banner` | plain | Inside a pane, top of its scroller. Icon, one sentence, optional action. Tones: `info`, `warn`, `danger` |
+| `StatusDot` | plain | See State vocabulary. Always paired with a word or `aria-label` + tooltip |
+| `Inspector`, `InspectorHead`, `KeyValue`, `Section` | plain | Detail views cap at 1180 px, two columns at ≥ 1260 px. Session `ConversationInspector` sits inside the page as an Xcode-style ruled column: no outer padding, 12 px (`--s5`) side inset per section, full-width 0.5 px dividers between sections, none above the first section (16 px top inset) |
+| `DataGrid` | `<table>` | Sticky `--head-h` header, `--row-h` rows, fixed layout, resizable columns |
+| `Meter` | `<meter>` | 6 px rounded bar, accent fill; warn ≤ 20% left, danger ≤ 5%. Hidden when unknown |
 | `Hash` | `<code>` | First 7 characters, full value in tooltip, click copies silently |
 | `Empty`, `RowSkeleton`, `Spinner` | plain | Empty says what appears and how. Spinner respects reduced motion |
-| `Kbd` | plain | 11 px, muted |
+| `Kbd` | plain | `--t-caption`, muted; hidden automatically on `@media (hover: none)` |
+
+## Motion
+
+Three durations (`--dur-1` 120 ms, `--dur-2` 200 ms, `--dur-3` 320 ms) and one easing curve (`--ease: cubic-bezier(.2, .8, .2, 1)`). At most 8 px of travel, no bounce, no loops except progress spinners. `prefers-reduced-motion: reduce` disables all animation and transitions.
+
+| Surface | Motion |
+|---|---|
+| Activity viewer | Fades in 3 px (`--dur-2`); text folds into history icon (`--dur-3`) |
+| Sheets | Drop 8 px from toolbar (`--dur-2`); slide from bottom edge on phone |
+| Usage charts & heatmap | Bars grow from baseline once per range change (`--dur-3`); heatmap cells fade in |
+| Selection & hover | Color only (`--dur-1`) |
 
 ## State vocabulary
 
 Use these exact words everywhere.
 
-| State | Glyph | Word | On selected row |
+| State | Glyph | Word | On selected row (focused) |
 |---|---|---|---|
 | Running | filled green dot | Running | white dot |
 | Stopped | hollow ring | Stopped | white ring |
@@ -104,17 +98,17 @@ Use these exact words everywhere.
 
 ## Alert model
 
-Each situation has one surface. This replaces `notice()`, `terminalNotice()`, `*-status` lines and `window.confirm`.
+Each situation has one surface. Never float toasts over content, and never use `notice()`, `*-status` lines, or `window.confirm`.
 
 | Situation | Surface | Example copy |
 |---|---|---|
-| An action finished and its result is on screen | Nothing: the row, switch or list shows it | Row reads `Stopped` |
-| An action finished somewhere you can't see | `Hud`, 4 s | `Updating mac-mini to 0.14.2` |
-| Copied | The control that copied shows a check or `Copied` for 1.5 s (`useCopied`); no Hud | `Copy` → `Copied` |
-| An action failed and nothing is open | `Hud`, stays until dismissed, with `Retry` | `Couldn't stop claude on oracle-vm: worker failed` |
-| Ongoing state of a pane | `Banner` | `mac-studio is offline. Showing its last known sessions` |
-| Ongoing state of the terminal | `Banner` in the terminal column | `Connection lost. Reconnecting…` |
-| Irreversible or disruptive action | `ConfirmAlert` | Title `Stop claude in agentpack?` Body `On oracle-vm. Its current conversation may end.` Buttons `Stop agent`, `Cancel` |
-| Form validation or server rejection | Inline under the field | `Enter a name.` |
+| Action finished and result is on screen | Nothing: the row, switch, or list shows it | Row reads `Stopped` |
+| Action finished out of sight | `ActivityViewer` in the toolbar (4 s, then folds into history icon) | `Updating mac-mini to 0.14.2` |
+| Copied | The control shows a check or `Copied` for 1.5 s (`useCopied`) | `Copy` → `Copied` |
+| Action failed with nothing open | `ActivityViewer` in the toolbar, stays until dismissed, with `Retry` | `Couldn't stop claude on oracle-vm: worker failed` |
+| Ongoing state of a pane or terminal | `Banner` inside the pane | `mac-studio is offline. Showing its last known sessions` |
+| Gateway unreachable or peer offline | `ConnectionItem` in the toolbar | `1 machine offline` |
+| Irreversible or disruptive action | `ConfirmAlert` (quoted object name) | Title `Stop “Triage…”?` Body `In acme-web on studio. The session stays in the list…` |
+| Form validation or server rejection | Inline `FieldError` under the field | `Enter a name.` |
 
-Errors say what failed and what to do next. Do not write `Error:`, `Oops` or apologies.
+Errors say what failed and what to do next. Do not write `Error:`, `Oops`, or apologies.

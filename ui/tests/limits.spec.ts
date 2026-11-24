@@ -128,14 +128,9 @@ test("rows from other machines sit under a disclosure", async ({ page }) => {
   await expect(grid(page).getByText("Fast Mac")).toBeVisible()
 })
 
-test("the status bar shows the last limits update on Limits and nothing on Sessions", async ({ page }) => {
+test("the Limits toolbar shows the last report update", async ({ page }) => {
   await page.goto("/usage/limits")
-  const status = page.getByRole("contentinfo", { includeHidden: true })
-  await expect(status).toContainText(/Updated (now|\d+ seconds? ago|\d+ minutes? ago)/)
-
-  await page.getByRole("link", { name: "Sessions", exact: true }).click()
-  await expect(page).toHaveURL(/\/sessions/)
-  await expect(status).not.toContainText("Updated")
+  await expect(page.locator('[data-slot="toolbar"]')).toContainText(/updated (now|\d+ seconds? ago|\d+ minutes? ago)/)
 })
 
 test("a slow remote machine does not delay the local replicated read", async ({ page }) => {

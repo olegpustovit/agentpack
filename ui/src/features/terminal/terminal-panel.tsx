@@ -6,7 +6,6 @@ import { ChevronDown, Maximize2, Minimize2, Plus, SquareTerminal, X } from "luci
 import { Banner, Spinner } from "@/components/kit/feedback"
 import { ConfirmAlert, ConfirmAlertContent, Menu, MenuContent, MenuItem, MenuTrigger, Sheet, SheetContent, SheetTitle } from "@/components/kit/overlays"
 import { DropdownMenuGroup, DropdownMenuLabel, DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
-import { StatusSlot } from "@/features/status/status-bar"
 import { api, LOCAL, routeMissing } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { basename } from "@/lib/format"
@@ -35,14 +34,13 @@ function readHeight() {
   return defaultHeight
 }
 
-export default function TerminalPanel({ chat, machine, machineName, phone, offline, open, onToggle, onHide, newShellRequest, shells }: {
+export default function TerminalPanel({ chat, machine, machineName, phone, offline, open, onHide, newShellRequest, shells }: {
   chat: SessionInfo
   machine: string
   machineName: string
   phone: boolean
   offline: boolean
   open: boolean
-  onToggle: () => void
   onHide: () => void
   newShellRequest: number
   shells: UseQueryResult<SessionInfo[]>
@@ -179,11 +177,6 @@ export default function TerminalPanel({ chat, machine, machineName, phone, offli
 
   return (
     <>
-      {active && <StatusSlot terminal>
-        <button type="button" className="rounded-(--r-row) hover:bg-(--hover)" title="Terminal (⌘J)" onClick={onToggle}>
-          Terminal · {shellName(active)}{rows.length > 1 ? ` +${rows.length - 1}` : ""}
-        </button>
-      </StatusSlot>}
       {phone ? (
         <Sheet open={open} onOpenChange={(next) => !next && open && onHide()}>
           <SheetContent finalFocus={false} className="flex h-[60dvh] max-h-[85dvh] flex-col gap-0 overflow-hidden bg-(--terminal-bg) p-0">

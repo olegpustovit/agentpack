@@ -140,8 +140,8 @@ export function FolderBrowser({ browser, query, setQuery, pick, filters, childre
   }
 
   return (
-    <aside ref={aside} className="flex min-h-0 flex-col gap-(--s3) border-r-[0.5px] border-(--sep) bg-(--sidebar) pt-(--s4) max-[760px]:border-r-0 max-[760px]:border-b-[0.5px]">
-      <div className="px-(--s4)">
+    <aside ref={aside} className="flex min-h-0 flex-col gap-(--s4) border-r-[0.5px] border-(--sep) bg-(--sidebar) pt-(--s6) max-[760px]:border-r-0 max-[760px]:border-b-[0.5px] max-[760px]:h-[48dvh]">
+      <div className="px-(--s5)">
         <SearchField
           type="text"
           aria-label="Search projects"
@@ -190,7 +190,7 @@ export function FolderBrowser({ browser, query, setQuery, pick, filters, childre
           )}
         </SourceList>
       ) : children}
-      <div className="border-t-[0.5px] border-(--sep) px-(--s3) pb-(--s2)">
+      <div className="border-t-[0.5px] border-(--sep) px-(--s4) py-(--s2)">
         <Button type="button" variant="ghost" size="sm" className="w-full justify-start" disabled={creation.isPending} onClick={() => {
           setQuery("~/")
           reset()

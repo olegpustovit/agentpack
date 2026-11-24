@@ -16,7 +16,7 @@ export function ToolbarProvider({ children }: { children: ReactNode }) {
 // Sits before the gear. Empty targets take no space, so routes without a slot see no gap.
 export function ToolbarTarget() {
   const target = useContext(ToolbarSlotContext)
-  return <div ref={target?.setElement} className="flex shrink-0 items-center gap-(--s2) empty:hidden" />
+  return <div ref={target?.setElement} className="flex shrink-0 items-center gap-(--s2) empty:hidden [&_[data-slot=button]]:rounded-full" />
 }
 
 // Routes render trailing toolbar controls here; they appear only while that route is mounted.
@@ -28,7 +28,7 @@ export function ToolbarSlot({ children }: { children: ReactNode }) {
 // The empty target is a CSS peer: the shell's fallback view label shows only while no route fills it.
 export function ToolbarTitleTarget() {
   const target = useContext(ToolbarSlotContext)
-  return <div ref={target?.setTitle} className="peer min-w-0 empty:hidden" />
+  return <div ref={target?.setTitle} className="peer min-w-24 flex-1 empty:hidden" />
 }
 
 // Object title and subtitle. Routes render this instead of a page heading, which would eat pane height.
@@ -37,7 +37,7 @@ export function ToolbarTitle({ title, subtitle }: { title: string; subtitle?: st
   if (!target?.title) return null
   return createPortal(
     <div className="flex min-w-0 flex-col justify-center leading-tight">
-      <span className="truncate text-(length:--fs) font-semibold">{title}</span>
+      <span className="truncate text-(length:--fs-lg) font-semibold tracking-[-.01em]">{title}</span>
       {subtitle && <span className="truncate text-(length:--fs-xs) text-(--fg2)">{subtitle}</span>}
     </div>,
     target.title,

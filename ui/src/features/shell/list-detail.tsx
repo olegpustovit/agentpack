@@ -5,6 +5,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { useIsPhone } from "./use-is-phone"
 import { useRoutePosition } from "./views"
 import { useSidebar } from "./sidebar"
+import { cn } from "@/lib/utils"
 
 const sidebarWidth = 264
 
@@ -44,16 +45,17 @@ function SidebarListDetail({ list, children }: { list: ReactNode; children: Reac
         collapsible
         collapsedSize={0}
         onResize={sync}
-        className="min-w-0 bg-(--sidebar)"
+        className="min-w-0"
       >
         {list}
       </ResizablePanel>
       <ResizableHandle
-        className="w-0 cursor-col-resize border-l-[0.5px] border-(--sep) bg-transparent after:w-[7px]"
+        className="w-(--s2) cursor-col-resize bg-transparent after:w-[7px]"
         onDoubleClick={() => sidebar.panelRef.current?.resize(sidebarWidth)}
       />
-      <ResizablePanel id="content" className="min-w-0">
-        {children}
+      <ResizablePanel id="content" className={cn("min-w-0 pe-(--gutter)", sidebar.collapsed && "ps-(--gutter)")}>
+        {/* The page: the one raised surface. Everything around it is canvas. */}
+        <div data-slot="page" className="h-full min-h-0 overflow-hidden rounded-(--r-page) bg-(--page) shadow-(--e-page)">{children}</div>
       </ResizablePanel>
     </ResizablePanelGroup>
   )

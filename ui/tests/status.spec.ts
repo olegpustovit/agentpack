@@ -1,49 +1,33 @@
 import { expect, test } from "@playwright/test"
-
-const identity = { node: { id: "n1", name: "host-a", os: "linux", version: "0" }, auth: "password", tailscale_user: "" }
+import { mockAPI } from "./helpers"
 
 test.beforeEach(async ({ page }) => {
+  await mockAPI(page)
   await page.setViewportSize({ width: 1280, height: 800 })
-  await page.route("**/api/config", (route) => route.fulfill({ json: { ui_build_id: "test-build" } }))
-  await page.route("**/api/status", (route) =>
-    route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } }),
-  )
-  await page.route("**/api/identity", (route) => route.fulfill({ json: identity }))
 })
 
-test("connection item reports connected machines and offline count", async ({ page }) => {
-  await page.route("**/api/nodes", (route) =>
-    route.fulfill({ json: [{ id: "n2", name: "oracle-vm", online: false }] }),
-  )
-  await page.goto("/sessions")
-  const status = page.getByRole("contentinfo")
-  await expect(status.getByRole("button", { name: "Connected · 2 machines · 1 offline" })).toBeVisible()
-})
-
-test("connection item says when the gateway is unreachable", async ({ page }) => {
+test("the toolbar reports when the gateway is unreachable", async ({ page }) => {
   await page.route("**/api/nodes", (route) => route.abort())
   await page.goto("/sessions")
-  await expect(page.getByRole("contentinfo").getByRole("button", { name: "Gateway unreachable" })).toBeVisible()
+  await expect(page.locator('[data-slot="toolbar"]').getByRole("button", { name: "Gateway unreachable" })).toBeVisible()
 })
 
-test("connection popover lists machines and offers refresh and topology", async ({ page }) => {
+test("the connection popover lists machines, links to topology, and refreshes connectivity", async ({ page }) => {
+  let online = false
   await page.route("**/api/nodes", (route) =>
-    route.fulfill({ json: [{ id: "n2", name: "oracle-vm", online: false }] }),
+    route.fulfill({ json: [{ id: "n2", name: "oracle-vm", online }] }),
   )
   await page.goto("/sessions")
-  await page.getByRole("button", { name: "Connected · 2 machines · 1 offline" }).click()
+  const connection = page.locator('[data-slot="toolbar"]').getByRole("button", { name: "1 machine offline" })
+  await connection.click()
   const popover = page.getByRole("dialog")
-  await expect(popover.getByText("host-a")).toBeVisible()
+  await expect(popover.getByText("Gateway machine")).toBeVisible()
   await expect(popover.getByText("oracle-vm")).toBeVisible()
-  await expect(popover.getByRole("button", { name: "Refresh" })).toBeVisible()
-  await expect(popover.getByRole("link", { name: "View topology" })).toHaveAttribute("href", "/machines/topology")
-})
+  const topology = popover.getByRole("link", { name: "View topology" })
+  await expect(topology).toHaveAttribute("href", "/machines/topology")
 
-test("limits and settings show no session text in the status bar", async ({ page }) => {
-  await page.route("**/api/nodes", (route) => route.fulfill({ json: [] }))
-  for (const path of ["/usage/limits", "/settings"]) {
-    await page.goto(path)
-    await expect(page.getByRole("contentinfo").getByRole("button", { name: "Connected · 1 machine" })).toBeVisible()
-    await expect(page.getByRole("contentinfo").getByText("Mouse:")).toHaveCount(0)
-  }
+  online = true
+  await popover.getByRole("button", { name: "Refresh" }).click()
+  await expect(connection).toHaveCount(0)
+  await expect(popover).toBeHidden()
 })

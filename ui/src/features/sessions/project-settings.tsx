@@ -4,7 +4,7 @@ import { GroupHeader } from "@/components/kit/list"
 import { Field, FieldError, FieldLabel, PopupSelect } from "@/components/kit/forms"
 import { SheetActions, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
+import { Switch } from "@/components/ui/switch"
 import { Input } from "@/components/ui/input"
 import type { PackageItem } from "@/features/library/model"
 import { packagesQuery } from "@/features/library/queries"
@@ -17,7 +17,7 @@ import type { ListedSession } from "./group"
 import { projectDirectory } from "./git"
 import { projectsQuery, selectedProjectQuery, sessionsQuery } from "./queries"
 
-const section = "flex flex-col gap-(--s3)"
+const section = "flex flex-col gap-(--s2)"
 function loginURL(value: string) {
   try {
     const url = new URL(value)
@@ -29,7 +29,8 @@ function loginURL(value: string) {
   }
 }
 
-const itemRow = "flex min-w-0 flex-wrap items-center justify-between gap-(--s3) border-t border-(--sep-soft) py-(--s2)"
+// One row shape for packages and servers: name leads, every control trails, one left edge.
+const itemRow = "flex min-h-(--row-h) min-w-0 flex-wrap items-center gap-(--s4) border-t-[0.5px] border-(--sep-soft) py-(--s2) first-of-type:border-t-0 data-off:[&>span:first-child]:line-through data-off:[&>span:first-child]:opacity-50"
 
 type PluginLogin = { module: string; url: string; credential: string }
 
@@ -121,7 +122,8 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
     onError: () => void refreshProjects(),
   })
   const busy = save.isPending || connecting
-  const changed = Boolean(Object.keys(add).length || spec.trim() || remove.length || removeMCP.length || savedServers.length || Object.keys(logins).length || Object.keys(savedPluginLogins).length || Object.keys(mcpEnabled).length)
+  const changes = Object.keys(add).length + (spec.trim() ? 1 : 0) + remove.length + removeMCP.length + savedServers.length + Object.keys(logins).length + Object.keys(savedPluginLogins).length + Object.keys(mcpEnabled).length
+  const changed = changes > 0
   const installed = project?.packages ?? []
   const editURL = loginURL(edit?.url ?? "")
   const choices = library.items.filter((item): item is PackageItem =>
@@ -190,8 +192,8 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
   return (
     <form onSubmit={submit} className="contents">
       <SheetTitle>Project settings</SheetTitle>
-      <SheetDescription className="break-all">{row.definition_root || directory} · {row.machineName}</SheetDescription>
-      <div className="min-h-0 space-y-(--s5) overflow-y-auto">
+      <SheetDescription className="truncate" title={row.definition_root || directory}>{row.definition_root || directory} · {row.machineName}</SheetDescription>
+      <div className="flex flex-col gap-(--s8)">
         {active.isPending && <p role="status">Loading project…</p>}
         {active.isError && <FieldError>{errorText(active.error)}</FieldError>}
         {!active.isPending && !active.isError && !project && <FieldError>Project folder unavailable.</FieldError>}
@@ -200,72 +202,67 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
         {project?.available && !project.error && (
           <>
             <section aria-label="Packages" className={section}>
-              <GroupHeader>Packages</GroupHeader>
+              <GroupHeader className="px-0">Packages</GroupHeader>
               {installed.length === 0 && <p className="text-(--fg2)">No packages installed.</p>}
               {installed.map((pkg) => (
-                <div key={pkg.module} className={itemRow}>
-                  <span className="min-w-0 break-all">{pkg.name || pkg.module}</span>
+                <div key={pkg.module} className={itemRow} data-off={remove.includes(pkg.module) || undefined}>
+                  <span className="min-w-0 flex-1 truncate" title={pkg.module}>{pkg.name || pkg.module}</span>
                   {pkg.direct ? (
-                    <label className="flex items-center gap-(--s2) text-(--fg2)">
-                      <Checkbox disabled={busy} checked={remove.includes(pkg.module)} onCheckedChange={(checked) => setRemove(toggle(remove, pkg.module, checked))} />
-                      Remove <span className="sr-only">{pkg.name || pkg.module}</span>
-                    </label>
-                  ) : <span className="text-(--fg2)">Dependency</span>}
+                    <Button type="button" size="sm" variant={remove.includes(pkg.module) ? "default" : "ghost"} disabled={busy} onClick={() => setRemove(toggle(remove, pkg.module, !remove.includes(pkg.module)))}>
+                      {remove.includes(pkg.module) ? "Undo" : "Remove"}<span className="sr-only"> {pkg.name || pkg.module}</span>
+                    </Button>
+                  ) : <span className="text-(length:--fs-sm) text-(--fg2)">Dependency</span>}
                 </div>
               ))}
+              <GroupHeader className="mt-(--s5) px-0">Add from Library</GroupHeader>
               <Input aria-label="Search Library packages" placeholder="Search Library packages" value={search} onChange={(event) => setSearch(event.target.value)} />
-              <div role="group" aria-label="Library packages" className="max-h-44 overflow-y-auto">
+              <div role="group" aria-label="Library packages">
                 {choices.map((pkg) => (
-                  <label key={pkg.key} className={itemRow}>
-                    <span className="min-w-0 flex-1 break-all">{pkg.name} <span className="text-(--fg2)">{pkg.module}</span></span>
-                    <Checkbox
-                      aria-label={`Add ${pkg.name}`}
-                      disabled={busy}
-                      checked={Boolean(add[pkg.module])}
-                      onCheckedChange={(checked) => setAdd((current) => {
+                  <div key={pkg.key} className={itemRow}>
+                    <span className="min-w-0 flex-1 truncate" title={pkg.module}>{pkg.name} <span className="text-(length:--fs-sm) text-(--fg2)">{pkg.module}</span></span>
+                    <Button type="button" size="sm" variant={add[pkg.module] ? "default" : "ghost"} disabled={busy}
+                      onClick={() => setAdd((current) => {
                         const next = { ...current }
-                        if (checked) next[pkg.module] = `${pkg.module}@${pkg.commit}`
-                        else delete next[pkg.module]
+                        if (next[pkg.module]) delete next[pkg.module]
+                        else next[pkg.module] = `${pkg.module}@${pkg.commit}`
                         return next
-                      })}
-                    />
-                  </label>
+                      })}>
+                      {add[pkg.module] ? "Added ✓" : "Add"}<span className="sr-only"> {pkg.name}</span>
+                    </Button>
+                  </div>
                 ))}
                 {choices.length === 0 && <p className="text-(--fg2)">{library.loading ? "Loading Library…" : "No matching packages."}</p>}
               </div>
               <Field>
-                <FieldLabel htmlFor="project-package">Package source</FieldLabel>
-                <Input id="project-package" placeholder="module@commit" disabled={busy} value={spec} onChange={(event) => setSpec(event.target.value)} />
+                <FieldLabel htmlFor="project-package" className="w-auto">Or add by source</FieldLabel>
+                <Input id="project-package" placeholder="github.com/owner/repo/path@ref" disabled={busy} value={spec} onChange={(event) => setSpec(event.target.value)} />
               </Field>
             </section>
             <section aria-label="MCP servers" className={section}>
-              <GroupHeader>MCP servers</GroupHeader>
+              <GroupHeader className="px-0">MCP servers</GroupHeader>
               {connections.isError && <FieldError>{errorText(connections.error)}</FieldError>}
               {project.mcp.length === 0 && <p className="text-(--fg2)">No MCP servers configured.</p>}
               {project.mcp.filter((server) => !servers.some((draft) => draft.name === server.name)).map((server) => {
                 const url = server.url
                 const enabled = mcpEnabled[server.name] ?? !server.disabled
                 return (
-                  <div key={server.name} className={itemRow}>
-                    <label className="flex min-w-0 flex-1 items-center gap-(--s3)">
-                      <Checkbox checked={enabled} disabled={busy || removeMCP.includes(server.name)} aria-label={`Enable ${server.name}`} onCheckedChange={(checked) => setMCPEnabled((current) => {
-                        const next = { ...current }
-                        if (checked === !server.disabled) delete next[server.name]
-                        else next[server.name] = checked
-                        return next
-                      })} />
-                      <span className="min-w-0 break-all">{server.name} <span className="text-(--fg2)">{server.host || server.launcher}</span></span>
-                    </label>
+                  <div key={server.name} className={itemRow} data-off={removeMCP.includes(server.name) || !enabled || undefined}>
+                    <span className="min-w-40 flex-1 truncate" title={server.url || server.launcher}>{server.name} <span className="text-(length:--fs-sm) text-(--fg2)">{server.host || server.launcher}</span></span>
                     {url && enabled && !removeMCP.includes(server.name) && loginControl(server.name, url, server)}
                     {server.source === "manifest" && (
                       <>
-                        {url && <Button type="button" size="sm" disabled={busy || Boolean(edit)} onClick={() => openEditor({ name: server.name, url, type: server.transport }, true)}>Edit<span className="sr-only"> {server.name}</span></Button>}
-                        <label className="flex items-center gap-(--s2) text-(--fg2)">
-                          <Checkbox disabled={busy || edit?.name === server.name} checked={removeMCP.includes(server.name)} onCheckedChange={(checked) => setRemoveMCP(toggle(removeMCP, server.name, checked))} />
-                          Remove <span className="sr-only">{server.name}</span>
-                        </label>
+                        {url && <Button type="button" size="sm" variant="ghost" disabled={busy || Boolean(edit)} onClick={() => openEditor({ name: server.name, url, type: server.transport }, true)}>Edit<span className="sr-only"> {server.name}</span></Button>}
+                        <Button type="button" size="sm" variant={removeMCP.includes(server.name) ? "default" : "ghost"} disabled={busy || edit?.name === server.name} onClick={() => setRemoveMCP(toggle(removeMCP, server.name, !removeMCP.includes(server.name)))}>
+                          {removeMCP.includes(server.name) ? "Undo" : "Remove"}<span className="sr-only"> {server.name}</span>
+                        </Button>
                       </>
                     )}
+                    <Switch checked={enabled} disabled={busy || removeMCP.includes(server.name)} aria-label={`Use ${server.name}`} onCheckedChange={(checked) => setMCPEnabled((current) => {
+                      const next = { ...current }
+                      if (checked === !server.disabled) delete next[server.name]
+                      else next[server.name] = checked
+                      return next
+                    })} />
                   </div>
                 )
               })}
@@ -273,7 +270,7 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
                 const url = loginURL(server.url ?? "")
                 return (
                   <div className={itemRow} key={server.name}>
-                    <span className="min-w-0 flex-1 break-all">{server.name} <span className="text-(--fg2)">· Unsaved</span></span>
+                    <span className="min-w-0 flex-1 truncate">{server.name} <span className="text-(--fg2)">· Unsaved</span></span>
                     {url && loginControl(server.name, url)}
                     <Button type="button" size="sm" disabled={busy || Boolean(edit)} onClick={() => openEditor(server, true)}>Edit draft</Button>
                     <Button type="button" size="sm" disabled={busy || edit?.name === server.name}
@@ -324,7 +321,7 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
                     <Button type="button" size="sm" disabled={busy} onClick={() => setEdit(undefined)}>Discard server edit</Button>
                   </div>
                 </>
-              ) : <Button type="button" size="sm" className="self-start" disabled={busy} onClick={() => openEditor({ name: "", url: "" }, false)}>Add MCP server…</Button>}
+              ) : <Button type="button" size="sm" className="mt-(--s3) self-start" disabled={busy} onClick={() => openEditor({ name: "", url: "" }, false)}>Add MCP server…</Button>}
               {loginError && <FieldError>{loginError}</FieldError>}
               {connecting && <div className="flex items-center gap-(--s3)">
                 <p role="status" className="text-(--fg2)">Waiting for sign-in…</p>
@@ -334,12 +331,11 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
                 }}>Cancel sign-in</Button>
               </div>}
             </section>
-            <p className="text-(length:--fs-sm) text-(--fg2)">Affected agents reload when idle. New sessions use the saved settings.</p>
           </>
         )}
       </div>
       {save.error && <FieldError>{routeMissing(save.error) ? `Update Agentpack on ${row.machineName} to save project settings.` : errorText(save.error)}</FieldError>}
-      <SheetActions>
+      <SheetActions status={changed ? `${changes} ${changes === 1 ? "change" : "changes"} · agents reload when idle` : "Saved settings reach agents when they are idle"}>
         <Button type="submit" variant="primary" disabled={!project?.available || Boolean(project.error) || !changed || busy}>
           {save.isPending ? "Saving…" : "Save"}
         </Button>
@@ -387,7 +383,7 @@ function ProjectLogin({ name, url, current, credentials, plugin, outdated, busy,
           {active ? "Reconnect…" : "Sign in…"}
         </Button>
       )}
-      {outdated && <span className="text-(length:--fs-xs) text-(--fg2)">Update this machine to allow plugin logins.</span>}
+      {outdated && <span className="text-(length:--fs-xs) text-(--fg2)" title="Update this machine to pick a login for plugin servers.">Needs update</span>}
       {missing && logins.length === 0 && <span className="text-(length:--fs-xs) text-(--warn-word)">Selected login unavailable.</span>}
     </div>
   )

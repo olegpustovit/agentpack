@@ -56,7 +56,7 @@ export function NewSessionSheet({
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       {open && (
-        <SheetContent className="h-[min(640px,calc(100dvh-var(--bar-h)-var(--s6)))] w-[min(900px,calc(100vw-var(--s6)*2))] max-w-none sm:max-w-none max-[760px]:w-full grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 max-[760px]:h-[92dvh]">
+        <SheetContent className="h-[min(640px,calc(100dvh-var(--bar-h)-var(--s6)))] w-[min(900px,calc(100vw-var(--s6)*2))] max-w-none sm:max-w-none max-[760px]:w-full grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 max-[760px]:h-[calc(100dvh-var(--safe-t)-var(--s4))] max-[760px]:pb-0">
           <NewSessionForm initialMachine={initialMachine} initialDirectory={initialDirectory} />
         </SheetContent>
       )}
@@ -300,7 +300,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
         selected={item === project || Boolean(requested && item.places.some((entry) => entry.key === requested))}
         title={item.places.map((entry) => `${entry.machineName}: ${entry.row.directory}`).join("\n")}
         onClick={() => chooseProject(item)}
-        className={cn("h-auto flex-col items-stretch gap-0 py-(--s3) max-[760px]:h-auto", !best && "opacity-50")}
+        className={cn("h-auto flex-col items-stretch gap-0 px-(--s5) py-(--s3) max-[760px]:h-auto", !best && "opacity-50")}
       >
         <span className="flex min-w-0 items-baseline gap-(--s3)">
           <span className="min-w-0 flex-1 truncate font-semibold">{item.name}</span>
@@ -316,21 +316,21 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
 
   return (
     <form onSubmit={submit} onKeyDown={submitShortcut} className="contents">
-      <header className="flex min-w-0 items-center gap-(--s4) border-b-[0.5px] border-(--sep) px-(--s6) py-(--s5)">
+      <header className="flex min-w-0 items-center gap-(--s4) border-b-[0.5px] border-(--sep) px-(--dlg-pad) pt-(--dlg-pad) pb-(--s6)">
         <div className="min-w-0 flex-1">
           <SheetTitle>New session</SheetTitle>
           <SheetDescription>Pick a project or any folder, then the machine to run it on.</SheetDescription>
         </div>
       </header>
 
-      <div className="grid min-h-0 grid-cols-[280px_minmax(0,1fr)] max-[760px]:grid-cols-1 max-[760px]:grid-rows-[minmax(0,180px)_minmax(0,1fr)]">
+      <div className="grid min-h-0 grid-cols-[280px_minmax(0,1fr)] max-[760px]:grid-cols-1 max-[760px]:grid-rows-none max-[760px]:auto-rows-auto max-[760px]:overflow-y-auto">
         <FolderBrowser
           query={query}
           setQuery={setQuery}
           browser={browser}
           pick={pickFolder}
           filters={(
-            <div className="flex min-w-0 items-center gap-(--s2) px-(--s4)">
+            <div className="flex min-w-0 items-center gap-(--s2) px-(--s5)">
               <PopupSelect
                 label="Filter by machine"
                 disabled={browser.creation.isPending}
@@ -353,7 +353,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
             </div>
           )}
         >
-          <SourceList aria-label="Projects" className="flex-1 px-(--s3)">
+          <SourceList aria-label="Projects" className="flex-1 px-(--s4)">
             {groups.map((group) => group.rows.length > 0 && (
               <Fragment key={group.label}>
                 <GroupHeader>{group.label}</GroupHeader>
@@ -375,7 +375,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
           )}
         </FolderBrowser>
 
-        <div className="flex min-h-0 flex-col gap-(--s6) overflow-y-auto px-(--s6) py-(--s5)">
+        <div className="flex min-h-0 flex-col gap-(--s7) overflow-y-auto px-(--dlg-pad) py-(--s6)">
           {project && place && row ? (
             <>
               <div className="flex min-w-0 flex-col gap-(--s3)">
@@ -519,7 +519,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
         </div>
       </div>
 
-      <footer className="flex min-w-0 flex-col gap-(--s3) border-t-[0.5px] border-(--sep) bg-(--sidebar) px-(--s6) py-(--s4)">
+      <footer className="flex min-w-0 flex-col gap-(--s3) border-t-[0.5px] border-(--sep) bg-(--sidebar) px-(--dlg-pad) py-(--s5) max-[760px]:pb-[calc(var(--s4)+var(--safe-b))]">
         {place && hint && <p className="text-(length:--fs-sm) text-(--fg2)">{hint}</p>}
         {place && !hint && account?.installed && !account.signedIn && !account.checkRequired && (
           <p className="text-(length:--fs-sm) text-(--fg2)">
@@ -541,7 +541,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
               </>
             )}
           </p>
-          <SheetActions>
+          <SheetActions pinned={false}>
             <Button type="submit" variant="primary" disabled={blocked}>
               {start.isPending ? "Starting session…" : "Start session"}
               <Kbd aria-hidden className="text-current opacity-70">{isMac ? "⌘↵" : "Ctrl+↵"}</Kbd>

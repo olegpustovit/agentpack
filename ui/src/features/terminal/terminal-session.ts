@@ -16,11 +16,9 @@ declare global {
 export type TerminalSnapshot = {
   busy: boolean
   banner: string
-  grid: { cols: number; rows: number }
   fontSize: number
   fit: boolean
   mouseOwned: boolean
-  sharedInput: boolean
   shellCommand?: TerminalState["shell_command"]
   ended: boolean
 }
@@ -258,11 +256,9 @@ export class TerminalSession {
     return {
       busy: this.#busy,
       banner: this.#banner,
-      grid: { cols: term?.cols ?? 0, rows: term?.rows ?? 0 },
       fontSize: term?.options.fontSize ?? BASE_FONT,
       fit: this.#fit,
       mouseOwned: term ? term.modes.mouseTrackingMode !== "none" : false,
-      sharedInput: this.#state?.shared_input === true,
       shellCommand: this.#state?.shell_command,
       ended: this.#state?.running === false && !this.#state.restarting,
     }

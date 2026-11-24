@@ -2,11 +2,12 @@ import type { ReactNode } from "react"
 import { lazy, Suspense, useEffect, useState } from "react"
 import { Link, useNavigate, useParams } from "@tanstack/react-router"
 import { ChevronLeft, PanelLeft, Settings } from "lucide-react"
-import { Announcement, Hud } from "@/components/kit/feedback"
+import { Announcement } from "@/components/kit/feedback"
+import { ActivityViewer } from "./activity"
 import { useDiscovering } from "@/features/machines/queries"
 import { useListedSessions } from "@/features/sessions/queries"
 import { nextNeedsYou } from "@/features/sessions/session-status"
-import { StatusBar, StatusProvider } from "@/features/status/status-bar"
+import { ConnectionItem } from "@/features/status/connection"
 import { AppWindow, Toolbar, ToolbarButton } from "@/components/kit/window"
 import { buttonVariants } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -24,18 +25,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   useShellShortcuts()
   useAttention()
   return (
-    <StatusProvider>
       <ToolbarProvider>
         <AppWindow>
           <AppToolbar />
           {children}
           <TabBar />
-          <StatusBar />
-          <Hud />
           <ShellCommands />
         </AppWindow>
       </ToolbarProvider>
-    </StatusProvider>
   )
 }
 
@@ -158,14 +155,14 @@ function AppToolbar() {
           <ChevronLeft />
         </Link>
       )}
-      <nav aria-label="Views" className="me-(--s3) flex h-(--ctl-h) shrink-0 items-center rounded-(--r-ctl) bg-(--track) p-(--s1) max-[760px]:hidden">
+      <nav aria-label="Views" className="me-(--s3) flex h-(--ctl-h) shrink-0 items-center rounded-full bg-(--track) p-0.5 max-[760px]:hidden">
         {views.map((item, index) => (
           <Link
             key={item.id}
             {...viewLink(item)}
             title={`⌘${index + 1}`}
             className={cn(
-              "flex h-(--ctl-h-sm) cursor-default items-center rounded-(--r-row) px-(--s4) text-(length:--fs-sm) text-(--fg2)",
+              "flex h-full cursor-default items-center rounded-full px-(--s5) text-(length:--fs-sm) font-medium text-(--fg2)",
               item.id === view && "bg-(--control) text-(--fg) shadow-(--shadow-ctl)",
             )}
           >
@@ -174,14 +171,15 @@ function AppToolbar() {
         ))}
       </nav>
       <ToolbarTitleTarget />
-      <span className="hidden min-w-0 truncate text-(length:--fs) font-semibold peer-empty:inline">{title}</span>
-      <div className="flex-1" />
+      <span className="hidden min-w-24 flex-1 truncate text-(length:--fs) font-semibold peer-empty:inline">{title}</span>
       {discovering && <Announcement>Discovering machines…</Announcement>}
+      <ConnectionItem />
+      <ActivityViewer />
       <ToolbarTarget />
       <Link
         to="/settings"
         aria-label="Settings"
-        className={buttonVariants({ variant: "ghost", size: "icon", className: cn("shrink-0 max-[760px]:hidden", view === "settings" && "text-(--accent)") })}
+        className={buttonVariants({ variant: "ghost", size: "icon", className: cn("shrink-0 rounded-full [&_svg]:size-4 max-[760px]:hidden", view === "settings" && "text-(--accent)") })}
       >
         <Settings />
       </Link>
@@ -190,19 +188,26 @@ function AppToolbar() {
 }
 
 function TabBar() {
+  const { sessions } = useListedSessions()
+  const needsYou = sessions.filter((session) => session.conversation_state === "needs_you").length
   return (
     <nav
       aria-label="Tabs"
-      className="hidden h-(--tab-h) grid-cols-5 border-t-[0.5px] border-(--sep) bg-(--chrome) max-[760px]:grid"
+      data-slot="tab-bar"
+      className="hidden grid-cols-5 border-t-[0.5px] border-(--sep) bg-(--chrome) max-[760px]:grid"
     >
       {tabs.map((tab) => (
         <Link
           key={tab.id}
           to={tab.to}
-          className="flex min-w-0 flex-col items-center justify-center gap-0.5 text-(--fg2) aria-[current=page]:text-(--accent)"
+          aria-label={tab.id === "sessions" && needsYou ? `${tab.label}, ${needsYou} need you` : undefined}
+          className="relative flex min-w-0 flex-col items-center justify-center gap-1 pt-1 text-(--fg2) aria-[current=page]:text-(--accent)"
         >
-          <tab.icon aria-hidden className="size-(--s7)" />
-          <span className="text-[10px] leading-none">{tab.label}</span>
+          <tab.icon aria-hidden className="size-6" />
+          <span className="text-[11px] leading-none font-medium">{tab.label}</span>
+          {tab.id === "sessions" && needsYou > 0 && (
+            <span aria-hidden className="absolute top-1 left-[calc(50%+6px)] min-w-[18px] rounded-full bg-(--warn) px-1 text-center text-[11px] leading-[18px] font-semibold text-black">{needsYou}</span>
+          )}
         </Link>
       ))}
     </nav>

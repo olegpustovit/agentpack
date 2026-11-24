@@ -162,13 +162,15 @@ export function ConversationInspector({
       aria-label="Session details"
       hidden={!open}
       className={cn(
-        "shrink-0 flex-col overflow-auto border-l-[0.5px] border-(--sep) bg-(--sidebar) w-(--inspector-w) gap-(--s6) p-(--s5)",
+        "shrink-0 flex-col overflow-auto border-l-[0.5px] border-(--sep) bg-(--page) w-(--inspector-w) p-0",
         open ? "flex" : "hidden",
         open && "max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0 max-[1040px]:z-30 max-[1040px]:max-w-[calc(100vw-64px)]",
       )}
       style={{ "--inspector-w": reviewing ? "480px" : "272px" } as CSSProperties}
     >
-      <div id="conversation-inspector-content" className="flex min-w-0 flex-col gap-(--s6) text-(length:--fs-sm)">
+      {/* Xcode-style inspector: dividers run the full width between sections, never above the first one,
+          and every section carries the same inset, so the column reads as one ruled list. */}
+      <div id="conversation-inspector-content" className="flex min-w-0 flex-col text-(length:--fs-sm) [&>*]:px-(--s5) [&>section]:py-(--s5) [&>section:first-of-type]:border-t-0 [&>section:first-of-type]:pt-(--s6)">
         {thread.context_limit !== undefined && thread.context_tokens !== undefined && (
           <Section title="Context">
             <div role="meter" aria-label="Context used" aria-valuemin={0} aria-valuemax={thread.context_limit} aria-valuenow={thread.context_tokens} className="mb-(--s4) h-1.5 overflow-hidden rounded-full bg-(--track)">

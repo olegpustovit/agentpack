@@ -254,7 +254,7 @@ export default function CommandPalette({
             </Autocomplete.List>
           )}
           <Autocomplete.Empty className="px-(--s5) py-(--s4) empty:hidden text-(length:--fs-sm) text-(--fg2)">{listingShortcuts ? null : "No matches"}</Autocomplete.Empty>
-          <p className="flex gap-(--s5) border-t-[0.5px] border-(--sep) px-(--s5) py-(--s2) text-(length:--fs-xs) text-(--fg3)">
+          <p className="flex gap-(--s5) border-t-[0.5px] border-(--sep) px-(--s5) py-(--s2) text-(length:--fs-xs) text-(--fg3) [@media(hover:none)]:hidden">
             <span>↑↓ move</span>
             <span>↵ open</span>
             <span className="flex-1" />

@@ -1,7 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test"
 import { mockAPI, projectRow } from "./helpers"
 
-// Status-bar assertions need desktop width: the status bar is hidden under 760px.
 // Machines, Limits, Settings and startup ports of gateway.spec.js.
 
 function machineRow(page: Page, name: string): Locator {
@@ -178,8 +177,6 @@ test("limits automatically prefers capable nodes and refreshes every source", as
   })
 
   await page.goto("/")
-  // Four machines discovered: this one, two peers and the offline one.
-  await expect(page.getByRole("contentinfo").getByRole("button", { name: "Connected · 4 machines · 1 offline" })).toBeVisible()
   await page.getByRole("link", { name: "Usage", exact: true }).click()
   await page.getByRole("navigation", { name: "Usage" }).getByRole("link", { name: /^Limits/ }).click()
 
@@ -212,8 +209,10 @@ test("limits automatically prefers capable nodes and refreshes every source", as
 test("limits labels replicated reports after machine discovery", async ({ page }) => {
   await mockAPI(page)
   await page.setViewportSize({ width: 1280, height: 800 })
+  let releaseNodes!: () => void
+  const nodesReady = new Promise<void>((resolve) => (releaseNodes = resolve))
   await page.route(nodesPath, async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 800))
+    await nodesReady
     await route.fulfill({ json: [{ id: "peer-1", name: "Kyiv grid", online: true }] })
   })
   await page.route(limitsPath, (route) => {
@@ -234,7 +233,8 @@ test("limits labels replicated reports after machine discovery", async ({ page }
   await page.goto("/")
   await page.getByRole("link", { name: "Usage", exact: true }).click()
   await page.getByRole("navigation", { name: "Usage" }).getByRole("link", { name: /^Limits/ }).click()
-  await expect(page.getByRole("contentinfo").getByRole("button", { name: "Connected · 2 machines" })).toBeVisible()
+  await expect(page.getByText("No provider limits yet")).toBeVisible()
+  releaseNodes()
   await expect(page.getByRole("meter", { name: "Weekly remaining" })).toHaveAttribute("value", "63")
   await expect(page.locator('[data-provider="codex"]').locator("header")).toContainText("Kyiv grid")
 })

@@ -65,7 +65,7 @@ test.describe("kit styling", () => {
     await desktop(page)
     await page.goto("/library")
     await expect(page.getByRole("combobox", { name: "Sort" })).toContainText("Type")
-    expect((await page.getByRole("combobox", { name: "Sort" }).boundingBox())?.height).toBe(24)
+    expect((await page.getByRole("combobox", { name: "Sort" }).boundingBox())?.height).toBe(26)
   })
 
   test("meter colours follow what is left", async ({ page }) => {
@@ -244,7 +244,7 @@ test.describe("conversation pane", () => {
     await trigger.click()
     const bypass = page.getByRole("option", { name: "Bypass permissions" })
     await expect(bypass).toBeVisible()
-    expect(await style(bypass, "height")).toBe("24px")
+    expect(await style(bypass, "height")).toBe("26px")
     expect(await style(page.locator('[data-slot="select-content"]'), "border-top-left-radius")).toBe("12px")
     // Dangerous modes are their own group.
     await expect(page.locator('[data-slot="select-separator"]')).toHaveCount(1)
@@ -449,20 +449,23 @@ test.describe("session list behaviour", () => {
     await page.getByRole("button", { name: "More actions" }).first().click()
     await page.getByRole("menuitem", { name: "Project settings…" }).click()
     const known = page.getByRole("group", { name: "Library packages" })
-    await expect(known.getByRole("checkbox", { name: "Add tools" })).toBeVisible()
-    await known.getByRole("checkbox").click()
+    const add = known.getByRole("button", { name: "Add tools" })
+    await expect(add).toBeVisible()
+    await add.click()
     await page.getByRole("button", { name: "Save", exact: true }).click()
     await expect.poll(() => posted.length).toBe(1)
     expect(posted[0]).toMatchObject({ add: [`github.com/acme/tools@${"a".repeat(40)}`], directory: "/work/another-project" })
   })
 })
 
-test("a failing machine list still reports the gateway connection", async ({ page, isMobile }) => {
-  test.skip(isMobile, "the status bar is desktop chrome")
+test("a machine list HTTP error leaves the gateway connection item hidden", async ({ page, isMobile }) => {
+  test.skip(isMobile, "desktop")
   await desktop(page)
   await page.route("**/api/nodes", (route) => route.fulfill({ status: 400, json: { error: "tailscale is not running" } }))
   await page.goto("/sessions")
-  await expect(page.getByRole("contentinfo")).toContainText("Connected · 1 machine")
+  await expect(page.locator('[data-slot="toolbar"]')).toContainText(/\d+ sessions? on 1 machine/)
+  await expect(page.getByText("Discovering machines…")).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Gateway unreachable" })).toHaveCount(0)
 })
 
 // Peers update on their own schedule, so the gateway routinely talks to older ones.
@@ -495,17 +498,51 @@ test.describe("a peer on an older version", () => {
   })
 })
 
-test("a confirm alert keeps its stacked buttons inside it", async ({ page, isMobile }) => {
+test("a confirm alert places macOS-order buttons inside it on desktop and stacks them on phone", async ({ page, isMobile }) => {
   test.skip(isMobile, "desktop")
   await desktop(page)
   await page.goto("/settings/account")
   await page.getByRole("button", { name: "Stop gateway…" }).click()
-  const alert = await page.getByRole("alertdialog").boundingBox()
-  const stop = await page.getByRole("alertdialog").getByRole("button", { name: "Stop gateway" }).boundingBox()
-  const cancel = await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).boundingBox()
-  expect(stop!.x).toBeGreaterThanOrEqual(alert!.x)
-  expect(stop!.x + stop!.width).toBeLessThanOrEqual(alert!.x + alert!.width)
-  expect(cancel!.y).toBeGreaterThan(stop!.y)
+  const dialog = page.getByRole("alertdialog")
+  const cancelBtn = dialog.getByRole("button", { name: "Cancel" })
+  const stopBtn = dialog.getByRole("button", { name: "Stop gateway" })
+  await expect(cancelBtn).toBeFocused()
+  // Measure together so the opening animation cannot move the alert between reads.
+  const measure = () => dialog.evaluate((el) => {
+    const buttons = [...el.querySelectorAll("button")]
+    const cancel = buttons.find((b) => b.textContent?.trim() === "Cancel")!.getBoundingClientRect()
+    const stop = buttons.find((b) => b.textContent?.trim() === "Stop gateway")!.getBoundingClientRect()
+    const alert = el.getBoundingClientRect()
+    return {
+      alert: { x: alert.x, right: alert.right },
+      cancel: { x: cancel.x, y: cancel.y, right: cancel.right },
+      stop: { x: stop.x, y: stop.y, right: stop.right },
+    }
+  })
+  const desk = await measure()
+  expect(desk.cancel.x).toBeGreaterThanOrEqual(desk.alert.x)
+  expect(desk.stop.right).toBeLessThanOrEqual(desk.alert.right)
+  expect(desk.stop.x).toBeGreaterThan(desk.cancel.x)
+  expect(Math.abs(desk.cancel.y - desk.stop.y)).toBeLessThan(2)
+  // Filled red destructive action on desktop and phone.
+  const danger = await page.evaluate(() => {
+    const probe = document.createElement("span")
+    probe.style.backgroundColor = getComputedStyle(document.documentElement).getPropertyValue("--danger").trim()
+    document.body.append(probe)
+    const color = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return color
+  })
+  expect(await style(stopBtn, "background-color")).toBe(danger)
+
+  // Phone stacks the destructive action above Cancel, still inside the alert.
+  await page.setViewportSize({ width: 390, height: 844 })
+  if (!(await dialog.isVisible())) await page.getByRole("button", { name: "Stop gateway…" }).click()
+  await expect(dialog).toBeVisible()
+  const phone = await measure()
+  expect(phone.stop.x).toBeGreaterThanOrEqual(phone.alert.x)
+  expect(phone.stop.right).toBeLessThanOrEqual(phone.alert.right)
+  expect(phone.cancel.y).toBeGreaterThan(phone.stop.y)
 })
 
 test("a machine with no projects says so in New session", async ({ page, isMobile }) => {

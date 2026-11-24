@@ -4,7 +4,6 @@ import { attachTerminal, mockAPI, projectRow, session } from "./helpers"
 // Rows carry data-row-key="<machine>:<session id>"; local rows use the machine id "local".
 const gwRow = (page: Page, key: string) => page.locator(`[data-source-row][data-row-key="${key}"]`)
 const gwMore = (page: Page, key: string) => gwRow(page, key).locator("xpath=..").getByRole("button", { name: "More actions" })
-const gwStatus = (page: Page) => page.locator('[data-slot="status-bar"]')
 // The terminal stage is the only element with aria-busy on the session route.
 const gwStage = (page: Page) => page.locator("div[aria-busy]")
 const gwSessions = (page: Page) => page.getByRole("navigation", { name: "Sessions" })
@@ -14,9 +13,13 @@ const gwDesktopViewport = { width: 1280, height: 800 }
 // Reconnects add a query string (?since=), so the socket route must match it too.
 const gwTerminalSocket = "**/api/sessions/*/terminal*"
 
-// Machine refresh lives in the status bar's connection popover, which only shows on desktop widths.
+function gwOfflinePeer(page: Page) {
+  return page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "peer-1", name: "Build server", online: false }] }))
+}
+
+// Manual refresh is available from the toolbar when a machine is offline.
 async function gwRefresh(page: Page) {
-  await page.getByRole("button", { name: /^Connected/ }).click()
+  await page.getByRole("button", { name: "1 machine offline" }).click()
   await page.getByRole("button", { name: "Refresh", exact: true }).click()
   await page.keyboard.press("Escape")
 }
@@ -88,7 +91,7 @@ test("host grid stays fixed while fit, zoom and browser size change", async ({ p
   await page.goto("/")
   await gwRow(page, "local:local-one").click()
   await expect(page.locator(".xterm-screen")).toBeVisible()
-  await expect(gwStatus(page)).toContainText("80 × 24")
+  await expect.poll(() => page.evaluate(() => [window.__agentpackTerminal?.cols, window.__agentpackTerminal?.rows])).toEqual([80, 24])
 
   await page.setViewportSize({ width: 1024, height: 700 })
   await page.getByRole("button", { name: "1:1" }).click()
@@ -100,8 +103,7 @@ test("host grid stays fixed while fit, zoom and browser size change", async ({ p
   await page.getByRole("button", { name: "Fit" }).click()
 
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.waitForTimeout(100)
-  await expect(gwStatus(page)).toContainText("80 × 24")
+  await expect.poll(() => page.evaluate(() => [window.__agentpackTerminal?.cols, window.__agentpackTerminal?.rows])).toEqual([80, 24])
   // Zoom changes the font, never the grid, and the stage is never scaled with a CSS transform.
   expect(await gwStage(page).evaluate((el) => getComputedStyle(el).transform)).toBe("none")
   expect(await page.locator(".xterm").evaluate((el) => getComputedStyle(el).transform)).toBe("none")
@@ -148,7 +150,7 @@ test("sidebar stays left, resizes, collapses and selection follows arrow keys", 
 
   await gwRow(page, "local:local-one").click()
   // Attaching the terminal takes focus, so the list is focused again before the arrow key.
-  await expect(gwStatus(page)).toContainText("Shared input")
+  await expect(gwStage(page)).toHaveAttribute("aria-busy", "false")
   await gwRow(page, "local:local-one").focus()
   // The list sorts folders by name, so another-project sits above my-project.
   await page.keyboard.press("ArrowUp")
@@ -163,8 +165,7 @@ test("sidebar stays left, resizes, collapses and selection follows arrow keys", 
   await expect.poll(() => gwWidth(sidebar)).toBe(0)
 })
 
-test("session hierarchy has icons and keeps collapsed groups through refresh", async ({ page }) => {
-  // shortcut: the React list has no collapsible groups, so only the hierarchy and its refresh survival are ported.
+test("session hierarchy has icons and stays indented after reload", async ({ page }) => {
   await page.setViewportSize(gwDesktopViewport)
   await mockAPI(page)
   await page.goto("/sessions?group=machine")
@@ -181,13 +182,13 @@ test("session hierarchy has icons and keeps collapsed groups through refresh", a
   }
   await expect.poll(indent).toBeGreaterThan(0)
 
-  await gwRefresh(page)
+  await page.reload()
   await expect(subhead).toBeVisible()
   await expect(row).toBeVisible()
   await expect.poll(indent).toBeGreaterThan(0)
 })
 
-test("context rename saves on the correct host and survives refresh and reload", async ({ page }) => {
+test("context rename saves on the correct host and survives reload", async ({ page }) => {
   await page.setViewportSize(gwDesktopViewport)
   await mockAPI(page)
   await attachTerminal(page)
@@ -213,8 +214,6 @@ test("context rename saves on the correct host and survives refresh and reload",
   await expect(row).toContainText("Fix sidebar")
   expect(renamedBody).toEqual({ name: "Fix sidebar" })
 
-  await gwRefresh(page)
-  await expect(row).toContainText("Fix sidebar")
   await page.reload()
   await expect(row).toContainText("Fix sidebar")
 })
@@ -261,7 +260,6 @@ test("legacy worker stays read-only and offers no control toggle", async ({ page
   await page.goto("/")
   await gwRow(page, "local:local-one").click()
   await expect(page.getByText("Start a new session to enable shared input.")).toBeVisible()
-  await expect(gwStatus(page)).not.toContainText("Shared input")
   await expect(page.getByRole("button", { name: /Take control|Release control/ })).toHaveCount(0)
   await page.locator(".xterm-screen").click()
   await page.keyboard.press("Control+C")
@@ -321,7 +319,7 @@ test("shared input works without ownership and detaching never stops the agent",
   const received = await attachTerminal(page)
   await page.goto("/")
   await gwRow(page, "local:local-one").click()
-  await expect(gwStatus(page)).toContainText("Shared input")
+  await expect(gwStage(page)).toHaveAttribute("aria-busy", "false")
   await page.locator(".xterm-screen").click()
   await page.keyboard.press("Control+C")
   await expect.poll(() => received.some(gwCtrlC)).toBeTruthy()
@@ -373,7 +371,7 @@ test("clicking the selected row preserves its terminal and compact menu aligns i
   await page.goto("/")
   const row = gwRow(page, "local:local-one")
   await row.click()
-  await expect(gwStatus(page)).toContainText("Shared input")
+  await expect(gwStage(page)).toHaveAttribute("aria-busy", "false")
   await page.getByRole("button", { name: "1:1" }).click()
   const terminal = await page.locator(".xterm").elementHandle()
   if (!terminal) throw new Error("terminal is not mounted")
@@ -400,7 +398,7 @@ test("clicking the selected row preserves its terminal and compact menu aligns i
   await gwMore(page, "local:local-two").click()
   await page.getByRole("menuitem", { name: "Reconnect" }).click()
   await expect.poll(() => sockets.length).toBe(2)
-  await expect(gwStatus(page)).toContainText("Codex")
+  await expect(page).toHaveURL(/\/sessions\/local\/local-two$/)
 
   // Reconnect on the open row must open a new connection and keep its terminal element.
   // The previous menu is still closing for its exit animation; wait for it, or two Reconnect items match.
@@ -422,7 +420,7 @@ test("backend strings are text and API failures stay visible", async ({ page }) 
   await expect(page.locator("img")).toHaveCount(0)
   await gwMore(page, "local:local-one").click()
   await page.getByRole("menuitem", { name: "Project settings…" }).click()
-  await page.getByLabel("Package source").fill("acme/skill")
+  await page.getByLabel("Or add by source").fill("acme/skill")
   await page.getByRole("button", { name: "Save", exact: true }).click()
   await expect(page.getByRole("alert").filter({ hasText: "Project is not available" })).toBeVisible()
 })
@@ -473,14 +471,14 @@ test("restarting keeps the same operation ID after ambiguous failures", async ({
   await expect(page.getByText(/Couldn't restart Terminal · Claude on Gateway machine: (Failed to fetch|Load failed)/)).toBeVisible()
   await restart()
   await expect(page.getByText("Couldn't restart Terminal · Claude on Gateway machine: Worker response unavailable")).toBeVisible()
-  await page.locator("[data-sonner-toast]").filter({ hasText: "Worker response unavailable" }).getByRole("button", { name: "Retry" }).click()
+  await page.locator('[data-slot="activity"]').filter({ hasText: "Worker response unavailable" }).getByRole("button", { name: "Retry" }).click()
   await expect.poll(() => ids.length).toBe(3)
   expect(ids[1]).toBe(ids[0])
   expect(ids[2]).toBe(ids[0])
   await restart()
   await expect(page.getByText("Couldn't restart Terminal · Claude on Gateway machine: Restart rejected")).toBeVisible()
   expect(ids[3]).not.toBe(ids[2])
-  await page.locator("[data-sonner-toast]").filter({ hasText: "Restart rejected" }).getByRole("button", { name: "Retry" }).click()
+  await page.locator('[data-slot="activity"]').filter({ hasText: "Restart rejected" }).getByRole("button", { name: "Retry" }).click()
   await expect.poll(() => ids.length).toBe(5)
   expect(ids[4]).not.toBe(ids[3])
 })
@@ -516,6 +514,7 @@ test("gateway settings stay separate from selected remote sessions", async ({ pa
 test("a restarted process that exits immediately still replays its final output", async ({ page }) => {
   await page.setViewportSize(gwDesktopViewport)
   await mockAPI(page)
+  await gwOfflinePeer(page)
   let phase: "running" | "restarting" | "stopped" = "running"
   const sockets: WebSocketRoute[] = []
   const stopped = { ...session.state, running: false, restarting: false, exit_code: 1 }
@@ -543,7 +542,7 @@ test("a restarted process that exits immediately still replays its final output"
   await expect.poll(() => sockets.length).toBe(2)
   await expect.poll(() => gwBuffer(page)).toContain("REPLACEMENT FAILED: invalid configuration")
   await gwRefresh(page)
-  await expect(gwRow(page, "local:local-one")).toContainText("Stopped")
+  await expect(gwRow(page, "local:local-one").getByRole("img", { name: "Stopped" })).toBeVisible()
   await expect(page.getByRole("button", { name: /Take control|Release control/ })).toHaveCount(0)
 })
 
@@ -571,6 +570,7 @@ test("sessions layout renders at desktop, tablet and phone sizes in both themes"
 test("reconnect preserves and dims the last frame until replay is rendered", async ({ page }) => {
   await page.setViewportSize(gwDesktopViewport)
   await mockAPI(page)
+  await gwOfflinePeer(page)
   const sockets: WebSocketRoute[] = []
   // The stage is aria-busy (and dimmed) until replay completes; the last frame stays up until the replayed bytes arrive.
   await page.routeWebSocket(gwTerminalSocket, (ws) => {

@@ -1,50 +1,40 @@
 import { useEffect, useState, useSyncExternalStore } from "react"
 
-type Toast = typeof import("sonner").toast
+// Outcomes of actions that finished out of sight. There are no toasts: the toolbar's activity
+// viewer shows the latest one in place and keeps a short log, the way Xcode's activity viewer does.
+export type Activity = { id: number; tone: "done" | "failed"; message: string; at: number; retry?: () => void }
 
-// The toast library loads with the first toast, not with the app. Sonner shows only toasts created after its
-// Toaster subscribes, so each toast waits until the lazily mounted Toaster reports that it is listening.
-let ready: Promise<Toast> | undefined
-let listening: ((toast: Toast) => void) | undefined
+const LIMIT = 20
+let log: Activity[] = []
+let next = 0
 const watchers = new Set<() => void>()
-
-function toaster(): Promise<Toast> {
-  if (!ready) {
-    ready = new Promise((resolve) => (listening = resolve))
-    for (const notify of watchers) notify()
-  }
-  return ready
+const publish = (list: Activity[]) => {
+  log = list
+  for (const notify of watchers) notify()
 }
 
-// True once anything asked for a toast; the shell then mounts the Toaster.
-export function useHudRequested(): boolean {
+export function useActivity(): Activity[] {
   return useSyncExternalStore(
     (notify) => {
       watchers.add(notify)
       return () => watchers.delete(notify)
     },
-    () => ready !== undefined,
+    () => log,
   )
 }
 
-// Called by the mounted Toaster once it is subscribed.
-export function hudListening(toast: Toast) {
-  listening?.(toast)
+export function dismissActivity(id: number) {
+  publish(log.filter((item) => item.id !== id))
 }
 
 // Plain functions so any module can report an outcome without a hook.
-// Failures stay until dismissed, per the alert model.
+// Failures stay in the toolbar until dismissed or retried, per the alert model.
 export const hud = {
   success(message: string) {
-    void toaster().then((toast) => toast.success(message))
+    publish([{ id: ++next, tone: "done" as const, message, at: Date.now() }, ...log].slice(0, LIMIT))
   },
   error(message: string, retry?: () => void) {
-    void toaster().then((toast) =>
-      toast.error(message, {
-        duration: Number.POSITIVE_INFINITY,
-        action: retry ? { label: "Retry", onClick: retry } : undefined,
-      }),
-    )
+    publish([{ id: ++next, tone: "failed" as const, message, at: Date.now(), retry }, ...log].slice(0, LIMIT))
   },
 }
 

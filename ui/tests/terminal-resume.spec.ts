@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test"
-import { busyStage, type Listed, openRoute, rowText, screen, serve, session, shared, statusBar, stubApi, stubWorker } from "./terminal-stub"
+import { busyStage, type Listed, openRoute, rowText, screen, serve, session, shared, readyStage, stubApi, stubWorker } from "./terminal-stub"
 
 // On phone the session list is hidden while a session is open, so go back to it first.
 async function openFromList(page: Page, name: string) {
@@ -72,7 +72,7 @@ test("a dropped socket reconnects with since set to the bytes already received",
   worker.conns[0]?.ws.close()
   await expect.poll(() => worker.conns.length).toBe(2)
   expect(worker.conns[1]?.since).toBe(String(A.length))
-  await expect(statusBar(page)).toContainText("Shared input")
+  await expect(readyStage(page)).toBeVisible()
   // The worker resumed where the browser was, so the screen was not reset.
   await expect.poll(() => rowText(page, 0)).toContain("AAAA")
   // A successful resume has a non-zero offset, and that is not truncation.
@@ -124,7 +124,7 @@ test("repeated drops back off 0.5 s, 1 s, 2 s, and an attach resets the backoff"
   await expect.poll(() => worker.conns.length).toBe(3)
   await drop(3, 2000)
   await expect.poll(() => worker.conns.length).toBe(4)
-  await expect(statusBar(page)).toContainText("Shared input")
+  await expect(readyStage(page)).toBeVisible()
   worker.conns[3]?.ws.close()
   await expect(busyStage(page)).toHaveCount(1)
   await settle(page)
@@ -186,7 +186,7 @@ test("a restarting agent is polled until it is listed, then reattaches as a fres
   await expect.poll(() => worker.conns.length).toBe(2)
   expect(worker.conns[1]?.since).toBeNull()
   await expect(page.getByRole("status").filter({ hasText: "Agent restarted. This is a new process" })).toBeVisible()
-  await expect(statusBar(page)).toContainText("Shared input")
+  await expect(readyStage(page)).toBeVisible()
   // The new terminal shows only the new process's output.
   await expect.poll(() => rowText(page, 0)).toContain("BBBB")
   expect(await rowText(page, 0)).not.toContain("AAAA")

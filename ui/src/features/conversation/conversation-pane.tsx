@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { ArrowLeft, Ellipsis, PanelRight, Square, SquareTerminal } from "lucide-react"
+import { Section } from "@/components/kit/data"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
 import { Banner, Spinner } from "@/components/kit/feedback"
 import { FieldError } from "@/components/kit/forms"
@@ -10,7 +11,6 @@ import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { chatShellsQuery } from "@/features/terminal/chat-shells"
 import { rememberChatTerminal, takeChatTerminalCommand, terminalCommandEvent, type TerminalCommand, type TerminalRequest } from "@/features/terminal/shortcuts"
-import { StatusSlot } from "@/features/status/status-bar"
 import { useStartSession } from "@/features/sessions/start"
 import { sessionLabel } from "@/features/sessions/group"
 import { sessionsQuery } from "@/features/sessions/queries"
@@ -19,7 +19,7 @@ import { useEventsConnected } from "@/features/events/use-events"
 import { identityQuery, useMachines } from "@/features/machines/queries"
 import type { SessionInfo } from "@/lib/api-types"
 import { harnessName, relativeTime } from "@/lib/format"
-import { clock, goalElapsedMs, liveGoal } from "@/lib/goal"
+import { liveGoal } from "@/lib/goal"
 import { useNow } from "@/lib/use-now"
 import { cacheBuildID, restoreChatQuery } from "@/lib/persist"
 import { useIntent } from "@/lib/intent"
@@ -181,7 +181,6 @@ export default function ConversationPane({
   const plan = currentPlan(parent.items)
   // The live record is the log; the session row is the fallback for chats whose log is not loaded.
   const goal = parent.goal ?? (liveGoal(info?.goal) ? info?.goal : undefined)
-  const goalNow = useNow(goal?.state === "active")
   const [goalSheet, setGoalSheet] = useState<{ objective: string }>()
   // The editor loads on first open and then stays mounted, so closing it still animates.
   const [goalEditorLoaded, setGoalEditorLoaded] = useState(false)
@@ -330,14 +329,6 @@ export default function ConversationPane({
 
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-(--window)">
-      {/* The composer ring and an open inspector already show context, so the status bar adds it only while the inspector is closed. */}
-      <StatusSlot>
-        {info && (
-          <span>
-            {[harnessName(info.harness), info.mode || "default", goal ? `Goal ${goal.state === "active" ? "" : `${goal.state} `}${clock(goalElapsedMs(goal, goalNow))}` : "", contextPercent !== undefined && !inspectorOpen ? `Context ${contextPercent}%` : "", parent.cost_usd ? `$${parent.cost_usd.toFixed(2)}` : ""].filter(Boolean).join(" · ")}
-          </span>
-        )}
-      </StatusSlot>
       {subagentId ? (
         <ToolbarTitle title={`${title ?? agentName} › ${subagent?.title || "Subagent"}`} subtitle={subagent?.description ?? subtitle} />
       ) : title && <ToolbarTitle title={title} subtitle={[subtitle, branch].filter(Boolean).join(" · ") || undefined} />}
@@ -504,7 +495,7 @@ export default function ConversationPane({
             <Suspense>
               <TerminalPanel
                 chat={info} machine={machine} machineName={machineName} phone={phone} offline={readOnly}
-                open={terminalOpen} onToggle={toggleTerminal} onHide={hideTerminal} newShellRequest={newShellRequest} shells={shells}
+                open={terminalOpen} onHide={hideTerminal} newShellRequest={newShellRequest} shells={shells}
               />
             </Suspense>
           )}
@@ -528,11 +519,15 @@ export default function ConversationPane({
           git={
             <>
               {canLoadGit && !readOnly && (
-                <Button type="button" size="sm" disabled={gitDetails.isFetching} onClick={() => void gitDetails.refetch()}>
-                  {gitDetails.isFetching ? "Loading Git details…" : git ? "Refresh Git details" : "Load Git details"}
-                </Button>
+                <Section title="Git">
+                  <div className="flex flex-col items-start gap-(--s2)">
+                    <Button type="button" size="sm" disabled={gitDetails.isFetching} onClick={() => void gitDetails.refetch()}>
+                      {gitDetails.isFetching ? "Loading Git details…" : git ? "Refresh Git details" : "Load Git details"}
+                    </Button>
+                    {gitDetails.error && <FieldError>{gitDetails.error.message}</FieldError>}
+                  </div>
+                </Section>
               )}
-              {gitDetails.error && <FieldError>{gitDetails.error.message}</FieldError>}
               <GitInspectorSections machine={machine} sessionId={sessionId} git={git} readOnly={readOnly || needsUpdate} onAskRebase={askAgent} />
             </>
           }

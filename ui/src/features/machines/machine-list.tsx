@@ -4,10 +4,8 @@ import { Network } from "lucide-react"
 import { GroupHeader, SearchField, SourceList, SourceRow } from "@/components/kit/list"
 import { StatusGlyph } from "@/components/kit/status-dot"
 import { sessionsQuery, projectsQuery } from "@/features/sessions/queries"
-import { StatusSlot } from "@/features/status/status-bar"
 import { LOCAL } from "@/lib/api"
-import { plural } from "@/lib/format"
-import { useAgentpackVersions, useDiscovering, useMachineQueries, useReplicatedQueries, useMachines, type Machine, type MachineQuery } from "./queries"
+import { useAgentpackVersions, useDiscovering, useMachineQueries, useReplicatedQueries, useMachines, type Machine } from "./queries"
 
 export function MachineRow({ machine, sessions, needsUpdate: peerNeedsUpdate }: { machine: Machine; sessions?: number; needsUpdate?: boolean }) {
   const needsUpdate = peerNeedsUpdate || machine.needsUpdate
@@ -27,9 +25,6 @@ export function MachineRow({ machine, sessions, needsUpdate: peerNeedsUpdate }: 
     </SourceRow>
   )
 }
-function countRows(byMachine: Record<string, MachineQuery<unknown[]>>): number {
-  return Object.values(byMachine).reduce((sum, entry) => sum + (entry.data?.length ?? 0), 0)
-}
 
 export function MachineList() {
   const machines = useMachines()
@@ -44,7 +39,6 @@ export function MachineList() {
   const needle = (q ?? "").toLowerCase()
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <StatusSlot>{`${plural(countRows(projects.byMachine), "project")} · ${plural(countRows(sessions.byMachine), "session")}`}</StatusSlot>
       <div className="flex shrink-0 p-(--s3) pb-0">
         <SearchField
           aria-label="Filter machines"

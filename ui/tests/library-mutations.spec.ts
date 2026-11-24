@@ -157,17 +157,14 @@ test("a row that fails keeps its error visible after the install finishes", asyn
 })
 
 test("an install into an offline machine is saved as a draft with its exact pins", async ({ page }) => {
-  // The status bar, which holds the connection popover, is hidden under 760 px, so run at desktop width.
-  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.clock.install()
   await page.goto("/library/package/github.com/acme/alpha")
   await expect(page.getByRole("button", { name: "Install…" })).toBeVisible()
 
-  // The peer's projects were loaded while it was online. Going offline and refreshing keeps them, marked offline.
+  // The peer's projects were loaded while it was online. Going offline and polling keeps them, marked offline, and surfaces the toolbar indicator.
   peerOnline = false
-  await page.getByRole("button", { name: /Connected/ }).click()
-  await page.getByRole("button", { name: "Refresh" }).click()
-  await expect(page.getByRole("button", { name: /1 offline/ })).toBeVisible()
-  await page.keyboard.press("Escape")
+  await page.clock.runFor(31_000)
+  await expect(page.getByRole("button", { name: "1 machine offline" })).toBeVisible()
 
   await page.getByRole("button", { name: "Install…" }).click()
   await expect(page.getByRole("dialog")).toContainText("Offline · install as draft")
@@ -219,6 +216,7 @@ test("Add package… from ?add=1 posts the spec to the chosen project", async ({
   await dialog.getByLabel("Package", { exact: true }).fill("github.com/acme/new@abcd1234ef56")
   await dialog.getByRole("combobox", { name: "Project" }).click()
   await page.getByRole("option", { name: /oracle-vm · app/ }).click()
+  await expect(dialog.getByRole("checkbox", { name: "Restart affected agents now" })).not.toBeChecked()
   await dialog.getByRole("button", { name: "Add package", exact: true }).click()
 
   await expect.poll(() => calls.length).toBe(1)
@@ -226,7 +224,7 @@ test("Add package… from ?add=1 posts the spec to the chosen project", async ({
     method: "POST",
     path: "/api/packages",
     node: "n2",
-    body: { directory: "/srv/oracle/app", spec: "github.com/acme/new@abcd1234ef56", restart: true },
+    body: { directory: "/srv/oracle/app", spec: "github.com/acme/new@abcd1234ef56", restart: false },
   })
   await expect(page).toHaveURL(/\/library$/)
 })

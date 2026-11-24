@@ -7,7 +7,6 @@ import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
 import type { Machine } from "@/features/machines/queries"
 import { AgentTile } from "@/components/kit/agent-tile"
-import { StatusSlot } from "@/features/status/status-bar"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
 import { usageQuery } from "@/features/usage/queries"
 import { api, LOCAL } from "@/lib/api"
@@ -61,11 +60,8 @@ export function LimitsView() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ToolbarTitle title="Limits" subtitle={`Best report per provider · ${plural(machines.length, "machine")}`} />
+      <ToolbarTitle title="Limits" subtitle={[`Best report per provider · ${plural(machines.length, "machine")}`, latest > 0 && `updated ${relativeTime(new Date(latest), Math.max(now, latest))}`].filter(Boolean).join(" · ")} />
       <RefreshButton machines={machines} />
-      {latest > 0 && (
-        <StatusSlot>{`Updated ${relativeTime(new Date(latest), Math.max(now, latest))}`}</StatusSlot>
-      )}
       {outdated.length > 0 && <Banner>{`${names(outdated)} ${outdated.length === 1 ? "needs" : "need"} an update to show limits.`}</Banner>}
       {machines.map((machine) => {
         const error = !outdated.includes(machine) && queries.errors[machine.id]

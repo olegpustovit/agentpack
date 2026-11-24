@@ -3,28 +3,24 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { Minus, Plus } from "lucide-react"
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { ToolbarSlot, ToolbarTitle } from "@/features/shell/toolbar-slot"
-import { StatusSlot } from "@/features/status/status-bar"
-import { harnessName } from "@/lib/format"
-import type { SessionInfo } from "@/lib/api-types"
 import { zoomPercent } from "./fit"
 import { terminalPool } from "./pool"
 import { TerminalSession } from "./terminal-session"
 import { TerminalScreen } from "./terminal-screen"
 
+const selectionModifier = typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "⌥" : "⇧"
 const zoomButton = "flex h-(--ctl-h-sm) min-w-(--ctl-h-sm) cursor-default items-center justify-center rounded-(--r-row) px-(--s3) text-(--fg2) aria-pressed:bg-(--control) aria-pressed:text-(--fg) aria-pressed:shadow-(--shadow-ctl)"
 
 // xterm is imported only here: the session route loads this module with React.lazy.
 export default function TerminalPane({
   machine,
   sessionId,
-  info,
   title,
   subtitle,
   listed,
 }: {
   machine: string
   sessionId: string
-  info?: SessionInfo
   title?: string
   subtitle?: string
   // False only once the sessions list has loaded without this session.
@@ -47,15 +43,10 @@ export default function TerminalPane({
     terminal.setListed(listed)
   }, [terminal, listed])
 
-  // Shown only while a session is attached and its harness is known from the list.
-  const parts = info
-    ? [harnessName(info.harness), info.mode || "default", `${snapshot.grid.cols} × ${snapshot.grid.rows}`, snapshot.sharedInput && "Shared input", snapshot.mouseOwned && "Mouse: app · ⇧ drag to select"]
-    : []
-
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-(--terminal-bg)">
-      {info && <StatusSlot>{parts.filter(Boolean).join(" · ")}</StatusSlot>}
-      {title && <ToolbarTitle title={title} subtitle={subtitle} />}
+      {/* The one terminal fact worth a line: mouse capture changes how selection works. */}
+      {title && <ToolbarTitle title={title} subtitle={snapshot.mouseOwned ? [subtitle, `Mouse: app · ${selectionModifier} drag to select`].filter(Boolean).join(" · ") : subtitle} />}
       {!isPhone && (
         <ToolbarSlot>
           <div role="group" aria-label="Terminal zoom" className="flex h-(--ctl-h) items-center rounded-(--r-ctl) bg-(--track) p-(--s1) text-(length:--fs-sm)">
