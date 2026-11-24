@@ -22,22 +22,32 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+var dotAgents = base.DotAgents{
+	NativeDirectory: "codex",
+	ConvertedTrees:  []string{"skills", "agents", "commands"},
+	Guidance:        "AGENTS.md",
+}
+
 func New() base.Harness {
 	return base.Harness{
-		Target:      base.Codex,
-		Root:        stagedRoot,
-		Reset:       resetPaths,
-		BeforeReset: preReset,
-		Begin:       beginGeneration,
-		Setup:       prepare,
-		ProjectMCP:  planMCP,
-		Guidance:    injectGuidance,
-		Check:       verify,
-		Launch:      launch,
-		ACPAdapter:  codexACPPackage,
-		LaunchACP:   acpLaunch,
-		Capability:  Capability,
-		ResumeArgs:  resumeArgs,
+		Target:           base.Codex,
+		Artifacts:        &artifactLayout,
+		DotAgents:        &dotAgents,
+		ProjectSkillRoot: ".codex/skills",
+		SeededHooks:      ".codex/hooks.json",
+		Root:             stagedRoot,
+		Reset:            resetPaths,
+		BeforeReset:      preReset,
+		Begin:            beginGeneration,
+		Setup:            prepare,
+		ProjectMCP:       planMCP,
+		Guidance:         injectGuidance,
+		Check:            verify,
+		Launch:           launch,
+		ACPAdapter:       codexACPPackage,
+		LaunchACP:        acpLaunch,
+		Capability:       Capability,
+		ResumeArgs:       resumeArgs,
 		Inheritance: base.Inheritance{
 			Note:  "Codex keeps native history/auth continuity under CODEX_HOME bridging",
 			Paths: func(string) []string { return base.HomeFiles(".codex/config.toml", ".codex/AGENTS.md") },

@@ -255,6 +255,7 @@ type Origin struct {
 	EventIndex        int    `json:"event_index"`
 	MatcherGroupIndex int    `json:"matcher_group_index"`
 	HookIndex         int    `json:"hook_index"`
+	seedTarget        harness.Target
 }
 
 // SourcePackage identifies the package (or layer) a hook came from.
@@ -311,7 +312,7 @@ func (bundle Bundle) ForTarget(target harness.Target) Bundle {
 	}
 	selected := Bundle{Skipped: bundle.Skipped}
 	for _, hook := range bundle.Hooks {
-		if chosen[hook.Origin.SourcePackage()] == hook.Dialect {
+		if (hook.Origin.seedTarget == "" || hook.Origin.seedTarget == target) && chosen[hook.Origin.SourcePackage()] == hook.Dialect {
 			selected.Hooks = append(selected.Hooks, hook)
 		}
 	}

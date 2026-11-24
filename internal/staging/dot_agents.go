@@ -10,8 +10,8 @@ import (
 	"github.com/olegpustovit/agentpack/internal/artifacts"
 	"github.com/olegpustovit/agentpack/internal/cache"
 	"github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/mode"
-	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
 type DotAgentsPlan struct {
@@ -46,7 +46,7 @@ type DotAgentsArtifact struct {
 }
 
 // PlanDotAgents computes every dot-agents overlay write in staging order.
-// Codex skills are returned as native discoveries and never as staged files.
+// Skills in conversion trees are returned as native discoveries.
 func PlanDotAgents(dotRoot string, effective mode.Effective, target *harness.Target) (DotAgentsPlan, error) {
 	plan := DotAgentsPlan{SourceRoot: dotRoot}
 	if info, err := os.Stat(dotRoot); err == nil && info.IsDir() {
@@ -57,11 +57,6 @@ func PlanDotAgents(dotRoot string, effective mode.Effective, target *harness.Tar
 		}
 	} else if err != nil && !os.IsNotExist(err) {
 		return DotAgentsPlan{}, err
-	}
-	includeClaude := target == nil || *target == harness.Claude
-	includeCodex := target == nil || *target == harness.Codex
-	if !includeClaude && !includeCodex {
-		return plan, nil
 	}
 	info, err := os.Stat(dotRoot)
 	if err != nil || !info.IsDir() {
@@ -97,57 +92,52 @@ func PlanDotAgents(dotRoot string, effective mode.Effective, target *harness.Tar
 			if !stripPrefix {
 				destinationRelative = filepath.Join(sourceRelative, relative)
 			}
+			destinationRelative = filepath.ToSlash(destinationRelative)
 			overlayEnabled := os.Getenv("AGENTPACK_DOT_AGENTS") != "0"
 			if allowed && overlayEnabled {
-				plan.Files = append(plan.Files, DotAgentsFile{Target: destination, SourcePath: path, SourceRelative: selectorRelative, RelativePath: filepath.ToSlash(destinationRelative), Contents: data, HardLink: true})
+				plan.Files = append(plan.Files, DotAgentsFile{Target: destination, SourcePath: path, SourceRelative: selectorRelative, RelativePath: destinationRelative, Contents: data, HardLink: true})
 			}
-			parseRelative := filepath.ToSlash(relative)
-			if sourceRelative != "claude" && sourceRelative != "codex" {
-				parseRelative = filepath.ToSlash(filepath.Join(sourceRelative, relative))
-			}
-			addParsedDotArtifact(&plan, destination, selectorRelative, parseRelative, filepath.ToSlash(destinationRelative), data, allowed && overlayEnabled, false)
+			addParsedDotArtifact(&plan, destination, selectorRelative, destinationRelative, destinationRelative, data, allowed && overlayEnabled)
 			return nil
 		})
 	}
-	if includeClaude {
-		if err := addRawTree("claude", harness.Claude, true); err != nil {
-			return DotAgentsPlan{}, err
+	var selected []registry.Entry
+	for _, candidate := range registry.All() {
+		if candidate.DotAgents != nil && (target == nil || candidate.Target == *target) {
+			selected = append(selected, candidate)
 		}
 	}
-	if includeCodex {
-		if err := addRawTree("codex", harness.Codex, true); err != nil {
-			return DotAgentsPlan{}, err
-		}
-	}
-	if includeClaude {
-		if err := planDotRules(dotRoot, effective, &plan); err != nil {
-			return DotAgentsPlan{}, err
-		}
-		if err := addRawTree("skills", harness.Claude, false); err != nil {
-			return DotAgentsPlan{}, err
-		}
-		for _, source := range []string{"agents", "commands"} {
-			if err := addRawTree(source, harness.Claude, false); err != nil {
+	// Native subtrees are overlaid before common trees so common files can replace them.
+	for _, candidate := range selected {
+		if name := candidate.DotAgents.NativeDirectory; name != "" {
+			if err := addRawTree(name, candidate.Target, true); err != nil {
 				return DotAgentsPlan{}, err
 			}
 		}
 	}
-	if includeCodex {
-		if err := planDotCodexSkills(dotRoot, "skills", effective, &plan); err != nil {
-			return DotAgentsPlan{}, err
-		}
-		for _, source := range []string{"agents", "commands"} {
-			if err := planDotCodexSkills(dotRoot, source, effective, &plan); err != nil {
+	for _, candidate := range selected {
+		layout := candidate.DotAgents
+		if layout.FlattenRules {
+			if err := planDotRules(dotRoot, candidate.Target, effective, &plan); err != nil {
 				return DotAgentsPlan{}, err
 			}
 		}
-		if err := planDotGuidance(dotRoot, "AGENTS.md", harness.Codex, effective, &plan); err != nil {
-			return DotAgentsPlan{}, err
+		for _, source := range layout.RawTrees {
+			if err := addRawTree(source, candidate.Target, false); err != nil {
+				return DotAgentsPlan{}, err
+			}
+		}
+		for _, source := range layout.ConvertedTrees {
+			if err := planDotConverted(dotRoot, source, candidate.Target, candidate.Artifacts, effective, &plan); err != nil {
+				return DotAgentsPlan{}, err
+			}
 		}
 	}
-	if includeClaude {
-		if err := planDotGuidance(dotRoot, "CLAUDE.md", harness.Claude, effective, &plan); err != nil {
-			return DotAgentsPlan{}, err
+	for _, candidate := range selected {
+		if name := candidate.DotAgents.Guidance; name != "" {
+			if err := planDotGuidance(dotRoot, name, candidate.Target, effective, &plan); err != nil {
+				return DotAgentsPlan{}, err
+			}
 		}
 	}
 	return plan, nil
@@ -169,11 +159,15 @@ func (plan DotAgentsPlan) Validate() error {
 	return nil
 }
 
-func ApplyDotAgentsPlan(plan DotAgentsPlan, claudeBundle, codexHome string) error {
+func ApplyDotAgentsPlan(plan DotAgentsPlan, roots []HarnessRoot) error {
+	rootByTarget := make(map[harness.Target]string, len(roots))
+	for _, root := range roots {
+		rootByTarget[root.Target] = root.Path
+	}
 	for _, file := range plan.Files {
-		root := codexHome
-		if file.Target == harness.Claude {
-			root = claudeBundle
+		root, ok := rootByTarget[file.Target]
+		if !ok {
+			return fmt.Errorf("missing %s root for dot-agents overlay", file.Target)
 		}
 		destination := filepath.Join(root, filepath.FromSlash(file.RelativePath))
 		if file.HardLink {
@@ -203,22 +197,7 @@ func linkOrCopy(source, destination string) error {
 	return copyFile(source, destination)
 }
 
-func StageDotAgents(definitionRoot, workspaceRoot, modeName string, effective mode.Effective, codex string, target *harness.Target) error {
-	if workspaceRoot == "" {
-		workspaceRoot = definitionRoot
-	}
-	plugins, err := paths.StagingPluginsDirForMode(definitionRoot, modeName)
-	if err != nil {
-		return err
-	}
-	plan, err := PlanDotAgents(paths.ProjectDotAgentsDir(workspaceRoot), effective, target)
-	if err != nil {
-		return err
-	}
-	return ApplyDotAgentsPlan(plan, filepath.Join(plugins, paths.StagedAgentpackBundleName), codex)
-}
-
-func planDotRules(dotRoot string, effective mode.Effective, plan *DotAgentsPlan) error {
+func planDotRules(dotRoot string, target harness.Target, effective mode.Effective, plan *DotAgentsPlan) error {
 	rulesRoot := filepath.Join(dotRoot, "rules")
 	if info, err := os.Stat(rulesRoot); err != nil || !info.IsDir() {
 		return nil
@@ -247,14 +226,14 @@ func planDotRules(dotRoot string, effective mode.Effective, plan *DotAgentsPlan)
 		flattened := strings.ReplaceAll(filepath.ToSlash(relative), "/", "--")
 		output := "rules/dot-agents--" + flattened
 		if allowed && os.Getenv("AGENTPACK_DOT_AGENTS") != "0" {
-			plan.Files = append(plan.Files, DotAgentsFile{Target: harness.Claude, SourcePath: path, SourceRelative: sourceRelative, RelativePath: output, Contents: data, HardLink: true})
+			plan.Files = append(plan.Files, DotAgentsFile{Target: target, SourcePath: path, SourceRelative: sourceRelative, RelativePath: output, Contents: data, HardLink: true})
 		}
-		addParsedDotArtifact(plan, harness.Claude, sourceRelative, sourceRelative, output, data, allowed && os.Getenv("AGENTPACK_DOT_AGENTS") != "0", false)
+		addParsedDotArtifact(plan, target, sourceRelative, sourceRelative, output, data, allowed && os.Getenv("AGENTPACK_DOT_AGENTS") != "0")
 		return nil
 	})
 }
 
-func planDotCodexSkills(dotRoot, sourceRelative string, effective mode.Effective, plan *DotAgentsPlan) error {
+func planDotConverted(dotRoot, sourceRelative string, target harness.Target, layout *artifacts.Layout, effective mode.Effective, plan *DotAgentsPlan) error {
 	sourceRoot := filepath.Join(dotRoot, sourceRelative)
 	if info, err := os.Stat(sourceRoot); err != nil || !info.IsDir() {
 		return nil
@@ -292,28 +271,21 @@ func planDotCodexSkills(dotRoot, sourceRelative string, effective mode.Effective
 		if artifact == nil {
 			return nil
 		}
-		if sourceRelative == "skills" && artifact.Kind == artifacts.Skill {
-			plan.Artifacts = append(plan.Artifacts, DotAgentsArtifact{Target: harness.Codex, SourceRelative: selectorRelative, Source: contents, Parsed: artifact, Kind: artifact.Kind, Name: artifact.StorageName, NativeSource: selectorRelative})
-			return nil
+		item := DotAgentsArtifact{Target: target, SourceRelative: selectorRelative, Source: contents, Parsed: artifact, Kind: artifact.Kind, Name: artifact.StorageName}
+		switch {
+		case artifact.Kind == artifacts.Skill:
+			item.NativeSource = selectorRelative
+		case os.Getenv("AGENTPACK_DOT_AGENTS") == "0":
+			item.Omitted, item.Reason = true, "disabled by AGENTPACK_DOT_AGENTS"
+		case !allowed:
+			item.Omitted, item.Reason = true, "disabled by mode or lock"
+		default:
+			rendered := artifact.Render(layout)
+			item.OutputPath, item.Output = rendered.RelativePath, []byte(rendered.Contents)
+			plan.Files = append(plan.Files, DotAgentsFile{Target: target, SourcePath: path, SourceRelative: selectorRelative, RelativePath: item.OutputPath, Contents: item.Output})
+			plan.Warnings = append(plan.Warnings, rendered.Warnings...)
 		}
-		if os.Getenv("AGENTPACK_DOT_AGENTS") == "0" {
-			plan.Artifacts = append(plan.Artifacts, DotAgentsArtifact{Target: harness.Codex, SourceRelative: selectorRelative, Source: contents, Parsed: artifact, Kind: artifact.Kind, Name: artifact.StorageName, Omitted: true, Reason: "disabled by AGENTPACK_DOT_AGENTS"})
-			return nil
-		}
-		if !allowed {
-			plan.Artifacts = append(plan.Artifacts, DotAgentsArtifact{Target: harness.Codex, SourceRelative: selectorRelative, Source: contents, Parsed: artifact, Kind: artifact.Kind, Name: artifact.StorageName, Omitted: true, Reason: "disabled by mode or lock"})
-			return nil
-		}
-		if artifact.Kind == artifacts.Skill {
-			plan.Artifacts = append(plan.Artifacts, DotAgentsArtifact{Target: harness.Codex, SourceRelative: selectorRelative, Source: contents, Parsed: artifact, Kind: artifact.Kind, Name: artifact.StorageName, NativeSource: selectorRelative})
-			return nil
-		}
-		rendered := artifact.Render(harness.Codex)
-		plan.Files = append(plan.Files, DotAgentsFile{Target: harness.Codex, SourcePath: path, SourceRelative: selectorRelative, RelativePath: rendered.RelativePath, Contents: []byte(rendered.Contents)})
-		plan.Artifacts = append(plan.Artifacts, DotAgentsArtifact{Target: harness.Codex, SourceRelative: selectorRelative, Source: contents, Parsed: artifact, Kind: artifact.Kind, Name: artifact.StorageName, OutputPath: rendered.RelativePath, Output: []byte(rendered.Contents)})
-		for _, warning := range rendered.Warnings {
-			plan.Warnings = append(plan.Warnings, warning)
-		}
+		plan.Artifacts = append(plan.Artifacts, item)
 		return nil
 	})
 }
@@ -338,15 +310,13 @@ func planDotGuidance(dotRoot, name string, target harness.Target, effective mode
 	return nil
 }
 
-func addParsedDotArtifact(plan *DotAgentsPlan, target harness.Target, sourceRelative, parseRelative, outputPath string, contents []byte, allowed, native bool) {
+func addParsedDotArtifact(plan *DotAgentsPlan, target harness.Target, sourceRelative, parseRelative, outputPath string, contents []byte, allowed bool) {
 	artifact, err := artifacts.Parse(parseRelative, string(contents), "")
 	if err != nil || artifact == nil {
 		return
 	}
 	item := DotAgentsArtifact{Target: target, SourceRelative: sourceRelative, Source: contents, Parsed: artifact, Kind: artifact.Kind, Name: artifact.StorageName}
-	if native {
-		item.NativeSource = sourceRelative
-	} else if !allowed {
+	if !allowed {
 		item.Omitted = true
 		item.Reason = "disabled by mode or lock"
 	} else {

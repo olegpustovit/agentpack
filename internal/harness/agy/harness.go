@@ -17,7 +17,7 @@ import (
 const workspaceOverlay = ".agents/plugins/agentpack-bundle"
 
 func New() base.Harness {
-	return base.Harness{Target: base.Agy, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, WorkspaceOverlay: finalizeWorkspace, Check: verify, Launch: launch, LaunchACP: acpLaunch, Inheritance: base.Inheritance{
+	return base.Harness{Target: base.Agy, Artifacts: &artifactLayout, Root: stagedRoot, Reset: resetPaths, BeforeReset: preReset, Setup: prepare, ProjectMCP: planMCP, WorkspaceOverlay: finalizeWorkspace, Check: verify, Launch: launch, LaunchACP: acpLaunch, Inheritance: base.Inheritance{
 		Note:    "Antigravity leaves HOME untouched and writes a workspace plugin overlay",
 		Paths:   func(string) []string { return base.HomeFiles(".gemini/settings.json", ".gemini/GEMINI.md") },
 		Overlay: []string{".agents/plugins/agentpack-bundle"},

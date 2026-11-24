@@ -11,19 +11,30 @@ import (
 	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/cache"
+	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/paths"
 	"github.com/olegpustovit/agentpack/internal/slug"
 )
 
-func Collect(projectRoot string, lock lockfile.PackLock, seededCodexHooks string, effective mode.Effective) (Bundle, error) {
+type Seed struct {
+	Target harness.Target
+	Path   string
+}
+
+func Collect(projectRoot string, lock lockfile.PackLock, seeds []Seed, effective mode.Effective) (Bundle, error) {
 	var bundle Bundle
-	if regularFile(seededCodexHooks) {
-		root := filepath.Dir(seededCodexHooks)
-		parsed, err := parseSource(SeededNative, "seeded-codex-user", "", root, seededCodexHooks, "hooks.json")
+	for _, seed := range seeds {
+		if !regularFile(seed.Path) {
+			continue
+		}
+		parsed, err := parseSource(SeededNative, "seeded-"+string(seed.Target)+"-user", "", filepath.Dir(seed.Path), seed.Path, filepath.Base(seed.Path))
 		if err != nil {
 			return Bundle{}, err
+		}
+		for i := range parsed.Hooks {
+			parsed.Hooks[i].Origin.seedTarget = seed.Target
 		}
 		bundle.Hooks = append(bundle.Hooks, parsed.Hooks...)
 		bundle.Skipped = append(bundle.Skipped, parsed.Skipped...)

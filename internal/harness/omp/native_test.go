@@ -53,7 +53,7 @@ func TestNativeDiscovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rendered := parsed.Render(base.OMP)
+		rendered := parsed.Render(omp.New().Artifacts)
 		destination := filepath.Join(root, rendered.RelativePath)
 		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 			t.Fatal(err)
