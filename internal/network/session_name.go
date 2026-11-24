@@ -38,16 +38,21 @@ func RenameSession(ctx context.Context, store *state.Store, home, id, name strin
 	if err != nil {
 		return info, err
 	}
-	if record, recordErr := ReadWorkerRecord(home, id); info.NodeID == local && recordErr == nil {
-		info.State, err = SessionState(ctx, record)
-		if err != nil {
-			return info, err
+	if info.NodeID == local {
+		record, recordErr := ReadWorkerRecord(home, id)
+		if info.EndedAt.IsZero() && recordErr == nil {
+			info.State, err = SessionState(ctx, record)
+			if err != nil {
+				return info, err
+			}
+		} else {
+			info.State.Running, info.State.Restarting = false, false
 		}
-	} else if info.NodeID == local {
-		info.State.Running, info.State.Restarting = false, false
 	}
-	_, err = store.DB.ExecContext(ctx, "UPDATE sessions SET name=? WHERE id=?", name, id)
-	info.Name = name
+	err = store.DB.QueryRowContext(ctx, "UPDATE sessions SET name=? WHERE id=? AND archived_at=0 RETURNING name", name, id).Scan(&info.Name)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = session.ErrSessionNotFound
+	}
 	return info, err
 }
 

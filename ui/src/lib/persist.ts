@@ -200,7 +200,8 @@ export function persistQueries(client: QueryClient, build: string): () => void {
       observedGeneration = generation
     }
     const [scope, , list] = event.query.queryKey
-    if (scope !== "conversation" && !shellQueries.has(String(scope)) && !(scope === "m" && machineLists.has(String(list)))) return
+    const machineList = scope === "m" && event.query.queryKey.length === 3 && machineLists.has(String(list))
+    if (scope !== "conversation" && !shellQueries.has(String(scope)) && !machineList) return
     dirty.add(event.query.queryHash)
     scheduleSave()
   })

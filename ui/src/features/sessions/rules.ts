@@ -1,8 +1,9 @@
-import type { ProjectRow } from "@/lib/api-types"
+import type { ProjectRow, SessionInfo } from "@/lib/api-types"
 import { basename } from "@/lib/format"
 import { ApiError } from "@/lib/api"
 import type { ListedSession } from "./group"
 import type { StartChoices } from "./choices"
+import { projectDirectory } from "./git"
 
 export const agentIds = ["claude", "codex", "grok", "omp", "opencode", "agent", "agy"]
 
@@ -82,6 +83,22 @@ export function modeEffect(project: Pick<ProjectRow, "modes">, name: string) {
 // A folder whose directory is known while its project contents are still being read.
 export function stubRow(directory: string): ProjectRow {
   return { directory, name: basename(directory), folder_id: "", available: true, unavailable_reason: "", last_used: "", launches: [], packages: [], mcp: [], modes: [], error: "" }
+}
+
+// A project can still be browsed on an offline peer before this browser has loaded its folders.
+export function offlineProjects(sessions: SessionInfo[]): ProjectRow[] {
+  const rows = new Map<string, ProjectRow>()
+  for (const session of sessions) {
+    if (!session.directory || !session.harness) continue
+    const directory = projectDirectory(session)
+    const lastUsed = session.last_used ?? session.started_at ?? ""
+    const row = rows.get(directory) ?? { ...stubRow(directory), available: false, details_deferred: true, last_used: lastUsed }
+    if (!row.launches.some((launch) => launch.harness === session.harness && launch.mode === session.mode)) {
+      row.launches.push({ harness: session.harness, mode: session.mode, last_used: lastUsed })
+    }
+    rows.set(directory, row)
+  }
+  return [...rows.values()]
 }
 
 // One folder on one machine. The key matches the sidebar's machine + folder subheads.

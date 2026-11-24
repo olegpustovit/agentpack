@@ -78,6 +78,7 @@ Logout invalidates the server session and active terminal access.
 - `GET /api/sessions`: array (or `{sessions: [...]}`) of
   `{id, name?, directory, harness, mode, transport?, conversation_state?, agent_session_id?, state: {running,shared_input,responder?,rows,columns,exit_code}}`.
   Omitted `transport` means `terminal`. Chat sessions use `transport: "acp"`; `conversation_state` is `working`, `needs_you`, or `idle` while the worker is running.
+  Pass `directory` to read a project's saved sessions, including its worktrees and chats older than the recent list. The scope is the local machine or the machine specified by `node`.
 - `GET /api/recent`: array (or `{recent: [...]}`) of `{directory,harness,mode,last_used?,available,unavailable_reason?}`.
   Missing or replaced folders remain visible but cannot start until a fresh local launch.
 - `POST /api/sessions`: `{directory,harness,mode,transport?,agent_session_id?,resume?}`, returns created session including `id`.

@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react"
+import { useState, type ComponentProps, type FormEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Field, FieldError, FieldGrid, FieldLabel, PopupSelect } from "@/components/kit/forms"
 import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
@@ -6,22 +6,26 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ProjectSettings } from "./project-settings"
 import { agentpacksQuery } from "@/features/library/queries"
-import { api } from "@/lib/api"
+import { api, LOCAL } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { basename } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import type { ListedSession } from "./group"
-import { sessionsQuery } from "./queries"
+import { projectHistoryKey, sessionsQuery } from "./queries"
 
 export type SaveTarget = Pick<ListedSession, "machine" | "machineName" | "directory" | "mode">
 export type SheetState = { kind: "rename" | "project"; row: ListedSession }
 
 // Each dialog body mounts only while open, so its form starts clean.
-export function RowSheet({ sheet, onClose }: { sheet: SheetState | null; onClose: () => void }) {
+export function RowSheet({ sheet, onClose, finalFocus }: {
+  sheet: SheetState | null
+  onClose: () => void
+  finalFocus?: ComponentProps<typeof SheetContent>["finalFocus"]
+}) {
   return (
     <Sheet open={sheet !== null} onOpenChange={(open) => { if (!open) onClose() }}>
       {sheet && (
-        <SheetContent className={sheet.kind === "project" ? "w-160" : "w-90"}>
+        <SheetContent className={sheet.kind === "project" ? "w-160" : "w-90"} {...(finalFocus !== undefined && { finalFocus })}>
           {sheet.kind === "rename" && <RenameForm row={sheet.row} onDone={onClose} />}
           {sheet.kind === "project" && <ProjectSettings key={sheet.row.id} row={sheet.row} onDone={onClose} />}
         </SheetContent>
@@ -35,8 +39,10 @@ function RenameForm({ row, onDone }: { row: ListedSession; onDone: () => void })
   const [name, setName] = useState(row.name || row.title || "")
   const [blank, setBlank] = useState(false)
   const listKey = sessionsQuery(false).queryKey
+  const withName = (items: SessionInfo[] | undefined, name: string | undefined) =>
+    items?.map((item) => item.id === row.id ? { ...item, name } : item)
   const setListedName = (name: string | undefined) =>
-    queryClient.setQueryData<SessionInfo[]>(listKey, (items) => items?.map((item) => (item.id === row.id ? { ...item, name } : item)))
+    queryClient.setQueryData<SessionInfo[]>(listKey, (items) => withName(items, name))
   const rename = useMutation({
     mutationFn: (next: string) =>
       api<SessionInfo>(`/api/sessions/${encodeURIComponent(row.id)}`, { machine: row.machine, method: "PATCH", body: { name: next } }),
@@ -51,6 +57,9 @@ function RenameForm({ row, onDone }: { row: ListedSession; onDone: () => void })
     onError: (_, __, context) => setListedName(context?.previous),
     onSuccess: (updated) => {
       setListedName(updated.name)
+      queryClient.setQueriesData<SessionInfo[]>({ queryKey: projectHistoryKey }, (items) => withName(items, updated.name))
+      void queryClient.invalidateQueries({ queryKey: projectHistoryKey })
+      void queryClient.invalidateQueries({ queryKey: ["m", LOCAL, "session-row", row.machine, row.id] })
       hud.success("Session renamed")
       onDone()
     },

@@ -321,9 +321,6 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 	if got := <-requests; got != "/state" {
 		t.Fatalf("owner rename reached worker path %q", got)
 	}
-	if err := os.RemoveAll(directory); err != nil {
-		t.Fatal(err)
-	}
 	if err := session.EndSession(t.Context(), g.store.DB, sessionID, session.TerminalState{}); err != nil {
 		t.Fatal(err)
 	}
@@ -332,6 +329,11 @@ func TestACPSessionWritesRequireOwner(t *testing.T) {
 	}
 	if got := request(http.MethodPatch, "", `{"name":"Finished"}`, &localCLI).Code; got != http.StatusOK {
 		t.Fatalf("owner cannot rename stopped session: %d", got)
+	}
+	select {
+	case got := <-requests:
+		t.Fatalf("stopped session rename reached worker path %q", got)
+	default:
 	}
 }
 func TestPeerACPResumeRequiresRecordedOwner(t *testing.T) {

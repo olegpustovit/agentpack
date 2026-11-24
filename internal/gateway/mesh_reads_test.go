@@ -56,7 +56,7 @@ func TestMeshReadsSurviveOwnerShutdownAndRefuseWrites(t *testing.T) {
 		handler.ServeHTTP(w, r)
 		return w
 	}
-	for _, path := range []string{"/api/sessions", "/api/sessions?node=remote"} {
+	for _, path := range []string{"/api/sessions", "/api/sessions?node=remote", "/api/sessions?node=remote&directory=%2Fremote%2Fproject"} {
 		w := request("GET", path, "")
 		if w.Code != 200 {
 			t.Fatalf("sessions: %d %s", w.Code, w.Body.String())
@@ -173,8 +173,21 @@ func TestMeshRecentSessionListKeepsOlderBookmarks(t *testing.T) {
 	g, origin := identityGateway(t, t.TempDir(), nil)
 	store := g.store.DB
 	now := time.Now()
+	const project = "/work/project"
 	for i := range 101 {
 		info := session.SessionInfo{ID: fmt.Sprintf("session-old-%03d", i), Transport: "acp", LastUsed: now.Add(time.Duration(i) * time.Second)}
+		switch i {
+		case 0:
+			info.Directory = project
+		case 1:
+			info.Directory, info.WorktreeOf = "/agentpack/worktrees/0123456789abcdef/topic", project
+		case 2:
+			info.Directory, info.DefinitionRoot = `C:\agentpack\worktrees\0123456789abcdef\legacy`, project
+		case 3:
+			info.Directory, info.DefinitionRoot = project+"/subproject", project
+		case 4:
+			info.Directory = project
+		}
 		if err := session.UpsertSession(t.Context(), store, info); err != nil {
 			t.Fatal(err)
 		}
@@ -207,5 +220,15 @@ func TestMeshRecentSessionListKeepsOlderBookmarks(t *testing.T) {
 	var row session.SessionInfo
 	if err := json.Unmarshal(old.Body.Bytes(), &row); old.Code != http.StatusOK || err != nil || row.ID != "session-old-000" {
 		t.Fatalf("old bookmark status=%d id=%q err=%v", old.Code, row.ID, err)
+	}
+	if _, err := store.Exec("UPDATE sessions SET hidden=1 WHERE id='session-old-004'; UPDATE sessions SET archived_at=last_used WHERE id='session-old-001'"); err != nil {
+		t.Fatal(err)
+	}
+	history := request("/api/sessions?directory=" + url.QueryEscape(project))
+	if err := json.Unmarshal(history.Body.Bytes(), &rows); history.Code != http.StatusOK || err != nil || len(rows) != 3 {
+		t.Fatalf("project history status=%d rows=%+v err=%v", history.Code, rows, err)
+	}
+	if rows[0].ID != "session-old-002" || rows[1].ID != "session-old-001" || rows[1].ArchivedAt.IsZero() || rows[2].ID != "session-old-000" {
+		t.Fatalf("wrong sessions or order in project history: %+v", rows)
 	}
 }

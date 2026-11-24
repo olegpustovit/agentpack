@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"time"
 
@@ -32,17 +33,31 @@ func (g *Gateway) nodeContact(node, local string) (bool, time.Time) {
 }
 
 func (g *Gateway) Sessions(ctx context.Context, node string, recentOnly bool) ([]session.SessionInfo, error) {
+	return g.listSessions(ctx, node, "", recentOnly)
+}
+
+// Older session rows record the main folder as the definition root of an Agentpack worktree.
+var historyWorktreePath = regexp.MustCompile(`[\\/]worktrees[\\/][0-9a-f]{16}[\\/][^\\/]+`)
+
+func (g *Gateway) listSessions(ctx context.Context, node, directory string, recentOnly bool) ([]session.SessionInfo, error) {
 	local, err := g.store.NodeID(ctx)
 	if err != nil {
 		return nil, err
 	}
 	where := "hidden=0 AND (transport<>'shell' OR parent_id='')"
 	var args []any
+	if directory != "" && node == "" {
+		node = local
+	}
 	if node != "" {
 		where += " AND node_id=?"
 		args = append(args, node)
 	}
 	query := "SELECT " + session.SessionColumns + " FROM sessions WHERE " + where + " AND (ended_at=0 OR transport='acp')"
+	if directory != "" {
+		query += " AND (directory=? OR worktree_of=? OR (worktree_of='' AND definition_root=?))"
+		args = append(args, directory, directory, directory)
+	}
 	if recentOnly {
 		query += " AND (ended_at=0 OR id IN (SELECT id FROM sessions WHERE " + where +
 			" AND ended_at>0 AND transport='acp' ORDER BY last_used DESC,id DESC LIMIT 100))"
@@ -53,6 +68,11 @@ func (g *Gateway) Sessions(ctx context.Context, node string, recentOnly bool) ([
 	entries, err := session.QuerySessions(ctx, g.store.Reader, query+" ORDER BY last_used DESC,id DESC", args...)
 	if err != nil {
 		return nil, err
+	}
+	if directory != "" {
+		entries = slices.DeleteFunc(entries, func(info session.SessionInfo) bool {
+			return info.Directory != directory && info.WorktreeOf != directory && !historyWorktreePath.MatchString(info.Directory)
+		})
 	}
 	localEntries := slices.DeleteFunc(slices.Clone(entries), func(info session.SessionInfo) bool {
 		return info.NodeID != local || info.Transport == "acp" || !info.EndedAt.IsZero()
@@ -77,9 +97,11 @@ func (g *Gateway) Sessions(ctx context.Context, node string, recentOnly bool) ([
 	return entries, nil
 }
 
-// An older chat can fall out of the recent list while its bookmark still works.
+// An older chat can fall out of the recent list while staying available in its project's history.
 func (g *Gateway) serveSessions(w http.ResponseWriter, r *http.Request) {
-	value, err := g.Sessions(r.Context(), r.URL.Query().Get("node"), true)
+	query := r.URL.Query()
+	directory := query.Get("directory")
+	value, err := g.listSessions(r.Context(), query.Get("node"), directory, directory == "")
 	if err != nil {
 		meshReadError(w, r, err)
 		return

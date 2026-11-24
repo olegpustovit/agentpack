@@ -14,7 +14,7 @@ import { api, ApiError, errorText, LOCAL, routeMissing } from "@/lib/api"
 import type { AgentSession, ProjectRow } from "@/lib/api-types"
 import { harnessName, plural, relativeTime, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { agentIds, canStart, defaultAgent, mergeProjects, modeChoices, modeEffect, placeKey, placeLabel, projectGroups, projectLocation, stubRow, type MergedProject, type SessionView } from "./rules"
+import { agentIds, canStart, defaultAgent, mergeProjects, modeChoices, modeEffect, offlineProjects, placeKey, placeLabel, projectGroups, projectLocation, stubRow, type MergedProject, type SessionView } from "./rules"
 import { useStartSession } from "./start"
 import { useEventsConnected } from "@/features/events/use-events"
 import { LoginGlyph } from "@/features/library/mcp-inspector"
@@ -22,8 +22,10 @@ import { connectionsQuery, loginsFor, signIn, type Connection } from "@/features
 import { hud } from "@/lib/hud"
 import { branchSlug, projectDirectory, worktreeFolderInProject, worktreesQuery } from "./git"
 import { foundQuery, projectsQuery, selectedProjectQuery, sessionsQuery } from "./queries"
-
 import { FolderBrowser, useFolderBrowser } from "./folder-browser"
+import { ProjectHistory } from "./project-history"
+import { RowSheet, type SheetState } from "./session-sheets"
+
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
 
 function chatUnavailableReason(error: unknown, machine: string): string | undefined {
@@ -68,6 +70,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   const machines = useMachines()
   const projectQueries = useMachineQueries(projectsQuery)
   const foundQueries = useMachineQueries(foundQuery)
+  const sessionQueries = useReplicatedQueries(sessionsQuery).byMachine
   const online = machines.filter((machine) => machine.online)
   // Default to the requested folder or the newest startable project.
   const [filters, setFilters] = useState(() => {
@@ -87,6 +90,8 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   const [query, setQuery] = useState("")
   const [chosenWorkspace, setWorkspace] = useState<string | null>(null)
   const [carry, setCarry] = useState(true)
+  const [history, setHistory] = useState(false)
+  const [renameSheet, setRenameSheet] = useState<SheetState | null>(null)
 
   const now = Date.now()
   const machineFilter = machines.some((machine) => machine.id === filters.machine) ? filters.machine : "all"
@@ -100,6 +105,8 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
     if (machine.online && !needsFoldersUpdate(machine.id)) {
       const used = new Set(rows[machine.id]?.map((row) => placeKey(machine.id, row.directory)))
       foundRows[machine.id] = foundQueries.byMachine[machine.id]?.data?.filter((row) => !used.has(placeKey(machine.id, row.directory)))
+    } else if (history && !machine.online && !rows[machine.id]?.length) {
+      rows[machine.id] = offlineProjects(sessionQueries[machine.id]?.data ?? [])
     }
   }
   const browser = useFolderBrowser(
@@ -137,7 +144,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   ))
   const projectDetails = useQuery({
     ...selectedProjectQuery(place?.machine ?? "", summary?.directory ?? ""),
-    enabled: Boolean(explicit && place?.online && summary?.details_deferred),
+    enabled: !history && Boolean(explicit && place?.online && summary?.details_deferred),
   })
   const row = projectDetails.data ?? summary
   const registered = Boolean(place && rows[place.machine]?.some((entry) => entry.available && placeKey(place.machine, entry.directory) === place.key && entry.folder_id === place.row.folder_id))
@@ -153,7 +160,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   const machineName = place?.machineName ?? "this machine"
   const startable = Boolean(place?.online && row?.available)
 
-  const accounts = useQuery({ ...agentsQuery(place?.machine ?? ""), enabled: Boolean(place?.online) })
+  const accounts = useQuery({ ...agentsQuery(place?.machine ?? ""), enabled: !history && Boolean(place?.online) })
   const pastSessions = useQuery({
     queryKey: ["agent-sessions", place?.machine, row?.directory, harnessId, modeValue, explicit],
     queryFn: async () => {
@@ -163,7 +170,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
       })
       return body.sessions ?? []
     },
-    enabled: view === "chat" && startable && (registered || Boolean(row?.launches.length)),
+    enabled: !history && view === "chat" && startable && (registered || Boolean(row?.launches.length)),
     refetchOnWindowFocus: !explicit,
     refetchOnReconnect: !explicit,
     retry: false,
@@ -172,10 +179,10 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   // Workspace: the folder itself, a new worktree, or a live worktree of this project (its path).
   const worktrees = useQuery({
     ...worktreesQuery(place?.machine ?? "", explicit && summary?.details_deferred ? row?.directory : undefined),
-    enabled: Boolean(place?.online && row?.available && (!summary?.details_deferred || explicit)),
+    enabled: !history && Boolean(place?.online && row?.available && (!summary?.details_deferred || explicit)),
   })
   const worktreesNeedUpdate = routeMissing(worktrees.error)
-  const machineSessions = useReplicatedQueries(sessionsQuery).byMachine[place?.machine ?? ""]?.data ?? []
+  const machineSessions = sessionQueries[place?.machine ?? ""]?.data ?? []
   const folder = row?.directory.replace(/[\\/]+$/, "")
   const othersHere = machineSessions.filter((item) => item.state?.running && !item.ended_at && projectDirectory(item).replace(/[\\/]+$/, "") === folder)
   const projectWorktrees = row ? (worktrees.data?.worktrees ?? []).filter((item) => !item.orphaned && item.branch && worktreeFolderInProject(item, row.directory)) : []
@@ -233,7 +240,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
 
   function submit(event: FormEvent) {
     event.preventDefault()
-    if (place && row && !blocked) {
+    if (!history && place && row && !blocked) {
       start.mutate({
         machine: place.machine,
         directory: row.directory,
@@ -249,7 +256,7 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
   }
 
   function submitShortcut(event: KeyboardEvent<HTMLFormElement>) {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    if (!history && event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault()
       event.currentTarget.requestSubmit()
     }
@@ -314,16 +321,20 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
     )
   }
 
-  return (
+  return <>
     <form onSubmit={submit} onKeyDown={submitShortcut} className="contents">
-      <header className="flex min-w-0 items-center gap-(--s4) border-b-[0.5px] border-(--sep) px-(--dlg-pad) pt-(--dlg-pad) pb-(--s6)">
+      <header className="flex min-w-0 items-center gap-(--s4) border-b-[0.5px] border-(--sep) px-(--dlg-pad) pt-(--dlg-pad) pb-(--s6) max-[760px]:flex-col max-[760px]:items-stretch">
         <div className="min-w-0 flex-1">
-          <SheetTitle>New session</SheetTitle>
-          <SheetDescription>Pick a project or any folder, then the machine to run it on.</SheetDescription>
+          <SheetTitle>{history ? "Project history" : "New session"}</SheetTitle>
+          <SheetDescription>{history ? "Pick a project to open or rename its saved sessions." : "Pick a project or any folder, then the machine to run it on."}</SheetDescription>
         </div>
+        <SegmentedControl aria-label="Project sessions" className="max-[760px]:w-full" value={[history ? "history" : "new"]} onValueChange={([value]) => { if (value) setHistory(value === "history") }}>
+          <SegmentedControlItem value="new" className="flex-1">New</SegmentedControlItem>
+          <SegmentedControlItem value="history" className="flex-1">History</SegmentedControlItem>
+        </SegmentedControl>
       </header>
 
-      <div className="grid min-h-0 grid-cols-[280px_minmax(0,1fr)] max-[760px]:grid-cols-1 max-[760px]:grid-rows-none max-[760px]:auto-rows-auto max-[760px]:overflow-y-auto">
+      <div className={cn("grid min-h-0 grid-cols-[280px_minmax(0,1fr)] max-[760px]:grid-cols-1 max-[760px]:grid-rows-none max-[760px]:auto-rows-auto max-[760px]:overflow-y-auto", history && "max-[760px]:[&>aside]:h-[34dvh]")}>
         <FolderBrowser
           query={query}
           setQuery={setQuery}
@@ -376,7 +387,12 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
         </FolderBrowser>
 
         <div className="flex min-h-0 flex-col gap-(--s7) overflow-y-auto px-(--dlg-pad) py-(--s6)">
-          {project && place && row ? (
+          {project && history ? (
+            <div className="flex min-w-0 flex-col gap-(--s4)">
+              <h2 className="truncate text-(length:--fs-lg) font-semibold">{project.name}</h2>
+              <ProjectHistory key={project.key} places={project.places} agent={agentFilter} onRename={(row) => setRenameSheet({ kind: "rename", row })} />
+            </div>
+          ) : project && place && row ? (
             <>
               <div className="flex min-w-0 flex-col gap-(--s3)">
                 <h2 className="truncate text-(length:--fs-lg) font-semibold">{project.name}</h2>
@@ -514,43 +530,50 @@ function NewSessionForm({ initialMachine, initialDirectory }: { initialMachine?:
               )}
             </>
           ) : (
-            <p className="text-(--fg2)">{hint ?? "Choose a project."}</p>
+            <p className="text-(--fg2)">{history ? "Choose a project." : hint ?? "Choose a project."}</p>
           )}
         </div>
       </div>
 
       <footer className="flex min-w-0 flex-col gap-(--s3) border-t-[0.5px] border-(--sep) bg-(--sidebar) px-(--dlg-pad) py-(--s5) max-[760px]:pb-[calc(var(--s4)+var(--safe-b))]">
-        {place && hint && <p className="text-(length:--fs-sm) text-(--fg2)">{hint}</p>}
-        {place && !hint && account?.installed && !account.signedIn && !account.checkRequired && (
-          <p className="text-(length:--fs-sm) text-(--fg2)">
-            {harnessName(harnessId)} isn't signed in on {machineName}.{" "}
-            <Link to="/machines/$machine" params={{ machine: place.machine }} className="text-(--accent) underline-offset-2 hover:underline">Sign in…</Link>
-            {view === "chat" ? " or start anyway: the chat asks you to sign in." : null}
-          </p>
-        )}
-        {start.error && !worktreeError && <FieldError>{start.error.message}</FieldError>}
-        <div className="flex min-w-0 items-center gap-(--s4) max-[760px]:flex-col max-[760px]:items-stretch">
-          <p className="min-w-0 flex-1 truncate text-(length:--fs-sm) text-(--fg2)" aria-live="polite">
-            {project && place && (
-              <>
-                <b className="font-semibold text-(--fg)">{harnessName(harnessId)}</b> · {modeValue} · {view === "chat" ? "Chat" : "Terminal"} in{" "}
-                <b className="font-semibold text-(--fg)">{project.name}</b> on <b className="font-semibold text-(--fg)">{machineName}</b>
-                {resumeId && " · resumes a conversation"}
-                {workspace === "new" ? " · new worktree" : continued ? ` · in ${continued.branch}` : ""}
-                {view === "chat" && !resumeId && prompt.trim() && " · sends the first message"}
-              </>
+        {history ? (
+          <SheetActions pinned={false} cancelLabel="Done">{null}</SheetActions>
+        ) : (
+          <>
+            {place && hint && <p className="text-(length:--fs-sm) text-(--fg2)">{hint}</p>}
+            {place && !hint && account?.installed && !account.signedIn && !account.checkRequired && (
+              <p className="text-(length:--fs-sm) text-(--fg2)">
+                {harnessName(harnessId)} isn't signed in on {machineName}.{" "}
+                <Link to="/machines/$machine" params={{ machine: place.machine }} className="text-(--accent) underline-offset-2 hover:underline">Sign in…</Link>
+                {view === "chat" ? " or start anyway: the chat asks you to sign in." : null}
+              </p>
             )}
-          </p>
-          <SheetActions pinned={false}>
-            <Button type="submit" variant="primary" disabled={blocked}>
-              {start.isPending ? "Starting session…" : "Start session"}
-              <Kbd aria-hidden className="text-current opacity-70">{isMac ? "⌘↵" : "Ctrl+↵"}</Kbd>
-            </Button>
-          </SheetActions>
-        </div>
+            {start.error && !worktreeError && <FieldError>{start.error.message}</FieldError>}
+            <div className="flex min-w-0 items-center gap-(--s4) max-[760px]:flex-col max-[760px]:items-stretch">
+              <p className="min-w-0 flex-1 truncate text-(length:--fs-sm) text-(--fg2)" aria-live="polite">
+                {project && place && (
+                  <>
+                    <b className="font-semibold text-(--fg)">{harnessName(harnessId)}</b> · {modeValue} · {view === "chat" ? "Chat" : "Terminal"} in{" "}
+                    <b className="font-semibold text-(--fg)">{project.name}</b> on <b className="font-semibold text-(--fg)">{machineName}</b>
+                    {resumeId && " · resumes a conversation"}
+                    {workspace === "new" ? " · new worktree" : continued ? ` · in ${continued.branch}` : ""}
+                    {view === "chat" && !resumeId && prompt.trim() && " · sends the first message"}
+                  </>
+                )}
+              </p>
+              <SheetActions pinned={false}>
+                <Button type="submit" variant="primary" disabled={blocked}>
+                  {start.isPending ? "Starting session…" : "Start session"}
+                  <Kbd aria-hidden className="text-current opacity-70">{isMac ? "⌘↵" : "Ctrl+↵"}</Kbd>
+                </Button>
+              </SheetActions>
+            </div>
+          </>
+        )}
       </footer>
     </form>
-  )
+    <RowSheet sheet={renameSheet} onClose={() => setRenameSheet(null)} finalFocus />
+  </>
 }
 
 function Choice({ label, note, children }: { label: string; note?: string; children: ReactNode }) {

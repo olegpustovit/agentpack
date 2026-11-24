@@ -113,6 +113,69 @@ test("New session claims a Cursor CLI chat together with its first message", asy
   await expect(page.getByRole("list", { name: "Queued messages" })).toContainText("tidy the overlay")
 })
 
+test("project history opens and renames a saved chat outside the recent list", async ({ page }) => {
+  const directory = "/home/oleg/agentpack"
+  const peerDirectory = "/Users/oleg/agentpack"
+  const old = {
+    ...sessions[0], id: "old-chat", name: "", title: "Original review", transport: "acp",
+    directory: "/home/oleg/.local/share/agentpack/worktrees/0123456789abcdef/review", worktree_of: directory,
+    state: terminal(false), ended_at: twoHoursAgo,
+  }
+  const cold = { ...old, id: "cold-chat", name: "Archived review", title: "", archived_at: twoHoursAgo }
+  const remote = { ...old, id: "remote-chat", name: "Remote review", title: "", directory: peerDirectory, worktree_of: "", node_id: "mac", reachable: false }
+  reply = [...sessions, remote]
+  let name = ""
+  let starts = 0
+  await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "mac", name: "MacBook", online: false }] }))
+  await page.route((url) => url.pathname === "/api/projects", (route) => route.fulfill({ json: [projectRow(directory, [], { last_used: twoHoursAgo }), projectRow("/home/oleg/oracle")] }))
+  await page.route((url) => url.pathname === "/api/sessions", (route) => {
+    if (route.request().method() === "POST") {
+      starts += 1
+      return route.fulfill({ status: 500, body: "Unexpected start" })
+    }
+    const query = new URL(route.request().url()).searchParams
+    if (query.get("directory") === directory) return route.fulfill({ json: [{ ...old, name }, cold] })
+    if (query.get("directory") === peerDirectory && query.get("node") === "mac") return route.fulfill({ json: [remote] })
+    if (query.has("directory")) return route.fulfill({ json: [] })
+    return route.fallback()
+  })
+  await page.route("**/api/sessions/old-chat", (route) => {
+    if (route.request().method() === "PATCH") name = route.request().postDataJSON().name
+    return route.fulfill({ json: { ...old, name } })
+  })
+  await page.route((url) => url.pathname === "/api/sessions/old-chat/conversation", (route) => route.fulfill({
+    body: '{"seq":1,"ts":1,"kind":"prompt","payload":{"text":{"text":"Review the release checklist"}}}\n',
+    contentType: "application/x-ndjson",
+  }))
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto("/sessions?new=1")
+  await page.getByRole("button", { name: "History", exact: true }).click()
+  const history = page.getByRole("dialog", { name: "Project history" })
+  const projects = history.getByRole("navigation", { name: "Projects" })
+  await projects.getByRole("button", { name: /oracle/ }).click()
+  await expect(history.getByText("No saved sessions for this project yet.")).toBeVisible()
+  await projects.getByRole("button", { name: /agentpack/ }).click()
+  const saved = history.getByRole("list", { name: "Saved sessions" })
+  await expect(saved.getByRole("link", { name: /Remote review/ })).toContainText("MacBook ·")
+  await expect(saved.getByRole("link", { name: /Archived review/ })).toBeVisible()
+  await expect(saved.getByRole("button", { name: "Rename Archived review" })).toHaveCount(0)
+  const search = history.getByRole("searchbox", { name: "Search session history" })
+  await search.fill("original")
+  await expect(saved.getByRole("listitem")).toHaveCount(1)
+  await saved.getByRole("button", { name: "Rename Original review" }).click()
+  const rename = page.getByRole("dialog", { name: "Rename session" })
+  await rename.getByRole("textbox", { name: "Name" }).fill("Release review")
+  await rename.getByRole("textbox", { name: "Name" }).press("Enter")
+  await expect(rename).toBeHidden()
+  await search.fill("")
+  await saved.getByRole("link", { name: /Release review/ }).click()
+  await expect(page).toHaveURL(/\/sessions\/local\/old-chat$/)
+  await expect(history).toBeHidden()
+  await expect(page.getByText("Review the release checklist")).toBeVisible()
+  expect(name).toBe("Release review")
+  expect(starts).toBe(0)
+})
+
 test("New session browses and starts in an unlisted folder using the keyboard", async ({ page }) => {
   await page.route(/\/api\/sessions(\?.*)?$/, (route) =>
     route.request().method() === "POST" ? route.fulfill({ json: { ...sessions[0], id: "created", directory: "/home/viewer/projects" } }) : route.fallback(),
