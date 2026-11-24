@@ -138,6 +138,26 @@ func TestEndedChatWithoutMessagesLeavesTheList(t *testing.T) {
 	}
 }
 
+func TestEndSessionRollsBackIfVisibilityWriteFails(t *testing.T) {
+	store := statetest.Open(t, t.TempDir())
+	ctx := t.Context()
+	info := session.SessionInfo{ID: "session-rollback", Transport: "acp", ConversationState: "working", State: session.TerminalState{Running: true}}
+	if err := session.UpsertSession(ctx, store.DB, info); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`CREATE TRIGGER reject_hide BEFORE UPDATE OF hidden ON sessions
+ BEGIN SELECT RAISE(ABORT, 'could not hide session'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.EndSession(ctx, store.DB, info.ID, session.TerminalState{}); err == nil || !strings.Contains(err.Error(), "could not hide session") {
+		t.Fatalf("visibility failure not returned: %v", err)
+	}
+	got, err := session.StoredSession(ctx, store.Reader, info.ID)
+	if err != nil || !got.EndedAt.IsZero() || got.State != info.State || got.ConversationState != info.ConversationState {
+		t.Fatalf("session partially ended: %+v, %v", got, err)
+	}
+}
+
 func TestWorkerEndpointRequiresCanonicalSessionMetadata(t *testing.T) {
 	home := t.TempDir()
 	store := statetest.Open(t, home)

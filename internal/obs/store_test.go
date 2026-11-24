@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -40,6 +41,63 @@ func flushStore(t *testing.T, store *Store) {
 	if err := store.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestDayStoreFlushTimerRunsOnlyWithWork(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const interval = 250 * time.Millisecond
+		home := t.TempDir()
+		var clockReads atomic.Int64
+		store, err := Open(home, StoreOptions{FlushInterval: interval, Now: func() time.Time {
+			clockReads.Add(1)
+			return time.Now()
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		checkIdle := func() {
+			t.Helper()
+			reads := clockReads.Load()
+			time.Sleep(3*interval + interval/2)
+			synctest.Wait()
+			if clockReads.Load() != reads {
+				t.Fatal("idle diagnostic store woke to flush")
+			}
+		}
+		checkIdle()
+		now := time.Now()
+		store.Write(logEvent(now, "first"))
+		synctest.Wait()
+		time.Sleep(interval / 2)
+		store.Write(logEvent(now, "second"))
+		synctest.Wait()
+		path := filepath.Join(home, "logs", now.UTC().Format(time.DateOnly)+".db")
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("batch flushed before its deadline: %v", err)
+		}
+		time.Sleep(interval / 2)
+		synctest.Wait()
+		db := dayReader(t, home, now)
+		checkCount := func(want int) {
+			t.Helper()
+			var count int
+			if err := db.QueryRow("SELECT count(*) FROM events").Scan(&count); err != nil || count != want {
+				t.Fatalf("persisted %d events, want %d: %v", count, want, err)
+			}
+		}
+		checkCount(2)
+		checkIdle()
+		store.Write(logEvent(now, "explicit"))
+		flushStore(t, store)
+		checkCount(3)
+		checkIdle()
+		store.Write(logEvent(now, "shutdown"))
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		checkCount(4)
+	})
 }
 
 func TestDayStoreRollsAtUTCMidnightAndDeduplicatesStacks(t *testing.T) {

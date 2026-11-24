@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -90,6 +91,37 @@ func TestIssueIdentityBindingKeepsRecoveredCountsIdempotent(t *testing.T) {
 	if err := canonical.Reader.QueryRow("SELECT count(*) FROM issue_counts WHERE node_id<>'stable-node'").Scan(&rows); err != nil || rows != 0 {
 		t.Fatalf("counts retained old machine identity: %d %v", rows, err)
 	}
+}
+
+func TestPendingIssueCountsPublishWithoutNewEvents(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		home := t.TempDir()
+		canonical, err := state.Open(home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer canonical.Close()
+		logs, err := Open(home, StoreOptions{State: canonical, Metadata: Metadata{NodeID: "test-node"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer logs.Close()
+		for range 2 {
+			logs.Write(issueEvent(time.Now(), "v1.0.0"))
+			flushStore(t, logs)
+		}
+		checkCount := func(want int) {
+			t.Helper()
+			var count int
+			if err := canonical.Reader.QueryRow("SELECT sum(count) FROM issue_counts").Scan(&count); err != nil || count != want {
+				t.Fatalf("issue count %d, want %d: %v", count, want, err)
+			}
+		}
+		checkCount(1)
+		time.Sleep(issueFlushInterval + logs.options.FlushInterval)
+		synctest.Wait()
+		checkCount(2)
+	})
 }
 
 func TestIssuesCountEveryOccurrenceButSampleRepeatedErrors(t *testing.T) {

@@ -401,17 +401,17 @@ func (p *eventLogPersistence) dropBefore(seq int64) {
 	for pending, entry := range p.pending {
 		if pending < seq {
 			delete(p.pending, pending)
-			p.bytes -= entrySize(entry)
+			p.bytes -= retainedEntrySize(entry)
 		}
 	}
 }
 
 func (p *eventLogPersistence) put(entry LogEntry) {
 	if old, ok := p.pending[entry.Seq]; ok {
-		p.bytes -= entrySize(old)
+		p.bytes -= retainedEntrySize(old)
 	}
 	p.pending[entry.Seq] = entry
-	p.bytes += entrySize(entry)
+	p.bytes += retainedEntrySize(entry)
 }
 
 // flushChanges writes what is pending. The caller must not hold log.mu: the batch is taken out
@@ -534,20 +534,20 @@ func (log *EventLog) Restore(entries []LogEntry, lastSeq int64, truncated bool) 
 	var previous int64
 	var total int
 	for _, entry := range entries {
-		if entry.Seq <= previous || entry.Seq > lastSeq || entrySize(entry) < 0 {
+		size := entrySize(entry)
+		if entry.Seq <= previous || entry.Seq > lastSeq || size < 0 {
 			return errors.New("invalid restored event sequence")
 		}
-		total += entrySize(entry)
+		total += size
 		if total > log.limit {
 			return errors.New("restored event log exceeds memory budget")
 		}
 		previous = entry.Seq
 	}
-	log.seq, log.truncated = lastSeq, truncated
+	log.seq, log.truncated, log.bytes = lastSeq, truncated, total
 	for _, entry := range entries {
 		entry.Payload = append(json.RawMessage(nil), entry.Payload...)
 		log.entries = append(log.entries, entry)
-		log.bytes += entrySize(entry)
 	}
 	log.signal()
 	return nil
@@ -619,9 +619,9 @@ func (log *EventLog) coalesceDropOldest() {
 			candidate := second
 			candidate.Payload = merged
 			candidate.Seq = first.Seq
-			candidateSize := entrySize(candidate)
-			if err == nil && candidateSize >= 0 && candidateSize <= log.limit {
-				log.bytes -= entrySize(first) + entrySize(second)
+			candidateSize := retainedEntrySize(candidate)
+			if err == nil && candidateSize <= log.limit {
+				log.bytes -= retainedEntrySize(first) + retainedEntrySize(second)
 				log.entries[1] = candidate
 				log.entries = log.entries[1:]
 				log.bytes += candidateSize
@@ -633,16 +633,20 @@ func (log *EventLog) coalesceDropOldest() {
 	}
 	dropped := log.entries[0]
 	log.entries = log.entries[1:]
-	log.bytes -= entrySize(dropped)
+	log.bytes -= retainedEntrySize(dropped)
 	log.truncated = true
 }
 
-// entrySize is the length of the entry's stored JSON line, counted without encoding it: every
-// streamed token is sized several times. An invalid payload is -1 and never retained.
+// entrySize validates payloads before they can enter the log. An invalid payload is -1.
 func entrySize(entry LogEntry) int {
 	if !json.Valid(entry.Payload) {
 		return -1
 	}
+	return retainedEntrySize(entry)
+}
+
+// retainedEntrySize counts the stored JSON line without revalidating an accepted or merged payload.
+func retainedEntrySize(entry LogEntry) int {
 	const fixed = len(`{"seq":,"ts":,"kind":"","payload":}`) + 1
 	return fixed + digits(entry.Seq) + digits(entry.TS) + len(entry.Kind) + len(entry.Payload)
 }

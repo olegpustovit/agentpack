@@ -7,15 +7,50 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state/statetest"
 	"github.com/tmaxmax/go-sse"
 )
+
+func TestStartingACPWorkerAnswersAuthenticatedStateProbe(t *testing.T) {
+	home := t.TempDir()
+	store := statetest.Open(t, home)
+	info := session.SessionInfo{ID: "session-starting", Transport: "acp", ConversationState: "starting"}
+	if err := session.UpsertSession(t.Context(), store.DB, info); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(home, "network", "sessions", info.ID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	record := WorkerRecord{ID: info.ID, Session: info, Secret: strings.Repeat("s", 64)}
+	var starting atomic.Bool
+	starting.Store(true)
+	var bootstrap http.Handler
+	prepared, err := prepareACPWorker(t.Context(), store, record, dir, &starting, func(err error) { t.Error(err) }, func(handler http.Handler) { bootstrap = handler }, new(atomic.Pointer[WorkerHTTP]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Log.Close()
+	for secret, status := range map[string]int{"wrong": http.StatusUnauthorized, record.Secret: http.StatusOK} {
+		request := httptest.NewRequest(http.MethodGet, "/state", nil)
+		request.Header.Set("Authorization", "Bearer "+secret)
+		response := httptest.NewRecorder()
+		bootstrap.ServeHTTP(response, request)
+		if response.Code != status {
+			t.Fatalf("state probe returned %d, want %d", response.Code, status)
+		}
+	}
+}
 
 type conversationStreamWriter struct {
 	header http.Header

@@ -154,8 +154,26 @@ func (s *Store) recordError(err error) {
 
 func (s *Store) run() {
 	defer close(s.done)
-	ticker := time.NewTicker(s.options.FlushInterval)
-	defer ticker.Stop()
+	sweep := time.NewTicker(s.options.SweepInterval)
+	defer sweep.Stop()
+	var timer *time.Timer
+	var flushDue <-chan time.Time
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+	armFlush := func() {
+		if flushDue != nil {
+			return
+		}
+		if timer == nil {
+			timer = time.NewTimer(s.options.FlushInterval)
+		} else {
+			timer.Reset(s.options.FlushInterval)
+		}
+		flushDue = timer.C
+	}
 	batch := make([]Event, 0, 256)
 	var pendingError error
 	failed := func(err error) {
@@ -165,6 +183,10 @@ func (s *Store) run() {
 		}
 	}
 	flush := func() {
+		if flushDue != nil {
+			timer.Stop()
+			flushDue = nil
+		}
 		if len(batch) != 0 {
 			failed(s.writeBatch(batch))
 			batch = batch[:0]
@@ -173,11 +195,17 @@ func (s *Store) run() {
 		if s.options.Now().Sub(s.swept) >= s.options.SweepInterval {
 			failed(s.sweep())
 		}
+		// Coalesced issue counts still need to publish if no more events arrive.
+		if len(s.pendingIssues) != 0 {
+			armFlush()
+		}
 	}
 	add := func(event Event) {
 		batch = append(batch, event)
 		if len(batch) == 256 {
 			flush()
+		} else if len(batch) == 1 {
+			armFlush()
 		}
 	}
 	drain := func() {
@@ -190,7 +218,9 @@ func (s *Store) run() {
 		select {
 		case event := <-s.queue.Events:
 			add(event)
-		case <-ticker.C:
+		case <-flushDue:
+			flush()
+		case <-sweep.C:
 			flush()
 		case reply := <-s.flush:
 			drain()

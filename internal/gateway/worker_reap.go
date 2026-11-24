@@ -12,6 +12,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
+	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
 
@@ -122,21 +123,23 @@ func (g *Gateway) reapWorkerEndpoints(ctx context.Context) {
 			g.reportEndpointRecovery(ctx, path, err)
 			continue
 		}
-		alive := false
+		possiblyAlive := true
 		if record.PID > 0 {
-			alive, err = workerProcessAlive(record.PID)
-		} else {
-			_, probeErr := network.SessionState(ctx, record)
-			alive = probeErr == nil
+			possiblyAlive, err = workerProcessAlive(record.PID)
 		}
 		if err != nil {
 			g.reportEndpointRecovery(ctx, path, err)
 			continue
 		}
-		if !alive {
-			if err := g.settleDeadWorker(ctx, file, record.ID); err != nil {
-				g.reportEndpointRecovery(ctx, path, err)
+		if possiblyAlive {
+			// A PID can belong to another process, and a new endpoint can precede its server.
+			_, probeErr := network.SessionState(ctx, record)
+			if probeErr == nil || ctx.Err() != nil || record.PID > 0 && time.Since(file.info.ModTime()) < interruptedStartGrace {
+				continue
 			}
+		}
+		if err := g.settleDeadWorker(ctx, file, record.ID); err != nil {
+			g.reportEndpointRecovery(ctx, path, err)
 		}
 	}
 }
@@ -150,5 +153,19 @@ func (g *Gateway) settleDeadWorker(ctx context.Context, file *workerEndpointFile
 	if err == nil {
 		g.removeDeadEndpoints(ctx, file)
 	}
+	return err
+}
+
+func (g *Gateway) reapUnpublishedWorker(ctx context.Context, info session.SessionInfo, now time.Time) error {
+	if !network.ValidSessionID(info.ID) {
+		return nil
+	}
+	_, err := os.Lstat(filepath.Join(g.options.Home, "network", "sessions", info.ID, "worker.json"))
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	// A newer launch can register the row between the query and the endpoint check.
+	_, err = g.store.DB.ExecContext(ctx, `UPDATE sessions SET ended_at=? WHERE id=? AND ended_at=0 AND archived_at=0
+ AND node_id=`+state.LocalNodeSQL+` AND transport<>'acp' AND last_used=?`, now.UnixNano(), info.ID, session.SessionTimestamp(info.LastUsed))
 	return err
 }
