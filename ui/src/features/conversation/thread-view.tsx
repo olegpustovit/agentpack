@@ -20,7 +20,7 @@ import { chunkAttachments, isOpenRequest } from "./reducer"
 import { ElicitationCard, PermissionCard } from "./request-cards"
 import { QuickLook } from "./quick-look"
 import { listDiffChanges } from "./diff-summary"
-import { failureReason, mcpCall, mcpIcon, McpTitle } from "./tool-title"
+import { failureReason, mcpCall, mcpIcon, McpTitle, rawOutputText } from "./tool-title"
 
 // The diff library loads with the first opened diff, not with the chat.
 const ToolDiffBody = lazy(() => import("./tool-diff").then((module) => ({ default: module.ToolDiffBody })))
@@ -218,10 +218,11 @@ function shortInput(input: unknown): string {
   return Object.entries(input).map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`).join(", ").replace(/\s+/g, " ")
 }
 
-// Shell output: the fixture's `output`, the adapter's raw string, or its text content without the console fence.
+// Shell output: the fixture's `output`, the adapter's rawOutput (string or Codex object), or text content without the console fence.
 export function toolOutput(tool: ToolPayload): string {
   if (tool.output) return tool.output.trim()
-  if (typeof tool.rawOutput === "string") return tool.rawOutput.trim()
+  const raw = rawOutputText(tool.rawOutput)
+  if (raw) return raw
   const text = (tool.content ?? []).flatMap((block) => block.type === "content" && block.content?.type === "text" && block.content.text ? [block.content.text] : []).join("\n")
   return text.replace(/^```[a-z]*\n?/, "").replace(/\n?```\s*$/, "").trim()
 }
@@ -258,27 +259,30 @@ function toolTitle(tool: ToolPayload, none = "Tool"): string {
   return text(tool.title) ?? text(meta) ?? text(input?.command) ?? text(input?.description) ?? tool.kind ?? none
 }
 
-// `/nix/…/bash -lc "cmd"` reads as `cmd`.
+// `/nix/…/bash -lc "cmd"` reads as `cmd`, only when the whole string is one shell -c command.
 export function unwrapShell(command: string): string {
-  const match = command.match(/^\S*\b(?:ba|z)?sh -l?c (["'])([\s\S]*)\1$/)
-  return match ? match[2]! : command
+  const dbl = command.match(/^\S*\b(?:ba|z)?sh -l?c "((?:\\.|[^"\\])*)"$/)
+  if (dbl) return dbl[1]!
+  const single = command.match(/^\S*\b(?:ba|z)?sh -l?c '([^']*)'$/)
+  return single ? single[1]! : command
 }
 
 // Inside a group, the group shows the images instead, so they stay visible while it is closed.
 function ToolRow({ item, fresh, machine, sessionId }: { item: ThreadItem; fresh?: boolean; machine?: string; sessionId?: string }) {
   const tool = item.data as ToolPayload
-  const shell = tool.kind === "execute" || tool.kind === "terminal"
+  const mcp = mcpCall(tool)
+  const shell = !mcp && (tool.kind === "execute" || tool.kind === "terminal")
   const command = shell ? (tool.command ?? (tool.rawInput as { command?: string } | undefined)?.command) : undefined
   const title = command ? unwrapShell(command) : toolTitle(tool)
   const status = tool.status ?? "pending"
-  const mcp = mcpCall(tool)
   const Icon = mcp ? mcpIcon(mcp) : toolIcon(tool.kind)
   const hasDiff = (tool.content ?? []).some((block) => block.type === "diff" && (block.oldText || block.newText))
   const output = toolOutput(tool)
+  const reason = mcp && status === "failed" ? failureReason(output, tool.rawOutput) : ""
   const terminalBody = shell ? output || (tool.kind === "terminal" ? command ?? "" : "") : ""
   const took = item.ts !== undefined && item.endTs !== undefined && item.endTs - item.ts >= 1000 ? formatDuration(item.endTs - item.ts) : ""
   const { open, onToggle } = useOpen(Boolean(fresh && (hasDiff || terminalBody)))
-  const input = open && !hasDiff && !terminalBody ? shortInput(tool.rawInput) : ""
+  const input = open && !hasDiff && !terminalBody ? shortInput(mcp ? mcp.args : tool.rawInput) : ""
   const row = (
     <details
       open={open}
@@ -289,8 +293,8 @@ function ToolRow({ item, fresh, machine, sessionId }: { item: ThreadItem; fresh?
     >
       <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
         <Icon aria-hidden className="size-3.5 shrink-0 text-(--fg2)" />
-        {mcp ? <McpTitle call={mcp} input={tool.rawInput} /> : <span className={`min-w-0 flex-1 truncate text-(--fg) ${shell ? "font-(family-name:--mono) text-(length:--fs-xs)" : ""}`}>{title}</span>}
-        {mcp && status === "failed" && <span className="max-w-[40%] shrink-0 truncate text-(--danger-word)">{failureReason(output)}</span>}
+        {mcp ? <McpTitle call={mcp} /> : <span className={`min-w-0 flex-1 truncate text-(--fg) ${shell ? "font-(family-name:--mono) text-(length:--fs-xs)" : ""}`}>{title}</span>}
+        {reason && <span className="max-w-[40%] shrink-0 truncate text-(--danger-word)">{reason}</span>}
         {took && <span className="shrink-0 tabular-nums text-(length:--fs-xs) text-(--fg3)">{took}</span>}
         {statusGlyph(status)}
         <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
@@ -318,29 +322,48 @@ function ToolRow({ item, fresh, machine, sessionId }: { item: ThreadItem; fresh?
 // Codex sends only bold step headlines ("**Checking logs**"); Claude sends a sentence or two.
 export function thoughtSteps(text: string): string[] {
   const lines = text.split("\n").map((line) => line.trim()).filter(Boolean)
-  if (lines.length && lines.every((line) => /^\*\*.+\*\*$/.test(line))) return lines.map((line) => line.slice(2, -2))
+  if (lines.length && lines.every((line) => /^\*\*(?:(?!\*\*).)+\*\*$/.test(line))) return lines.map((line) => line.slice(2, -2))
   return []
 }
+
+const listMarker = /^\s*(?:\d+[.)]|[-*+])\s+/
 
 // A thought's one-line gist: its latest headline, or its first sentence.
 export function thoughtGist(text: string): string {
   const steps = thoughtSteps(text)
   if (steps.length) return steps.at(-1)!
-  const plain = text.replace(/[*_`#>]/g, "").replace(/\s+/g, " ").trim()
+  const block: string[] = []
+  for (const raw of text.split("\n")) {
+    const line = raw.replace(/^\s*(?:>+\s*|#+\s*)/, "").trim()
+    if (!line) {
+      if (block.length) break
+      continue
+    }
+    if (block.length && listMarker.test(line)) break
+    block.push(block.length === 0 ? line.replace(listMarker, "") : line)
+  }
+  const plain = block.join(" ").replace(/[*_`]/g, "").replace(/\s+/g, " ").trim()
   return plain.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? plain
 }
 
 // Thoughts read inline as quiet text between steps: a burst of headlines is one wrapped line,
-// prose is clamped to two lines until clicked.
+// prose is clamped to two lines until toggled.
 function ThoughtBlock({ text }: { text: string }) {
   const [more, setMore] = useState(false)
   const steps = thoughtSteps(text)
   return (
     <div data-slot="thought-block" className="py-(--s1) text-(length:--fs-sm) leading-snug text-(--fg3)">
       {steps.length ? <p>{steps.join(" · ")}</p> : (
-        <div className={more ? "" : "line-clamp-2 cursor-default [&_p]:inline"} onClick={() => setMore(true)}>
-          <AgentMessageBody text={text} />
-        </div>
+        <button
+          type="button"
+          aria-expanded={more}
+          onClick={() => setMore((open) => !open)}
+          className="block w-full cursor-default rounded-(--r-xs) text-left focus-visible:outline-2 focus-visible:outline-(--accent) [&_.md]:text-(--fg3) [&_.md_blockquote]:text-(--fg3) [&_p]:text-(--fg3)"
+        >
+          <span className={cn("block", !more && "line-clamp-2 [&_p]:inline")}>
+            <AgentMessageBody text={text} />
+          </span>
+        </button>
       )}
     </div>
   )
@@ -356,39 +379,197 @@ function plural(n: number, word: string) {
 }
 
 const exploring = new Set(["read", "search", "list"])
-const lookCommands = /^(rg|grep|cat|ls|head|tail|find|wc|tree|stat|file|pwd|printenv|which|uname|command -v|sed -n|git (log|show|status|diff|branch|grep|blame)|go (version|doc|list))\b/
+const simpleLookCommands = /^(?:rg|grep|cat|ls|head|tail|wc|tree|stat|file|pwd|printenv|which|uname|command -v|git (?:log|show|status|diff|grep|blame)|go (?:version|doc|list))(?:\s|$)/
 
-// Reads, searches and listings, including shell commands that only look (no redirect, heredoc or sed -i).
-export function explores(tool: ToolPayload): boolean {
-  if (tool.status === "failed") return false
-  if (exploring.has(tool.kind ?? "")) return true
-  if (tool.kind !== "execute" && tool.kind !== "terminal") return false
-  const command = unwrapShell(tool.command ?? (tool.rawInput as { command?: string } | undefined)?.command ?? "")
-  // Quoted patterns may hold | or <; discarding stderr is still only looking.
-  const bare = command.replace(/'[^']*'|"[^"]*"/g, "Q").replace(/\s\d?>\s?\/dev\/null|\s2>&1/g, "")
-  if (!bare || /[<>]|\$\(/.test(bare)) return false
-  return bare.split(/\s*(?:;|&&|\|\||\|)\s*/).filter(Boolean).every((part) => lookCommands.test(part.replace(/^cd \S+$/, "pwd")))
+function splitShellParts(command: string): string[] | null {
+  const parts: string[] = []
+  let start = 0
+  let quote: "'" | '"' | "" = ""
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]!
+    if (quote === "'") {
+      if (ch === "'") quote = ""
+      continue
+    }
+    if (quote === '"') {
+      if (ch === "\\") { i++; continue }
+      if (ch === '"') quote = ""
+      continue
+    }
+    if (ch === "'" || ch === '"') { quote = ch; continue }
+    if (ch === "\\") { i++; continue }
+    if (ch === ";" || ch === "|") {
+      parts.push(command.slice(start, i))
+      if (ch === "|" && command[i + 1] === "|") i++
+      start = i + 1
+    } else if (ch === "&" && command[i + 1] === "&") {
+      parts.push(command.slice(start, i))
+      i++
+      start = i + 1
+    }
+  }
+  if (quote) return null
+  parts.push(command.slice(start))
+  return parts.map((part) => part.trim()).filter(Boolean)
 }
 
-// "9 commands · 4 reads · 2 files changed": what the run did, by verb.
+function shellWords(part: string): string[] {
+  const words: string[] = []
+  let current = ""
+  let inWord = false
+  let quote: "'" | '"' | "" = ""
+  for (let i = 0; i < part.length; i++) {
+    const ch = part[i]!
+    if (quote === "'") {
+      if (ch === "'") quote = ""
+      else current += ch
+      continue
+    }
+    if (quote === '"') {
+      if (ch === "\\" && i + 1 < part.length) { current += part[++i]!; continue }
+      if (ch === '"') quote = ""
+      else current += ch
+      continue
+    }
+    if (ch === "'" || ch === '"') { quote = ch; inWord = true; continue }
+    if (/\s/.test(ch)) {
+      if (inWord) { words.push(current); current = ""; inWord = false }
+      continue
+    }
+    if (ch === "\\" && i + 1 < part.length) { current += part[++i]!; inWord = true; continue }
+    current += ch
+    inWord = true
+  }
+  if (inWord) words.push(current)
+  return words
+}
+
+function isReadOnlyFind(words: string[]): boolean {
+  return !words.slice(1).some((arg) => /^-(?:delete|exec|ok|fprint|fls)/.test(arg))
+}
+
+function isReadOnlySed(words: string[]): boolean {
+  let quiet = false
+  let hasExpression = false
+  let endFlags = false
+  const scripts: string[] = []
+  for (let i = 1; i < words.length; i++) {
+    const arg = words[i]!
+    if (!endFlags && arg === "--") { endFlags = true; continue }
+    if (!endFlags && arg.startsWith("--")) {
+      if (arg === "--quiet" || arg === "--silent") { quiet = true; continue }
+      if (arg.startsWith("--in-place") || arg.startsWith("--file")) return false
+      if (arg === "--expression") {
+        hasExpression = true
+        if (++i >= words.length) return false
+        scripts.push(words[i]!)
+        continue
+      }
+      if (arg.startsWith("--expression=")) {
+        hasExpression = true
+        scripts.push(arg.slice("--expression=".length))
+        continue
+      }
+      if (arg !== "--regexp-extended" && arg !== "--posix") return false
+      continue
+    }
+    if (!endFlags && arg.startsWith("-") && arg.length > 1) {
+      for (let j = 1; j < arg.length; j++) {
+        const flag = arg[j]!
+        if (flag === "i" || flag === "f") return false
+        if (flag === "n") quiet = true
+        else if (flag === "e") {
+          hasExpression = true
+          const rest = arg.slice(j + 1)
+          if (rest) scripts.push(rest)
+          else if (++i < words.length) scripts.push(words[i]!)
+          else return false
+          break
+        } else if (flag !== "E" && flag !== "r") return false
+      }
+      continue
+    }
+    if (!hasExpression && scripts.length === 0) scripts.push(arg)
+  }
+  if (!quiet || scripts.length === 0) return false
+  return scripts.every((script) => !/[wWe]/.test(script.replace(/(?:^|[;,{\s!])\/(?:\\.|[^/\\])*\//g, "")))
+}
+
+function isReadOnlyGitBranch(words: string[]): boolean {
+  let listing = false
+  for (const arg of words.slice(2)) {
+    if (arg === "--list") { listing = true; continue }
+    if (/^-(?:[arv]+|-all|-remotes|-verbose|-show-current)$/.test(arg)) continue
+    if (listing && !arg.startsWith("-")) continue
+    return false
+  }
+  return true
+}
+
+function isLookPart(rawPart: string): boolean {
+  const bare = rawPart
+    .replace(/'[^']*'|"((?:\\.|[^"\\])*)"/g, "Q")
+    .replace(/\s\d?>\s?\/dev\/null(?=\s|$)/g, "")
+    .replace(/\s2>&1(?=\s|$)/g, "")
+    .trim()
+  if (!bare || /[<>]/.test(bare)) return false
+  if (/^cd \S+$/.test(bare) || simpleLookCommands.test(bare)) return true
+  const words = shellWords(rawPart.replace(/\s\d?>\s?\/dev\/null(?=\s|$)/g, "").replace(/\s2>&1(?=\s|$)/g, ""))
+  if (words[0] === "find") return isReadOnlyFind(words)
+  if (words[0] === "sed") return isReadOnlySed(words)
+  if (words[0] === "git" && words[1] === "branch") return isReadOnlyGitBranch(words)
+  return false
+}
+
+// Reads, searches and listings, including shell commands that only look (no redirect, mutation or substitution).
+export function explores(tool: ToolPayload): boolean {
+  if (tool.status === "failed") return false
+  if (mcpCall(tool)) return false
+  if (exploring.has(tool.kind ?? "")) return true
+  if (tool.kind !== "execute" && tool.kind !== "terminal") return false
+  const command = unwrapShell(tool.command ?? (tool.rawInput as { command?: string } | undefined)?.command ?? "").trim()
+  if (!command) return false
+  // Reject newlines, backticks, command substitution, and lone `&` BEFORE stripping quotes.
+  const withoutStdErr = command.replace(/\s2>&1(?=\s|$|[;|&])/g, "")
+  if (/[\r\n`]|\$\(/.test(withoutStdErr) || withoutStdErr.replace(/&&/g, "").includes("&")) return false
+  const parts = splitShellParts(command)
+  return !!parts && parts.length > 0 && parts.every(isLookPart)
+}
+
+// "9 commands · 4 reads · 2 files changed": what the run did, by verb (each tool bucketed once).
 export function activityCounts(tools: ThreadItem[]): string[] {
-  const count = (test: (tool: ToolPayload) => boolean) => tools.filter((item) => test(item.data as ToolPayload)).length
-  const files = new Set(listDiffChanges(tools).map((change) => change.path)).size
-  const commands = count((tool) => tool.kind === "execute" || tool.kind === "terminal")
-  const reads = count((tool) => tool.kind === "read")
-  const searches = count((tool) => tool.kind === "search" || tool.kind === "list")
+  let commands = 0
+  let reads = 0
+  let searches = 0
+  let other = 0
+  const changedFiles = new Set<string>()
   const servers = new Map<string, number>()
   for (const item of tools) {
-    const call = mcpCall(item.data as ToolPayload)
-    if (call) servers.set(call.server, (servers.get(call.server) ?? 0) + 1)
+    const tool = item.data as ToolPayload
+    const call = mcpCall(tool)
+    if (call) {
+      servers.set(call.server, (servers.get(call.server) ?? 0) + 1)
+      continue
+    }
+    if (tool.kind === "execute" || tool.kind === "terminal") {
+      commands++
+    } else if (tool.kind === "read") {
+      reads++
+    } else if (tool.kind === "search" || tool.kind === "list") {
+      searches++
+    } else if (tool.kind === "edit") {
+      const changes = listDiffChanges([item])
+      if (changes.length) for (const change of changes) changedFiles.add(change.path)
+      else other++
+    } else {
+      other++
+    }
   }
-  const mcp = [...servers.values()].reduce((sum, n) => sum + n, 0)
-  const other = tools.length - commands - reads - searches - mcp - count((tool) => tool.kind === "edit")
   return [
     ...(commands ? [plural(commands, "command")] : []),
     ...(reads ? [plural(reads, "read")] : []),
     ...(searches ? [plural(searches, "search").replace("searchs", "searches")] : []),
-    ...(files ? [`${plural(files, "file")} changed`] : []),
+    ...(changedFiles.size ? [`${plural(changedFiles.size, "file")} changed`] : []),
     ...[...servers].map(([server, n]) => `${n} ${server} ${n === 1 ? "call" : "calls"}`),
     ...(other > 0 ? [plural(other, "tool")] : []),
   ]
@@ -415,7 +596,7 @@ function ExploreRow({ tools, fresh }: { tools: ThreadItem[]; fresh: (item: Threa
       <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
         <BookOpen aria-hidden className="size-3.5 shrink-0 text-(--fg2)" />
         <span className="shrink-0 text-(--fg)">Explored</span>
-        <span className="min-w-0 flex-1 truncate text-(--fg2)">{names.join(", ")}</span>
+        <span className="min-w-0 flex-1 truncate text-(--fg2)"><span className="sr-only"> </span>{names.join(", ")}</span>
         <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
       </summary>
       {open && <div className="flex flex-col pl-(--s5)">{tools.map((item, index) => <ToolRow key={item.seq ?? index} item={item} fresh={fresh(item)} />)}</div>}
@@ -438,23 +619,25 @@ function ActivityGroup({ items, live, end, fresh, machine, sessionId }: { items:
   const counts = activityCounts(tools)
   const title = gist || (tools.length ? "Worked" : "Thought")
   const detail = [...counts, ...(span >= 1000 ? [clock(span)] : [])].join(" · ")
-  // Runs of exploration fold together; everything else keeps its own row.
+  // Runs of exploration fold together; built only while open.
   const rows: (ThreadItem | ThreadItem[])[] = []
-  for (const item of items) {
-    const looks = item.kind === "tool" && explores(item.data as ToolPayload)
-    const previous = rows.at(-1)
-    if (looks && Array.isArray(previous)) previous.push(item)
-    else rows.push(looks ? [item] : item)
+  if (open) {
+    for (const item of items) {
+      const looks = item.kind === "tool" && explores(item.data as ToolPayload)
+      const previous = rows.at(-1)
+      if (looks && Array.isArray(previous)) previous.push(item)
+      else rows.push(looks ? [item] : item)
+    }
   }
   return (
     <>
       <details data-slot="tool-group" open={open} onToggle={onToggle} className="text-(length:--fs-sm)">
         <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
           <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
-          <span className={cn("min-w-0 shrink truncate text-(--fg)", live && "shimmer")}>{title}</span>
-          {detail && <span className="min-w-0 flex-1 truncate tabular-nums text-(--fg3)">{detail}</span>}
+          <span className={cn("min-w-0 shrink truncate", live ? "shimmer" : "text-(--fg)")}>{title}</span>
+          {detail && <span className="min-w-0 flex-1 truncate tabular-nums text-(--fg3)"><span className="sr-only"> · </span>{detail}</span>}
           {!detail && <span className="flex-1" />}
-          {failed > 0 && <span className="shrink-0 text-(--danger-word)">{failed} failed</span>}
+          {failed > 0 && <span className="shrink-0 text-(--danger-word)"><span className="sr-only"> · </span>{failed} failed</span>}
         </summary>
         {open && (
           <div className="ml-(--s2) flex flex-col border-l-[0.5px] border-(--sep) pl-(--s4)">
@@ -701,7 +884,7 @@ function groupItems(items: ThreadItem[], subagents: Record<string, Subagent>): E
   let batch: ThreadItem[] = []
   const flush = () => {
     if (batch.length === 0) return
-    out.push(batch.length === 1 ? batch[0]! : [...batch])
+    out.push(batch.length === 1 && batch[0]!.kind === "tool" ? batch[0]! : [...batch])
     batch = []
   }
   const card = (subagent: Subagent, item: ThreadItem) => {
@@ -918,14 +1101,17 @@ export function ThreadView({
     return working ? <LiveLine items={items} subagents={subagents} turnStarted={turnStarted} /> : <p className="py-(--s7) text-center text-(length:--fs-sm) text-(--fg3)">No messages yet.</p>
   }
 
-  // Each item's successor timestamp: a run of work lasted until then.
-  const nextTs = new Map<ThreadItem, number | undefined>()
-  for (let i = 0; i < items.length; i++) nextTs.set(items[i]!, items[i + 1]?.ts)
+  // When an agent reply follows a run of work, the run lasted until that reply began.
+  const nextReplyTs = new Map<ThreadItem, number | undefined>()
+  for (let i = 0; i < items.length - 1; i++) {
+    const next = items[i + 1]!
+    if (next.kind === "agent_message_chunk") nextReplyTs.set(items[i]!, next.ts)
+  }
   const renderEntry = (entry: (typeof entries)[number], index: number) => {
     if (Array.isArray(entry)) {
       return (
         <div key={entry[0]!.seq ?? index} className={cn("thread-item", fresh(entry.at(-1)!) && "tool-enter")}>
-          <ActivityGroup items={entry} live={working && index === entries.length - 1} end={nextTs.get(entry.at(-1)!)} fresh={fresh} machine={machine} sessionId={sessionId} />
+          <ActivityGroup items={entry} live={working && index === entries.length - 1} end={nextReplyTs.get(entry.at(-1)!)} fresh={fresh} machine={machine} sessionId={sessionId} />
         </div>
       )
     }

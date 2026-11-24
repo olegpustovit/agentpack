@@ -120,7 +120,7 @@ describe("conversation message actions", () => {
       sessionId: "s",
     })))
     const group = container.querySelector('[data-slot="tool-group"]')!
-    expect(group.querySelector("summary")!.textContent).toBe("Checking logs2 reads · 1 file changed · 5s1 failed")
+    expect(group.querySelector("summary")!.textContent).toBe("Checking logs · 2 reads · 1 file changed · 5s · 1 failed")
     expect(group.hasAttribute("open")).toBe(false)
     expect(container.querySelectorAll('[data-slot="tool-group"]')).toHaveLength(1)
   })
