@@ -48,7 +48,7 @@ export function useSessionCommands(onArchivePending?: (session: ListedSession, p
       const path: `/api/${string}` = `/api/sessions/${encodeURIComponent(session.id)}`
       const options = { machine: session.machine, idempotencyKey: id }
       // The row may be stale. The archive endpoint checks that the agent is stopped.
-      if (session.state.running) await api(`${path}/stop`, { ...options, method: "POST" }).catch(() => undefined)
+      if (session.state.running && !session.offline) await api(`${path}/stop`, { ...options, method: "POST" }).catch(() => undefined)
       return api(path, { ...options, method: "PATCH", body: { hidden: true } })
     },
     apply: (session) => {

@@ -26,8 +26,9 @@ export function sessionRules(session: ListedSession) {
     stop: !offline && session.state.running,
     reconnect: !offline && !nonInteractive,
     projectSettings: !session.offline && !pending,
+    // Archive writes the replicated row, so an offline machine's sessions can go too.
     // A starting chat's agent is on its way up; Stop it once it runs.
-    archive: !offline && !(session.conversation_state === "starting" && !session.ended_at),
+    archive: !session.archived_at && !pending && !(session.conversation_state === "starting" && !session.ended_at),
   }
 }
 

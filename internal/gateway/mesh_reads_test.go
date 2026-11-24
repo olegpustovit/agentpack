@@ -109,6 +109,13 @@ func TestMeshReadsSurviveOwnerShutdownAndRefuseWrites(t *testing.T) {
 	if err := target.auth.store.Reader.QueryRow("SELECT name FROM sessions WHERE id=?", info.ID).Scan(&name); err != nil || name != "Renamed offline" {
 		t.Fatalf("rename was not saved: %q %v", name, err)
 	}
+	if w := request("PATCH", "/api/sessions/session-remote?node=remote", `{"hidden":true}`); w.Code != 200 {
+		t.Fatalf("offline archive: %d %s", w.Code, w.Body.String())
+	}
+	var hidden bool
+	if err := target.auth.store.Reader.QueryRow("SELECT hidden FROM sessions WHERE id=?", info.ID).Scan(&hidden); err != nil || !hidden {
+		t.Fatalf("archive was not saved: %v %v", hidden, err)
+	}
 }
 
 func TestMeshLivenessExpiresAndLocalFoldersKeepFilesystemChecks(t *testing.T) {
