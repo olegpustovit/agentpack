@@ -37,12 +37,18 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
   const { machine } = row
   const directory = projectDirectory(row)
   const queryClient = useQueryClient()
-  const projects = useQuery(selectedProjectQuery(machine, directory))
+  const projects = useQuery(projectsQuery(machine))
+  const summary = projects.data?.find((item) => item.directory === directory)
+  const details = useQuery({
+    ...selectedProjectQuery(machine, directory),
+    enabled: summary?.details_deferred === true,
+  })
+  const active = summary?.details_deferred ? details : projects
   const refreshProjects = () => Promise.all([
     queryClient.invalidateQueries({ queryKey: projectsQuery(machine).queryKey }),
     queryClient.invalidateQueries({ queryKey: selectedProjectQuery(machine, directory).queryKey }),
   ])
-  const project = projects.data
+  const project = summary?.details_deferred ? details.data : summary
   const connections = useQuery(connectionsQuery(false))
   const credentials = connections.data?.credentials ?? []
   const library = useLibrary()
@@ -186,9 +192,9 @@ export function ProjectSettings({ row, onDone }: { row: ListedSession; onDone: (
       <SheetTitle>Project settings</SheetTitle>
       <SheetDescription className="break-all">{row.definition_root || directory} · {row.machineName}</SheetDescription>
       <div className="min-h-0 space-y-(--s5) overflow-y-auto">
-        {projects.isPending && <p role="status">Loading project…</p>}
-        {projects.isError && <FieldError>{errorText(projects.error)}</FieldError>}
-        {!projects.isPending && !projects.isError && !project && <FieldError>Project folder unavailable.</FieldError>}
+        {active.isPending && <p role="status">Loading project…</p>}
+        {active.isError && <FieldError>{errorText(active.error)}</FieldError>}
+        {!active.isPending && !active.isError && !project && <FieldError>Project folder unavailable.</FieldError>}
         {project && !project.available && <FieldError>{project.unavailable_reason || "Project folder unavailable."}</FieldError>}
         {project?.error && <FieldError>{project.error}</FieldError>}
         {project?.available && !project.error && (
