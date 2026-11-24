@@ -106,11 +106,12 @@ describe("conversation message actions", () => {
     expect(open).toHaveBeenCalledWith(from)
   })
 
-  it("groups a turn's tools into one summary, opened by a failure", () => {
+  it("groups a run of thoughts and tools into one row titled by the latest thought", () => {
     const tool = (seq: number, ts: number, status: string, extra = {}): ThreadItem => ({ kind: "tool", seq, ts, endTs: ts + 1000, data: { title: `t${seq}`, kind: "read", status, ...extra } })
     act(() => root.render(createElement(ThreadView, {
       items: [
         tool(1, 0, "completed"),
+        { kind: "agent_thought_chunk", seq: 10, ts: 1500, data: { text: { text: "**Checking logs**" } } },
         tool(2, 2000, "failed"),
         tool(3, 4000, "completed", { kind: "edit", content: [{ type: "diff", path: "a.go", oldText: "x", newText: "y" }] }),
         { kind: "agent_message_chunk", seq: 4, data: { text: { text: "Done" } } },
@@ -119,8 +120,8 @@ describe("conversation message actions", () => {
       sessionId: "s",
     })))
     const group = container.querySelector('[data-slot="tool-group"]')!
-    expect(group.querySelector("summary")!.textContent).toBe("Worked for 5 s · 3 tools · 1 file changed1 failed")
-    expect(group.hasAttribute("open")).toBe(true)
+    expect(group.querySelector("summary")!.textContent).toBe("Checking logs2 reads · 1 file changed · 5s1 failed")
+    expect(group.hasAttribute("open")).toBe(false)
     expect(container.querySelectorAll('[data-slot="tool-group"]')).toHaveLength(1)
   })
 

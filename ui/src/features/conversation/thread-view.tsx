@@ -20,6 +20,7 @@ import { chunkAttachments, isOpenRequest } from "./reducer"
 import { ElicitationCard, PermissionCard } from "./request-cards"
 import { QuickLook } from "./quick-look"
 import { listDiffChanges } from "./diff-summary"
+import { failureReason, mcpCall, mcpIcon, McpTitle } from "./tool-title"
 
 // The diff library loads with the first opened diff, not with the chat.
 const ToolDiffBody = lazy(() => import("./tool-diff").then((module) => ({ default: module.ToolDiffBody })))
@@ -257,14 +258,21 @@ function toolTitle(tool: ToolPayload, none = "Tool"): string {
   return text(tool.title) ?? text(meta) ?? text(input?.command) ?? text(input?.description) ?? tool.kind ?? none
 }
 
+// `/nix/…/bash -lc "cmd"` reads as `cmd`.
+export function unwrapShell(command: string): string {
+  const match = command.match(/^\S*\b(?:ba|z)?sh -l?c (["'])([\s\S]*)\1$/)
+  return match ? match[2]! : command
+}
+
 // Inside a group, the group shows the images instead, so they stay visible while it is closed.
 function ToolRow({ item, fresh, machine, sessionId }: { item: ThreadItem; fresh?: boolean; machine?: string; sessionId?: string }) {
   const tool = item.data as ToolPayload
   const shell = tool.kind === "execute" || tool.kind === "terminal"
   const command = shell ? (tool.command ?? (tool.rawInput as { command?: string } | undefined)?.command) : undefined
-  const title = command ?? toolTitle(tool)
+  const title = command ? unwrapShell(command) : toolTitle(tool)
   const status = tool.status ?? "pending"
-  const Icon = toolIcon(tool.kind)
+  const mcp = mcpCall(tool)
+  const Icon = mcp ? mcpIcon(mcp) : toolIcon(tool.kind)
   const hasDiff = (tool.content ?? []).some((block) => block.type === "diff" && (block.oldText || block.newText))
   const output = toolOutput(tool)
   const terminalBody = shell ? output || (tool.kind === "terminal" ? command ?? "" : "") : ""
@@ -281,7 +289,8 @@ function ToolRow({ item, fresh, machine, sessionId }: { item: ThreadItem; fresh?
     >
       <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
         <Icon aria-hidden className="size-3.5 shrink-0 text-(--fg2)" />
-        <span className={`min-w-0 flex-1 truncate text-(--fg) ${shell ? "font-(family-name:--mono) text-(length:--fs-xs)" : ""}`}>{title}</span>
+        {mcp ? <McpTitle call={mcp} input={tool.rawInput} /> : <span className={`min-w-0 flex-1 truncate text-(--fg) ${shell ? "font-(family-name:--mono) text-(length:--fs-xs)" : ""}`}>{title}</span>}
+        {mcp && status === "failed" && <span className="max-w-[40%] shrink-0 truncate text-(--danger-word)">{failureReason(output)}</span>}
         {took && <span className="shrink-0 tabular-nums text-(length:--fs-xs) text-(--fg3)">{took}</span>}
         {statusGlyph(status)}
         <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
@@ -306,22 +315,34 @@ function ToolRow({ item, fresh, machine, sessionId }: { item: ThreadItem; fresh?
   )
 }
 
-// Thoughts are markdown like replies, dimmed, and rendered only once opened.
-function ThoughtBlock({ text, ms }: { text: string; ms?: number }) {
-  const { open, onToggle } = useOpen(false)
+// Codex sends only bold step headlines ("**Checking logs**"); Claude sends a sentence or two.
+export function thoughtSteps(text: string): string[] {
+  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean)
+  if (lines.length && lines.every((line) => /^\*\*.+\*\*$/.test(line))) return lines.map((line) => line.slice(2, -2))
+  return []
+}
+
+// A thought's one-line gist: its latest headline, or its first sentence.
+export function thoughtGist(text: string): string {
+  const steps = thoughtSteps(text)
+  if (steps.length) return steps.at(-1)!
+  const plain = text.replace(/[*_`#>]/g, "").replace(/\s+/g, " ").trim()
+  return plain.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? plain
+}
+
+// Thoughts read inline as quiet text between steps: a burst of headlines is one wrapped line,
+// prose is clamped to two lines until clicked.
+function ThoughtBlock({ text }: { text: string }) {
+  const [more, setMore] = useState(false)
+  const steps = thoughtSteps(text)
   return (
-    <details data-slot="thought-block" open={open} onToggle={onToggle} className="text-(length:--fs-sm)">
-      <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) text-(--fg2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
-        <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
-        <Sparkles aria-hidden className="size-3.5 shrink-0" />
-        {ms !== undefined && ms >= 1000 ? `Thought for ${clock(ms)}` : "Thought"}
-      </summary>
-      {open && (
-        <div className="ml-(--s3) border-l-[0.5px] border-(--sep) py-(--s2) pl-(--s4) opacity-80">
+    <div data-slot="thought-block" className="py-(--s1) text-(length:--fs-sm) leading-snug text-(--fg3)">
+      {steps.length ? <p>{steps.join(" · ")}</p> : (
+        <div className={more ? "" : "line-clamp-2 cursor-default [&_p]:inline"} onClick={() => setMore(true)}>
           <AgentMessageBody text={text} />
         </div>
       )}
-    </details>
+    </div>
   )
 }
 
@@ -334,31 +355,115 @@ function plural(n: number, word: string) {
   return `${n} ${word}${n === 1 ? "" : "s"}`
 }
 
-function ToolGroup({ tools, fresh, machine, sessionId }: { tools: ThreadItem[]; fresh: (item: ThreadItem) => boolean; machine: string; sessionId: string }) {
-  const failed = tools.filter((item) => (item.data as ToolPayload).status === "failed").length
+const exploring = new Set(["read", "search", "list"])
+const lookCommands = /^(rg|grep|cat|ls|head|tail|find|wc|tree|stat|file|pwd|printenv|which|uname|command -v|sed -n|git (log|show|status|diff|branch|grep|blame)|go (version|doc|list))\b/
+
+// Reads, searches and listings, including shell commands that only look (no redirect, heredoc or sed -i).
+export function explores(tool: ToolPayload): boolean {
+  if (tool.status === "failed") return false
+  if (exploring.has(tool.kind ?? "")) return true
+  if (tool.kind !== "execute" && tool.kind !== "terminal") return false
+  const command = unwrapShell(tool.command ?? (tool.rawInput as { command?: string } | undefined)?.command ?? "")
+  // Quoted patterns may hold | or <; discarding stderr is still only looking.
+  const bare = command.replace(/'[^']*'|"[^"]*"/g, "Q").replace(/\s\d?>\s?\/dev\/null|\s2>&1/g, "")
+  if (!bare || /[<>]|\$\(/.test(bare)) return false
+  return bare.split(/\s*(?:;|&&|\|\||\|)\s*/).filter(Boolean).every((part) => lookCommands.test(part.replace(/^cd \S+$/, "pwd")))
+}
+
+// "9 commands · 4 reads · 2 files changed": what the run did, by verb.
+export function activityCounts(tools: ThreadItem[]): string[] {
+  const count = (test: (tool: ToolPayload) => boolean) => tools.filter((item) => test(item.data as ToolPayload)).length
   const files = new Set(listDiffChanges(tools).map((change) => change.path)).size
-  // ts is only known for streamed items; omit the time rather than guess.
-  const stamps = tools.flatMap((item) => item.ts === undefined ? [] : [item.ts, item.endTs ?? item.ts])
-  const span = stamps.length ? Math.max(...stamps) - Math.min(...stamps) : 0
-  const { open, onToggle } = useOpen(failed > 0)
-  const parts = [
-    span >= 1000 ? `Worked for ${formatDuration(span)}` : "Worked",
-    plural(tools.length, "tool"),
+  const commands = count((tool) => tool.kind === "execute" || tool.kind === "terminal")
+  const reads = count((tool) => tool.kind === "read")
+  const searches = count((tool) => tool.kind === "search" || tool.kind === "list")
+  const servers = new Map<string, number>()
+  for (const item of tools) {
+    const call = mcpCall(item.data as ToolPayload)
+    if (call) servers.set(call.server, (servers.get(call.server) ?? 0) + 1)
+  }
+  const mcp = [...servers.values()].reduce((sum, n) => sum + n, 0)
+  const other = tools.length - commands - reads - searches - mcp - count((tool) => tool.kind === "edit")
+  return [
+    ...(commands ? [plural(commands, "command")] : []),
+    ...(reads ? [plural(reads, "read")] : []),
+    ...(searches ? [plural(searches, "search").replace("searchs", "searches")] : []),
     ...(files ? [`${plural(files, "file")} changed`] : []),
+    ...[...servers].map(([server, n]) => `${n} ${server} ${n === 1 ? "call" : "calls"}`),
+    ...(other > 0 ? [plural(other, "tool")] : []),
   ]
+}
+
+function base(path: string) {
+  return path.split("/").filter(Boolean).at(-1) ?? path
+}
+
+// Two or more reads, searches and listings in a row fold into one line naming what was looked at.
+function ExploreRow({ tools, fresh }: { tools: ThreadItem[]; fresh: (item: ThreadItem) => boolean }) {
+  const { open, onToggle } = useOpen(false)
+  const names = [...new Set(tools.map((item) => {
+    const tool = item.data as ToolPayload
+    const path = toolPath(tool.rawInput)
+    if (path) return base(path)
+    const command = tool.kind === "execute" || tool.kind === "terminal" ? unwrapShell(tool.command ?? (tool.rawInput as { command?: string } | undefined)?.command ?? "") : ""
+    const files = command.match(/[\w./-]+\.[a-z]{1,5}\b/g)
+    if (command) return files ? files.map(base).join(", ") : command.split(" ")[0]!
+    return toolTitle(tool).replace(/^(Read file|Search for|List files in) /i, "").replace(/^'|'$/g, "")
+  }))]
+  return (
+    <details data-slot="explore-row" open={open} onToggle={onToggle} className="text-(length:--fs-sm)">
+      <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
+        <BookOpen aria-hidden className="size-3.5 shrink-0 text-(--fg2)" />
+        <span className="shrink-0 text-(--fg)">Explored</span>
+        <span className="min-w-0 flex-1 truncate text-(--fg2)">{names.join(", ")}</span>
+        <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
+      </summary>
+      {open && <div className="flex flex-col pl-(--s5)">{tools.map((item, index) => <ToolRow key={item.seq ?? index} item={item} fresh={fresh(item)} />)}</div>}
+    </details>
+  )
+}
+
+// One row for everything the agent did between two messages: its latest thought as the title,
+// what it ran as the detail. Opened, it reads top to bottom as thoughts and steps in order.
+function ActivityGroup({ items, live, end, fresh, machine, sessionId }: { items: ThreadItem[]; live?: boolean; end?: number; fresh: (item: ThreadItem) => boolean; machine: string; sessionId: string }) {
+  const tools = items.filter((item) => item.kind === "tool")
+  const thoughts = items.filter((item) => item.kind === "agent_thought_chunk")
+  const failed = tools.filter((item) => (item.data as ToolPayload).status === "failed").length
+  // ts is only known for streamed items; omit the time rather than guess.
+  const stamps = items.flatMap((item) => item.ts === undefined ? [] : [item.ts, item.endTs ?? item.ts])
+  if (end !== undefined && stamps.length) stamps.push(end)
+  const span = stamps.length ? Math.max(...stamps) - Math.min(...stamps) : 0
+  const { open, onToggle } = useOpen(false)
+  const gist = thoughts.length ? thoughtGist(chunkText(thoughts.at(-1)!.data)) : ""
+  const counts = activityCounts(tools)
+  const title = gist || (tools.length ? "Worked" : "Thought")
+  const detail = [...counts, ...(span >= 1000 ? [clock(span)] : [])].join(" · ")
+  // Runs of exploration fold together; everything else keeps its own row.
+  const rows: (ThreadItem | ThreadItem[])[] = []
+  for (const item of items) {
+    const looks = item.kind === "tool" && explores(item.data as ToolPayload)
+    const previous = rows.at(-1)
+    if (looks && Array.isArray(previous)) previous.push(item)
+    else rows.push(looks ? [item] : item)
+  }
   return (
     <>
       <details data-slot="tool-group" open={open} onToggle={onToggle} className="text-(length:--fs-sm)">
-      <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
-        <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
-        <span className="min-w-0 flex-1 truncate text-(--fg2)">{parts.join(" · ")}</span>
-        {failed > 0 && <span className="shrink-0 text-(--danger-word)">{failed} failed</span>}
-      </summary>
-      {open && (
-        <div className="flex flex-col border-l-[0.5px] border-(--sep) pl-(--s4)">
-          {tools.map((item, index) => <ToolRow key={item.seq ?? index} item={item} fresh={fresh(item)} />)}
-        </div>
-      )}
+        <summary className="-mx-(--s2) flex min-h-(--row-h) cursor-default list-none items-center gap-(--s3) rounded-(--r-row) px-(--s2) marker:content-none hover:bg-(--hover) [&::-webkit-details-marker]:hidden">
+          <ChevronRight aria-hidden className="size-3.5 shrink-0 text-(--fg3) in-open:rotate-90" />
+          <span className={cn("min-w-0 shrink truncate text-(--fg)", live && "shimmer")}>{title}</span>
+          {detail && <span className="min-w-0 flex-1 truncate tabular-nums text-(--fg3)">{detail}</span>}
+          {!detail && <span className="flex-1" />}
+          {failed > 0 && <span className="shrink-0 text-(--danger-word)">{failed} failed</span>}
+        </summary>
+        {open && (
+          <div className="ml-(--s2) flex flex-col border-l-[0.5px] border-(--sep) pl-(--s4)">
+            {rows.map((row, index) => Array.isArray(row)
+              ? row.length > 1 ? <ExploreRow key={row[0]!.seq ?? index} tools={row} fresh={fresh} /> : <ToolRow key={row[0]!.seq ?? index} item={row[0]!} fresh={fresh(row[0]!)} />
+              : row.kind === "agent_thought_chunk" ? <ThoughtBlock key={row.seq ?? index} text={chunkText(row.data)} />
+              : <ToolRow key={row.seq ?? index} item={row} fresh={fresh(row)} />)}
+          </div>
+        )}
       </details>
       <Attachments slot="tool-attachments" items={tools.flatMap((item) => toolAttachments(item.data as ToolPayload))} machine={machine} sessionId={sessionId} />
     </>
@@ -491,7 +596,6 @@ function ThreadItemView({
   onRetry,
   onSignedIn,
   onOpenChat,
-  next,
   last,
   streaming,
   fresh,
@@ -507,8 +611,6 @@ function ThreadItemView({
   onRetry?: () => void
   onSignedIn?: () => void
   onOpenChat?: (from: PromptFrom) => void
-  /** ts of the item after this one; a thought lasted until then. */
-  next?: number
   last?: boolean
   streaming?: boolean
   fresh?: boolean
@@ -531,7 +633,7 @@ function ThreadItemView({
     case "rich_block":
       return <RichCard data={item.data} machine={machine} sessionId={sessionId} />
     case "agent_thought_chunk":
-      return <ThoughtBlock text={chunkText(item.data)} ms={item.ts !== undefined && next !== undefined ? next - item.ts : undefined} />
+      return <ThoughtBlock text={chunkText(item.data)} />
     case "tool":
       return <ToolRow item={item} fresh={fresh} machine={machine} sessionId={sessionId} />
     case "permission":
@@ -588,7 +690,7 @@ function GoalLine({ goal }: { goal: GoalState }) {
 
 type Entry = ThreadItem | ThreadItem[] | { cards: { subagent: Subagent; item: ThreadItem }[] }
 
-// One work log per run of tool calls; user, agent, thought, permission and compaction items end the
+// One work log per run of thoughts and tool calls; user, agent, permission and compaction items end the
 // run. A tool that spawned a subagent (and a subagent seen before its tool) becomes a card, and
 // cards side by side share one "in parallel" heading.
 function groupItems(items: ThreadItem[], subagents: Record<string, Subagent>): Entry[] {
@@ -609,7 +711,8 @@ function groupItems(items: ThreadItem[], subagents: Record<string, Subagent>): E
     else out.push({ cards: [{ subagent, item }] })
   }
   for (const item of items) {
-    if (item.kind === "tool") {
+    if (item.kind === "agent_thought_chunk") batch.push(item)
+    else if (item.kind === "tool") {
       const spawned = byTool.get((item.data as ToolPayload).toolCallId ?? "")
       if (spawned) card(spawned, item)
       else batch.push(item)
@@ -815,14 +918,14 @@ export function ThreadView({
     return working ? <LiveLine items={items} subagents={subagents} turnStarted={turnStarted} /> : <p className="py-(--s7) text-center text-(length:--fs-sm) text-(--fg3)">No messages yet.</p>
   }
 
-  // Each item's successor timestamp, found once instead of searching the list per item.
+  // Each item's successor timestamp: a run of work lasted until then.
   const nextTs = new Map<ThreadItem, number | undefined>()
   for (let i = 0; i < items.length; i++) nextTs.set(items[i]!, items[i + 1]?.ts)
   const renderEntry = (entry: (typeof entries)[number], index: number) => {
     if (Array.isArray(entry)) {
       return (
         <div key={entry[0]!.seq ?? index} className={cn("thread-item", fresh(entry.at(-1)!) && "tool-enter")}>
-          <ToolGroup tools={entry} fresh={fresh} machine={machine} sessionId={sessionId} />
+          <ActivityGroup items={entry} live={working && index === entries.length - 1} end={nextTs.get(entry.at(-1)!)} fresh={fresh} machine={machine} sessionId={sessionId} />
         </div>
       )
     }
@@ -874,7 +977,6 @@ export function ThreadView({
           onRetry={isLastAgent ? retry : undefined}
           onSignedIn={entry === signIn ? onSignedIn : undefined}
           onOpenChat={onOpenChat}
-          next={nextTs.get(entry)}
           last={isLastAgent && !working}
           streaming={isLastAgent && working}
           fresh={fresh(entry)}
