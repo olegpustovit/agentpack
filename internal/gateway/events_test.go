@@ -408,3 +408,40 @@ func TestSessionTableChangesEmitSessionsWithoutWorkerPoll(t *testing.T) {
 		t.Fatalf("sessions event = %+v", got)
 	}
 }
+
+// A peer's relay runs this machine's pollers but never its own relays, so two gateways with no
+// browser open cannot keep each other's loops alive.
+func TestPeerSubscriberDoesNotRelay(t *testing.T) {
+	polled, listed := make(chan struct{}, 1), make(chan struct{}, 1)
+	topic := eventTopic{name: "sessions", interval: time.Hour, digest: func(context.Context) (string, error) {
+		select {
+		case polled <- struct{}{}:
+		default:
+		}
+		return "steady", nil
+	}}
+	g := eventsGateway([]eventTopic{topic}, func(context.Context) ([]mesh.Node, error) {
+		select {
+		case listed <- struct{}{}:
+		default:
+		}
+		return nil, nil
+	}, nil)
+	_, unsubscribePeer := g.subscribeEvents(peerSubscriber)
+	defer unsubscribePeer()
+	<-polled
+	g.events.mu.Lock()
+	relaying := g.events.cancelNodes != nil
+	g.events.mu.Unlock()
+	if relaying {
+		t.Fatal("a peer subscriber started peer relays")
+	}
+	_, unsubscribeBrowser := g.subscribe()
+	<-listed
+	unsubscribeBrowser()
+	g.events.mu.Lock()
+	defer g.events.mu.Unlock()
+	if g.events.cancelNodes != nil || g.events.cancel == nil {
+		t.Fatalf("browser leaving must stop relays only: relays=%v pollers=%v", g.events.cancelNodes != nil, g.events.cancel != nil)
+	}
+}

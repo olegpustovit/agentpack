@@ -153,7 +153,7 @@ func (g *Gateway) registerAgents(mux routeRegistrar) {
 			done.End()
 			g.agents.forget()
 			if step.State == "done" {
-				g.syncAgentCredentials(context.Background()) // share the new sign-in now, not at the next tick
+				g.syncAgentCredentials(context.Background(), name) // share the new sign-in now, not at the next tick
 				g.reloadSignedOutChats(context.Background(), name)
 			}
 		})

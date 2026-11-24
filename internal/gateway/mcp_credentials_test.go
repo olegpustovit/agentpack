@@ -490,3 +490,33 @@ func TestMCPBridgeReconnectsAfterLogin(t *testing.T) {
 		t.Fatalf("tool call after login: %v", message)
 	}
 }
+
+// A refresh that finishes after a new login was saved must not put the old grant's token back.
+func TestMCPRefreshLosesToNewerLogin(t *testing.T) {
+	g, _ := startCredentialGateway(t)
+	ctx := context.Background()
+	login := func(generation int64, access string) string {
+		t.Helper()
+		id, err := g.saveMCPCredential(ctx, mcpCredential{Kind: mcp.CredentialOAuth, Match: "https://x.example/mcp", Label: "X", Account: testBrowserEmail,
+			State: mcpCredentialState{Generation: generation, Status: mcpStatusConnected, Token: &mcpToken{AccessToken: access, RefreshToken: "rt", IssuedAt: time.Now()}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	id := login(1, "old")
+	loaded, err := g.loadMCPCredential(ctx, id) // the refresh starts from this
+	if err != nil {
+		t.Fatal(err)
+	}
+	login(1, "new") // the user logs in again meanwhile; SaveMCP raises the generation
+	stale := loaded.State
+	stale.Generation++
+	stale.Token = &mcpToken{AccessToken: "refreshed-old", RefreshToken: "rt", IssuedAt: time.Now()}
+	if err := g.writeMCPState(ctx, id, stale); err != nil {
+		t.Fatal(err)
+	}
+	if current, _ := g.loadMCPCredential(ctx, id); current.State.Token == nil || current.State.Token.AccessToken != "new" {
+		t.Fatalf("stale refresh overwrote the new login: %+v", current.State.Token)
+	}
+}

@@ -94,7 +94,13 @@ func observeHTTP(mux *http.ServeMux, next http.Handler, sink obs.Sink, metadata 
 		}
 		metrics := &httpObservation{}
 		observed := metrics.writer(w)
-		defer event.End()
+		defer func() {
+			// Peers poll this every few seconds; the puller records every pull that changed something.
+			if pattern == "GET /api/sync/changes" && event.Level != "error" && event.Status < 400 {
+				return
+			}
+			event.End()
+		}()
 		defer func() {
 			problem := recover()
 			abort := false

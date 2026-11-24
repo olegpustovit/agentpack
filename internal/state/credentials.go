@@ -81,8 +81,8 @@ func (c Credentials) MCPForAccount(ctx context.Context, account string) ([]MCPCr
 	return credentials, rows.Err()
 }
 
-// SetMCPState replaces a connection's state. When generation is not nil (a needs-login mark) a
-// state written by a newer login wins and the call changes nothing. It reports whether a row changed.
+// SetMCPState replaces a connection's state. When generation is not nil, a stored state with a
+// higher generation (a newer login) wins and the call changes nothing. It reports whether a row changed.
 func (c Credentials) SetMCPState(ctx context.Context, id, state string, generation *int64) (bool, error) {
 	query, args := "UPDATE mcp_credentials SET state=? WHERE id=?", []any{state, id}
 	if generation != nil {

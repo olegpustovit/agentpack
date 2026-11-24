@@ -39,7 +39,7 @@ func (g *Gateway) runAgentCredentials(ctx context.Context, interval time.Duratio
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		g.syncAgentCredentials(ctx)
+		g.syncAgentCredentials(ctx, "")
 		select {
 		case <-ctx.Done():
 			return
@@ -48,7 +48,9 @@ func (g *Gateway) runAgentCredentials(ctx context.Context, interval time.Duratio
 	}
 }
 
-func (g *Gateway) syncAgentCredentials(ctx context.Context) {
+// syncAgentCredentials runs one round for every agent. signedIn names the agent just signed in
+// through the web UI, the only way to resume sharing after a web UI sign-out.
+func (g *Gateway) syncAgentCredentials(ctx context.Context, signedIn string) {
 	g.credentialsMu.Lock()
 	defer g.credentialsMu.Unlock()
 	node, err := g.store.NodeID(ctx)
@@ -66,7 +68,7 @@ func (g *Gateway) syncAgentCredentials(ctx context.Context) {
 		if path == "" {
 			continue
 		}
-		installed, err := g.syncAgentCredential(ctx, agent, path, node)
+		installed, err := g.syncAgentCredential(ctx, agent, path, node, string(agent.Target) == signedIn)
 		if err != nil && ctx.Err() == nil {
 			_, event := obs.Start(ctx, "gateway", "agent_credentials")
 			event.Set("harness", string(agent.Target))
@@ -83,9 +85,9 @@ func (g *Gateway) syncAgentCredentials(ctx context.Context) {
 
 // syncAgentCredential publishes the local file when it changed since this machine last installed or
 // published it, installs the shared one when its rev is higher and the local file is unchanged, and
-// renews the shared one ahead of the agent when this machine published it. It reports whether it
-// replaced the local file.
-func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry, path, node string) (bool, error) {
+// renews the shared one ahead of the agent when this machine published it. After a web UI sign-out
+// nothing is published until signedIn. It reports whether it replaced the local file.
+func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry, path, node string, signedIn bool) (bool, error) {
 	key := string(agent.Target) + "/" + filepath.Base(path)
 	shared, err := g.sharedAgentCredential(ctx, key)
 	if err != nil {
@@ -102,15 +104,23 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 	localDigest, sharedDigest := sha256.Sum256(local), sha256.Sum256(shared.Data)
 	// The row moved since this machine last touched it: a higher rev, or a concurrent publish of the same rev that won.
 	localChanged, sharedNewer := !bytes.Equal(localDigest[:], record.Hash), shared.Rev != record.Rev || !bytes.Equal(sharedDigest[:], record.Hash)
+	signedOut := shared.Data == nil && shared.Rev > 0
 	if !known {
-		// First sight of this key here: only file times can order the two copies, once.
-		localChanged, sharedNewer = modified > shared.Modified, shared.Modified > modified
+		// First sight of this key here: a shared sign-in wins (file times from different clocks cannot
+		// order the copies), and the local file is published only when nothing is shared.
+		localChanged, sharedNewer = shared.Data == nil && !signedOut, shared.Data != nil
 	}
+	localChanged = localChanged || signedIn
 	same := bytes.Equal(local, shared.Data)
 	switch {
-	case local != nil && localChanged && !same:
+	case local != nil && localChanged && !same && (!signedOut || signedIn):
 		return false, g.publishAgentCredential(ctx, key, sharedAgentCredential{Data: local, Rev: shared.Rev + 1, Modified: time.Now().UnixMilli(), Node: node})
 	case shared.Data != nil && (local == nil || sharedNewer && !localChanged) && !same:
+		if !known && local != nil {
+			if err := os.WriteFile(path+".bak", local, 0o600); err != nil {
+				return false, err
+			}
+		}
 		if err := installAgentCredential(path, shared); err != nil {
 			return false, err
 		}
@@ -175,7 +185,7 @@ func (g *Gateway) publishAgentCredential(ctx context.Context, key string, creden
 }
 
 // stopSharingAgentCredential follows a sign-out with a newer empty row, so no machine republishes
-// the sign-in it still holds.
+// the sign-in it still holds, or a later rotation of it, until a web UI sign-in.
 func (g *Gateway) stopSharingAgentCredential(ctx context.Context, agent registry.Entry) error {
 	if agent.Login.Credential == nil || agent.Login.Credential() == "" {
 		return nil

@@ -57,10 +57,14 @@ var errNoPeerEvents = errors.New("peer does not serve /api/events")
 // the real sources.
 type eventHub struct {
 	mu   sync.Mutex
-	subs map[chan eventMessage]bool // true for streams that need the pollers running
+	subs map[chan eventMessage]subscriber
 	// watchers counts subscribers that keep pollers alive; internal listeners only hear emitted events.
 	watchers int
 	cancel   context.CancelFunc
+	// browsers counts the watchers that also need peer relays. A peer's relay never does, so two
+	// gateways cannot keep each other's relays, and through them each other's pollers, alive.
+	browsers    int
+	cancelNodes context.CancelFunc
 
 	topics    []eventTopic
 	nodes     func(context.Context) ([]mesh.Node, error)
@@ -73,35 +77,46 @@ type eventHub struct {
 // subscribe returns a stream of events and the function that ends it. The channel is closed
 // when a subscriber falls behind, so the client reconnects and receives a fresh baseline.
 func (g *Gateway) subscribe() (<-chan eventMessage, func()) {
-	return g.subscribeEvents(true)
+	return g.subscribeEvents(browserSubscriber)
 }
 
 // listen hears emitted events without starting the pollers, so background work never keeps them running.
 func (g *Gateway) listen() (<-chan eventMessage, func()) {
-	return g.subscribeEvents(false)
+	return g.subscribeEvents(listenSubscriber)
 }
 
-func (g *Gateway) subscribeEvents(watch bool) (<-chan eventMessage, func()) {
+type subscriber int
+
+const (
+	listenSubscriber  subscriber = iota // hears events only
+	peerSubscriber                      // runs this machine's pollers for a peer's relay
+	browserSubscriber                   // also relays every peer's events
+)
+
+func (g *Gateway) subscribeEvents(kind subscriber) (<-chan eventMessage, func()) {
 	h := &g.events
 	ch := make(chan eventMessage, eventSubscriberBuffer)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.subs == nil {
-		h.subs = map[chan eventMessage]bool{}
+		h.subs = map[chan eventMessage]subscriber{}
 	}
-	h.subs[ch] = watch
-	if !watch {
-		return ch, func() {
-			h.mu.Lock()
-			defer h.mu.Unlock()
-			g.dropSubscriber(ch)
+	h.subs[ch] = kind
+	if kind >= peerSubscriber {
+		h.watchers++
+		if h.watchers == 1 {
+			var ctx context.Context
+			ctx, h.cancel = context.WithCancel(context.Background())
+			g.startEventLoops(ctx)
 		}
 	}
-	h.watchers++
-	if h.watchers == 1 {
-		var ctx context.Context
-		ctx, h.cancel = context.WithCancel(context.Background())
-		g.startEventLoops(ctx)
+	if kind == browserSubscriber {
+		h.browsers++
+		if h.browsers == 1 {
+			var ctx context.Context
+			ctx, h.cancelNodes = context.WithCancel(context.Background())
+			obs.Go("gateway.events.nodes", func() { g.pollNodes(ctx) })
+		}
 	}
 	return ch, func() {
 		h.mu.Lock()
@@ -113,13 +128,20 @@ func (g *Gateway) subscribeEvents(watch bool) (<-chan eventMessage, func()) {
 // dropSubscriber requires h.mu. The last subscriber leaving stops every loop.
 func (g *Gateway) dropSubscriber(ch chan eventMessage) {
 	h := &g.events
-	watch, ok := h.subs[ch]
+	kind, ok := h.subs[ch]
 	if !ok {
 		return
 	}
 	delete(h.subs, ch)
 	close(ch)
-	if !watch {
+	if kind == browserSubscriber {
+		h.browsers--
+		if h.browsers == 0 {
+			h.cancelNodes()
+			h.cancelNodes = nil
+		}
+	}
+	if kind == listenSubscriber {
 		return
 	}
 	h.watchers--
@@ -151,7 +173,6 @@ func (g *Gateway) startEventLoops(ctx context.Context) {
 	for _, topic := range topics {
 		obs.Go("gateway.events."+topic.name, func() { g.pollTopic(ctx, topic) })
 	}
-	obs.Go("gateway.events.nodes", func() { g.pollNodes(ctx) })
 }
 
 func (g *Gateway) defaultEventTopics() []eventTopic {
@@ -394,7 +415,11 @@ func (g *Gateway) serveEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
-	ch, unsubscribe := g.subscribe()
+	kind := browserSubscriber
+	if peer, _ := r.Context().Value(replicaPeerKey{}).(string); peer != "" {
+		kind = peerSubscriber
+	}
+	ch, unsubscribe := g.subscribeEvents(kind)
 	conversation := g.followConversation(r)
 	defer unsubscribe()
 	w.Header().Set("Content-Type", "text/event-stream")

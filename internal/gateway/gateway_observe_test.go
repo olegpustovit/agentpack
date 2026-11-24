@@ -354,3 +354,21 @@ func TestGatewayPersistsPanicObservation(t *testing.T) {
 		t.Fatalf("gateway issue count=%d err=%v", count, err)
 	}
 }
+
+// Healthy replication pulls are not recorded: peers poll every few seconds and filled the day budget.
+func TestHTTPObservationSkipsHealthySyncPulls(t *testing.T) {
+	status := http.StatusOK
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/sync/changes", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) })
+	queue := obs.NewQueue()
+	handler := observeHTTP(mux, mux, queue, obs.Metadata{})
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "http://localhost/api/sync/changes", nil))
+	if n := len(queue.Events); n != 0 {
+		t.Fatalf("healthy pull recorded %d events", n)
+	}
+	status = http.StatusInternalServerError
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "http://localhost/api/sync/changes", nil))
+	if event := observedEvent(t, queue); event.Status != http.StatusInternalServerError {
+		t.Fatalf("failed pull not recorded: %+v", event)
+	}
+}

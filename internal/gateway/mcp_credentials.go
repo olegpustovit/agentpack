@@ -215,20 +215,18 @@ func (g *Gateway) writeMCPState(ctx context.Context, id string, state mcpCredent
 	if err != nil {
 		return err
 	}
-	var generation *int64
-	if state.Status == mcpStatusNeedsLogin {
-		generation = &state.Generation
+	// A state written by a newer login wins: a needs-login mark keeps its generation, every other write raised it.
+	generation := state.Generation
+	if state.Status != mcpStatusNeedsLogin {
+		generation--
 	}
-	changed, err := g.store.Credentials().SetMCPState(ctx, id, string(data), generation)
+	changed, err := g.store.Credentials().SetMCPState(ctx, id, string(data), &generation)
 	if err != nil {
 		return err
 	}
 	if !changed {
-		if generation != nil {
-			_, err := g.loadMCPCredential(ctx, id)
-			return err
-		}
-		return errMCPCredentialNotFound
+		_, err := g.loadMCPCredential(ctx, id)
+		return err
 	}
 	g.credentialsChanged()
 	return nil
@@ -420,8 +418,8 @@ func (g *Gateway) refreshMCPToken(ctx context.Context, id string, failedGenerati
 	if err := g.writeMCPState(ctx, id, state); err != nil {
 		return credential, err
 	}
-	credential.State = state
-	return credential, nil
+	// A login saved during the refresh outranks it.
+	return g.loadMCPCredential(ctx, id)
 }
 
 func (g *Gateway) markNeedsLogin(ctx context.Context, credential mcpCredential) (mcpCredential, error) {
