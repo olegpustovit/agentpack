@@ -12,7 +12,76 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/obs"
 )
+
+func (g *Gateway) registerUpdates(mux routeRegistrar) {
+	mux.HandleFunc("GET /api/version/latest", latestAgentpackVersion)
+	mux.HandleFunc("GET /api/node/update", g.serveUpdateStatus)
+	mux.HandleFunc("POST /api/node/update", g.serveGatewayUpdate)
+}
+
+func (g *Gateway) serveUpdateStatus(w http.ResponseWriter, r *http.Request) {
+	g.updateMu.Lock()
+	defer g.updateMu.Unlock()
+	state := "idle"
+	if g.updating {
+		state = "running"
+	} else if g.updateError != "" {
+		state = "failed"
+	}
+	network.WriteJSON(w, map[string]string{"state": state, "error": g.updateError})
+}
+
+func (g *Gateway) serveGatewayUpdate(w http.ResponseWriter, r *http.Request) {
+	if g.options.Update == nil {
+		http.Error(w, "gateway updates are unavailable", http.StatusNotImplemented)
+		return
+	}
+	version, status, err := g.updateTarget(r.Context())
+	if err != nil {
+		if status == http.StatusInternalServerError {
+			meshReadError(w, r, err)
+			return
+		}
+		if event := obs.From(r.Context()); event != nil {
+			event.Fail(err)
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	g.updateMu.Lock()
+	if g.updating {
+		g.updateMu.Unlock()
+		http.Error(w, "an update is already running", http.StatusConflict)
+		return
+	}
+	if !g.beginBackground(&g.operations) {
+		g.updateMu.Unlock()
+		http.Error(w, "gateway is shutting down", http.StatusServiceUnavailable)
+		return
+	}
+	g.updating = true
+	g.updateError = ""
+	g.updateMu.Unlock()
+	obs.Go("gateway.update", func() {
+		defer g.operations.Done()
+		ctx, event := obs.Start(obs.WithRecording(context.Background(), r.Context()), "gateway", "update")
+		event.Set("target_version", version)
+		err := g.options.Update(ctx, version)
+		if err != nil {
+			event.Fail(err)
+		}
+		event.End()
+		g.updateMu.Lock()
+		g.updating = false
+		if err != nil {
+			g.updateError = err.Error()
+		}
+		g.updateMu.Unlock()
+	})
+	network.WriteJSON(w, map[string]any{"started": true, "version": version})
+}
 
 // releaseURL is the GitHub latest-release endpoint; tests point it at a fake.
 var releaseURL = "https://api.github.com/repos/olegpustovit/agentpack/releases/latest"

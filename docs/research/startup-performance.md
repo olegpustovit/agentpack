@@ -456,3 +456,23 @@ the binaries on the reference host and run these commands for each sample.
 "$bench_binary" -test.run '^$' -test.bench '^BenchmarkMaterializationHome$' -test.benchtime=10x
 "$bench_binary" -test.run '^$' -test.bench '^BenchmarkCodexSetup$/^(cold|warm)$' -test.benchtime=10x
 ```
+
+## Worker and CLI entry point refactor (2026-11-24)
+
+Linux amd64, Intel i9-12900K, Go 1.27.3. Medians from five interleaved
+runs of ten iterations per revision with the 32 MiB history fixture.
+Both binaries used the same ext4 temporary directory and CPUs 2 and 4.
+
+| Benchmark | Before (`093dbdca`, ms) | After (ms) |
+| --- | ---: | ---: |
+| `BenchmarkMaterializationHome` | 0.605 | 0.604 |
+| `BenchmarkCodexSetup/cold` | 13.134 | 12.731 |
+| `BenchmarkCodexSetup/warm` | 0.183 | 0.182 |
+
+Build each revision with `go test -c -o "$bench_binary" ./internal/sync`.
+Alternate the binaries five times with a shared `TMPDIR`.
+
+```sh
+taskset -c 2,4 "$bench_binary" -test.run '^$' -test.bench '^BenchmarkMaterializationHome$' -test.benchtime=10x -test.cpu=2
+taskset -c 2,4 "$bench_binary" -test.run '^$' -test.bench '^BenchmarkCodexSetup$/^(cold|warm)$' -test.benchtime=10x -test.cpu=2
+```

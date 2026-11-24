@@ -78,6 +78,15 @@ func (g *Gateway) Sessions(ctx context.Context, node string, recentOnly bool) ([
 }
 
 // An older chat can fall out of the recent list while its bookmark still works.
+func (g *Gateway) serveSessions(w http.ResponseWriter, r *http.Request) {
+	value, err := g.Sessions(r.Context(), r.URL.Query().Get("node"), true)
+	if err != nil {
+		meshReadError(w, r, err)
+		return
+	}
+	network.WriteJSON(w, value)
+}
+
 func (g *Gateway) serveSessionRow(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	info, err := session.ScanSession(g.store.Reader.QueryRowContext(ctx, "SELECT "+session.SessionColumns+" FROM sessions WHERE id=? AND hidden=0", r.PathValue("id")))

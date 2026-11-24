@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -95,6 +97,8 @@ func (c *agentAccounts) attempt(name, id string) *loginAttempt {
 }
 
 func (g *Gateway) registerAgents(mux routeRegistrar) {
+	mux.HandleFunc("GET /api/agent-snapshot", g.serveAgentSnapshot)
+	mux.HandleFunc("GET /api/agent-sessions", g.serveAgentSessions)
 	mux.HandleFunc("GET /api/agents", func(w http.ResponseWriter, r *http.Request) {
 		network.WriteJSON(w, map[string]any{"agents": g.agents.read(r.Context(), r.URL.Query().Get("fresh") == "1")})
 	})
@@ -279,4 +283,58 @@ func (g *Gateway) reloadSignedOutChats(ctx context.Context, harness string) {
 		}
 	}
 	event.Fail(errors.Join(failures...))
+}
+
+func (g *Gateway) serveAgentSessions(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("directory") == "" || r.URL.Query().Get("node") != "" {
+		sessions, err := g.meshAgentSessions(r.Context(), r.URL.Query().Get("node"), r.URL.Query().Get("directory"), r.URL.Query().Get("harness"))
+		if err != nil {
+			meshReadError(w, r, err)
+			return
+		}
+		network.WriteJSON(w, map[string]any{"sessions": sessions})
+		return
+	}
+
+	directory := r.URL.Query().Get("directory")
+	harness := r.URL.Query().Get("harness")
+	if !g.knownDirectory(r.Context(), directory) || harness == "" {
+		http.Error(w, "choose a recent folder from this node", http.StatusBadRequest)
+		return
+	}
+	var definitionRoot, modeName string
+	err := g.store.Reader.QueryRowContext(r.Context(), `SELECT definition_root,mode FROM sessions
+		WHERE node_id=`+state.LocalNodeSQL+` AND hidden=0 AND transport<>'shell' AND directory=? AND harness=?
+		ORDER BY last_used DESC,id DESC LIMIT 1`, filepath.Clean(directory), harness).Scan(&definitionRoot, &modeName)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		fail(w, r, err)
+		return
+	}
+	sessions, err := network.ListAgentSessions(r.Context(), g.options.Home, directory, harness, definitionRoot, modeName)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	local, err := g.nodeID(r.Context())
+	if err != nil {
+		meshReadError(w, r, err)
+		return
+	}
+	folderID, err := network.FolderIdentity(directory)
+	if err != nil {
+		fail(w, r, err)
+		return
+	}
+	archived, err := network.ArchivedNativeIDs(r.Context(), g.store, folderID, harness)
+	if err != nil {
+		meshReadError(w, r, err)
+		return
+	}
+	sessions = slices.Clone(sessions)
+	sessions = slices.DeleteFunc(sessions, func(session network.AgentSession) bool { return archived[session.ID] })
+	for i := range sessions {
+		sessions[i].NodeID = local
+		sessions[i].Reachable = true
+	}
+	network.WriteJSON(w, map[string]any{"sessions": sessions})
 }

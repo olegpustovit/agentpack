@@ -3,6 +3,7 @@ package gateway
 import (
 	"errors"
 	"net/http"
+	"net/http/pprof"
 
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
@@ -45,6 +46,17 @@ func (g *Gateway) registerDiagnostics(mux routeRegistrar) {
 			writeDiagnostics(w, r, issue, err)
 		})
 	}
+	// Profiles reveal memory contents, so only this machine's CLI may read them; peers and browsers never can.
+	mux.HandleFunc("GET /api/debug/pprof/{name...}", func(w http.ResponseWriter, r *http.Request) {
+		switch name := r.PathValue("name"); name {
+		case "profile":
+			pprof.Profile(w, r)
+		case "trace":
+			pprof.Trace(w, r)
+		default:
+			pprof.Handler(name).ServeHTTP(w, r)
+		}
+	})
 }
 
 func writeDiagnostics(w http.ResponseWriter, r *http.Request, value any, err error) {

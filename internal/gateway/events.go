@@ -447,6 +447,10 @@ func digestOf(value any, err error) (string, error) {
 }
 
 // serveEvents serves GET /api/events as a server-sent event stream.
+func (g *Gateway) registerEvents(mux routeRegistrar) {
+	mux.HandleFunc("GET /api/events", g.serveEvents)
+}
+
 func (g *Gateway) serveEvents(w http.ResponseWriter, r *http.Request) {
 	private := g.localRequest(r)
 	flusher, ok := w.(http.Flusher)

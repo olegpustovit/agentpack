@@ -15,6 +15,36 @@ import (
 	"github.com/olegpustovit/agentpack/internal/session"
 )
 
+func (g *Gateway) registerMachines(mux routeRegistrar) {
+	mux.HandleFunc("GET /api/identity", g.identity)
+	mux.HandleFunc("GET /api/machine", g.machine)
+	mux.HandleFunc("GET /api/nodes", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("discover") == "1" {
+			value, err := g.tailnetNodes(r.Context())
+			if err != nil {
+				fail(w, r, err)
+				return
+			}
+			network.WriteJSON(w, value)
+			return
+		}
+		value, err := g.meshNodes(r.Context(), nil)
+		if err != nil {
+			meshReadError(w, r, err)
+			return
+		}
+		network.WriteJSON(w, value)
+	})
+	mux.HandleFunc("GET /api/topology", func(w http.ResponseWriter, r *http.Request) {
+		value, err := mesh.ReadTopology(r.Context(), g.store)
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		network.WriteJSON(w, value)
+	})
+}
+
 type tailnetSelf struct{ ID, User, Name string }
 
 func (self tailnetSelf) displayName() string {

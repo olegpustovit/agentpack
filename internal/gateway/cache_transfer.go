@@ -51,6 +51,10 @@ func FetchCache(ctx context.Context, home string, pkg lockfile.Package, destinat
 	return cache.ExtractPeerTar(file, destination)
 }
 
+func (g *Gateway) registerCacheTransfer(mux routeRegistrar) {
+	mux.HandleFunc("GET /api/cache/{cache_key}", g.serveCache)
+}
+
 func (g *Gateway) serveCache(w http.ResponseWriter, r *http.Request) {
 	g.serveCacheFrom(w, r, g.tailnetTarget)
 }

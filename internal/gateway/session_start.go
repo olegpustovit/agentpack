@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +25,273 @@ import (
 	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
 )
+
+func (g *Gateway) registerSessions(mux routeRegistrar) {
+	mux.HandleFunc("POST /api/local/sessions/{id}/presence", g.servePresence)
+	mux.HandleFunc("DELETE /api/local/sessions/{id}/presence", g.servePresence)
+	mux.HandleFunc("GET /api/sessions", g.serveSessions)
+	mux.HandleFunc("GET /api/sessions/{id}", g.serveSessionRow)
+	mux.HandleFunc("GET /api/sessions/{id}/shells", g.serveChatShells)
+	mux.HandleFunc("POST /api/sessions/{id}/detach-shell", g.detachShell)
+	mux.HandleFunc("POST /api/sessions", g.serveStartSession)
+	mux.HandleFunc("POST /api/sessions/{id}/fork", g.serveForkSession)
+	mux.HandleFunc("POST /api/sessions/{id}/harness", g.serveSwitchHarness)
+	mux.HandleFunc("POST /api/sessions/{id}/tools", g.setChatTools)
+	mux.HandleFunc("POST /api/sessions/{id}/stop", g.serveStopSession)
+	mux.HandleFunc("PATCH /api/sessions/{id}", g.serveUpdateSession)
+	mux.HandleFunc("POST /api/sessions/{id}/restart", g.serveRestartSession)
+	mux.HandleFunc("POST /api/sessions/{id}/resume", g.serveResumeSession)
+}
+
+func (g *Gateway) serveStartSession(w http.ResponseWriter, r *http.Request) {
+	var input chatStartRequest
+	if !network.ReadJSON(w, r, &input) {
+		return
+	}
+	actor, ok := session.ActorFrom(r.Context())
+	if !ok {
+		actor = session.BrowserActor(g.auth.email(r))
+	}
+	if input.Transport == "shell" {
+		g.startShell(w, r, actor, input)
+		return
+	}
+	if input.ID != "" {
+		info, err := g.claimChatStart(r.Context(), actor, input)
+		writeSessionStart(w, r, info, err)
+		return
+	}
+	if input.Resume != "" && input.AgentSessionID == "" {
+		input.AgentSessionID = input.Resume
+	}
+	definitionRoot := ""
+	if input.Worktree != "" {
+		if input.AgentSessionID != "" {
+			http.Error(w, "a resumed conversation keeps its own folder", http.StatusBadRequest)
+			return
+		}
+		main := filepath.Clean(input.Directory)
+		directory, err := g.newSessionWorktree(r.Context(), actor, main, input.Worktree, input.WorktreeName, input.Carry)
+		if err != nil {
+			gitFailure(w, r, http.StatusUnprocessableEntity, err, map[string]any{"field": "worktree"})
+			return
+		}
+		input.Directory, definitionRoot = directory, g.definitionRootFor(r.Context(), main)
+	}
+	info, err := g.startSession(r.Context(), actor, session.SessionInfo{
+		Directory: input.Directory, DefinitionRoot: definitionRoot, Harness: input.Harness, Mode: input.Mode,
+		Transport: input.Transport, AgentSessionID: input.AgentSessionID,
+		// agentpack tools are on for new chats unless the request turns them off.
+		ParentID: input.ParentID, Tools: input.Transport == "acp" && (input.Tools == nil || *input.Tools),
+	}, "")
+	writeSessionStart(w, r, info, err)
+}
+
+func (g *Gateway) serveForkSession(w http.ResponseWriter, r *http.Request) {
+	record, err := g.workerRecord(r.Context(), r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "session unavailable", http.StatusNotFound)
+		return
+	}
+	if record.Session.Transport != "acp" || record.Session.AgentSessionID == "" {
+		http.Error(w, "only ACP sessions with a native session ID can be forked", http.StatusBadRequest)
+		return
+	}
+	if !session.AuthorizeWrite(w, r, record.Session) {
+		return
+	}
+	actor, ok := session.ActorFrom(r.Context())
+	if !ok {
+		actor = session.BrowserActor(g.auth.email(r))
+	}
+	var input struct {
+		ID       string `json:"id"`
+		ParentID string `json:"parent_id"`
+	}
+	// Legacy clients omit the request ID. Agentpack tools can also name the chat a fork helps.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if input.ID != "" {
+		info, err := g.claimChatStart(r.Context(), actor, chatStartRequest{
+			ID: input.ID, Directory: record.Session.Directory, Harness: record.Session.Harness,
+			Mode: record.Session.Mode, Transport: "acp", ParentID: input.ParentID, Tools: &record.Session.Tools,
+			forkSessionID: record.Session.AgentSessionID, definitionRoot: record.Session.DefinitionRoot,
+		})
+		writeSessionStart(w, r, info, err)
+		return
+	}
+	info, err := g.startSession(r.Context(), actor, session.SessionInfo{
+		Directory:      record.Session.Directory,
+		DefinitionRoot: record.Session.DefinitionRoot,
+		Harness:        record.Session.Harness,
+		Mode:           record.Session.Mode,
+		Transport:      "acp",
+		ParentID:       input.ParentID,
+		Tools:          record.Session.Tools,
+	}, record.Session.AgentSessionID)
+	writeSessionStart(w, r, info, err)
+}
+
+func (g *Gateway) serveSwitchHarness(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Harness string `json:"harness"`
+	}
+	if !network.ReadJSON(w, r, &input) {
+		return
+	}
+	if _, err := network.HarnessTarget(input.Harness); err != nil {
+		http.Error(w, "unknown agent", http.StatusBadRequest)
+		return
+	}
+	if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
+		return
+	}
+	info, err := g.switchHarness(r.Context(), r.PathValue("id"), input.Harness)
+	switch {
+	case errors.Is(err, session.ErrSessionNotFound):
+		http.Error(w, "session not found", http.StatusNotFound)
+	case errors.Is(err, errResumeConflict):
+		http.Error(w, errResumeConflict.Error(), http.StatusConflict)
+	case errors.Is(err, errNotResumable):
+		http.Error(w, errNotResumable.Error(), http.StatusBadRequest)
+	case err != nil:
+		http.Error(w, "Couldn't switch the chat's agent.", http.StatusInternalServerError)
+	default:
+		network.WriteJSON(w, publicSession(info))
+	}
+}
+
+func (g *Gateway) serveStopSession(w http.ResponseWriter, r *http.Request) {
+	if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
+		return
+	}
+	requestID := r.Header.Get("Idempotency-Key")
+	if requestID != "" && !network.ValidOperationID(requestID) {
+		http.Error(w, "invalid stop request ID", http.StatusBadRequest)
+		return
+	}
+	if err := g.stopSession(r.Context(), r.PathValue("id"), requestID); err != nil {
+		fail(w, r, err)
+		return
+	}
+	network.WriteJSON(w, map[string]bool{"stopped": true})
+}
+
+func (g *Gateway) serveUpdateSession(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Name   *string `json:"name"`
+		Hidden *bool   `json:"hidden"`
+	}
+	if !network.ReadJSON(w, r, &input) {
+		return
+	}
+	if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
+		return
+	}
+	if input.Hidden != nil && *input.Hidden {
+		archived, _ := sessionRow(r.Context(), r.PathValue("id"))
+		changed, err := network.HideSession(r.Context(), g.store, g.options.Home, r.PathValue("id"))
+		// Only this machine's worktrees can be removed here; a remote path names nothing local.
+		if local, nodeErr := g.nodeID(r.Context()); changed && err == nil && nodeErr == nil && archived.NodeID == local {
+			g.removeArchivedWorktree(r.Context(), archived)
+		}
+		switch {
+		case errors.Is(err, session.ErrSessionNotFound):
+			http.Error(w, "session not found", http.StatusNotFound)
+		case errors.Is(err, network.ErrSessionRunning):
+			http.Error(w, "Stop the session before archiving it.", http.StatusConflict)
+		case err != nil:
+			http.Error(w, "Couldn't archive the session.", http.StatusInternalServerError)
+		default:
+			network.WriteJSON(w, map[string]bool{"hidden": true})
+		}
+		return
+	}
+	if input.Name == nil {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	name, err := network.NormalizeSessionName(*input.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	info, err := network.RenameSession(r.Context(), g.store, g.options.Home, r.PathValue("id"), name)
+	switch {
+	case errors.Is(err, session.ErrSessionNotFound):
+		http.Error(w, "session not found", http.StatusNotFound)
+	case errors.Is(err, session.ErrSessionUnavailable):
+		http.Error(w, "session unavailable", http.StatusBadGateway)
+	case err != nil:
+		http.Error(w, "could not save session name", http.StatusInternalServerError)
+	default:
+		network.WriteJSON(w, publicSession(info))
+	}
+}
+
+func (g *Gateway) serveRestartSession(w http.ResponseWriter, r *http.Request) {
+	var input network.RestartOperation
+	if !network.ReadJSON(w, r, &input) {
+		return
+	}
+	if !network.ValidOperationID(input.OperationID) {
+		http.Error(w, "restart requires a valid operation_id", http.StatusBadRequest)
+		return
+	}
+	if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
+		return
+	}
+	if err := network.RestartWorker(r.Context(), g.options.Home, r.PathValue("id"), input.OperationID); err != nil {
+		if errors.Is(err, network.ErrWorkerControlRejected) {
+			http.Error(w, "session restart was rejected", http.StatusConflict)
+		} else {
+			http.Error(w, "restart outcome unavailable; retry with the same operation_id", http.StatusBadGateway)
+		}
+		return
+	}
+	network.WriteJSON(w, map[string]bool{"restarted": true})
+}
+
+func (g *Gateway) serveResumeSession(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Text string `json:"text"`
+	}
+	if !network.ReadJSON(w, r, &input) {
+		return
+	}
+	if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
+		return
+	}
+	queueID := r.Header.Get("Idempotency-Key")
+	if queueID != "" && !network.ValidOperationID(queueID) {
+		http.Error(w, "invalid prompt ID", http.StatusBadRequest)
+		return
+	}
+	info, err := g.resumeSession(r.Context(), r.PathValue("id"), input.Text, queueID)
+	switch {
+	case errors.Is(err, session.ErrSessionNotFound):
+		http.Error(w, "session not found", http.StatusNotFound)
+	case errors.Is(err, errResumeConflict):
+		http.Error(w, errResumeConflict.Error(), http.StatusConflict)
+	case errors.Is(err, errNotResumable), errors.Is(err, errUnknownFolder):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case err != nil:
+		if event := obs.From(r.Context()); event != nil {
+			event.Fail(err)
+		}
+		http.Error(w, "Couldn't resume the chat.", http.StatusInternalServerError)
+	default:
+		if input.Text == "" {
+			queueID = ""
+		}
+		network.WriteJSON(w, struct {
+			session.SessionInfo
+			Queued string `json:"queued,omitempty"`
+		}{publicSession(info), queueID})
+	}
+}
 
 type chatStartRequest struct {
 	ID             string `json:"id,omitempty"`

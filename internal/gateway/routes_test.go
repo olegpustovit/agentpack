@@ -41,6 +41,7 @@ func TestRouteTableCoversMux(t *testing.T) {
 	g.options.Assets = http.NotFoundHandler()
 	mux := g.routes().mux
 	wildcard := regexp.MustCompile(`\{[^}]+\}`)
+	var patterns []string
 	for _, row := range routeTable {
 		method, path, found := strings.Cut(row.pattern, " ")
 		if !found {
@@ -51,14 +52,27 @@ func TestRouteTableCoversMux(t *testing.T) {
 		}
 		path = strings.ReplaceAll(wildcard.ReplaceAllString(path, "x"), "{name...}", "x")
 		_, pattern := mux.Handler(&http.Request{Method: method, URL: &url.URL{Path: path}})
+		patterns = append(patterns, pattern)
 		if pattern != row.pattern {
 			t.Errorf("%s: %s %s is served by %q", row.pattern, method, path, pattern)
 		}
 	}
 	g.options.Library.Store = nil
-	if _, pattern := g.routes().mux.Handler(httptest.NewRequest(http.MethodGet, "/api/library/packages", nil)); pattern != "/api/library/" {
+	_, pattern := g.routes().mux.Handler(httptest.NewRequest(http.MethodGet, "/api/library/packages", nil))
+	if pattern != "/api/library/" {
 		t.Errorf("library without a store is served by %q", pattern)
 	}
+	patterns = append(patterns, pattern)
+	t.Run("registered-patterns", func(t *testing.T) {
+		want, err := os.ReadFile("testdata/registered-routes.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		slices.Sort(patterns)
+		if got := strings.Join(patterns, "\n") + "\n"; got != string(want) {
+			t.Errorf("registered routes changed:\ngot:\n%swant:\n%s", got, want)
+		}
+	})
 }
 
 // The policy of every route, pinned from the handlers and lists it replaced.
