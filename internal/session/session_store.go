@@ -137,14 +137,16 @@ func EndSession(ctx context.Context, db *sql.DB, id string, terminal TerminalSta
 	if err != nil {
 		return err
 	}
-	// A stopped chat has no turn, answerable request or running subagent left, whatever its last state said.
-	if _, err = db.ExecContext(ctx, "UPDATE sessions SET ended_at=?,state=?,conversation_state=CASE WHEN transport='acp' THEN 'idle' ELSE conversation_state END,subagents='',waiting='' WHERE id=? AND node_id="+state.LocalNodeSQL+" AND ended_at=0", time.Now().UnixNano(), string(body), id); err != nil {
-		return err
-	}
-	// A chat that ended before its first message has nothing to keep in the list, unless it failed to start.
-	_, err = db.ExecContext(ctx, `UPDATE sessions SET hidden=1 WHERE id=? AND transport='acp' AND hidden=0 AND node_id=`+state.LocalNodeSQL+`
+	return state.Transaction(ctx, db, func(tx *sql.Tx) error {
+		// A stopped chat has no turn, answerable request or running subagent left, whatever its last state said.
+		if _, err := tx.ExecContext(ctx, "UPDATE sessions SET ended_at=?,state=?,conversation_state=CASE WHEN transport='acp' THEN 'idle' ELSE conversation_state END,subagents='',waiting='' WHERE id=? AND node_id="+state.LocalNodeSQL+" AND ended_at=0", time.Now().UnixNano(), string(body), id); err != nil {
+			return err
+		}
+		// A chat that ended before its first message has nothing to keep in the list, unless it failed to start.
+		_, err := tx.ExecContext(ctx, `UPDATE sessions SET hidden=1 WHERE id=? AND transport='acp' AND hidden=0 AND node_id=`+state.LocalNodeSQL+`
  AND NOT EXISTS (SELECT 1 FROM conversation_events WHERE session_id=sessions.id AND (kind='prompt' OR kind='notice' AND json_extract(body,'$.payload.severity')='error'))`, id)
-	return err
+		return err
+	})
 }
 
 func QuerySessions(ctx context.Context, db *sql.DB, query string, args ...any) ([]SessionInfo, error) {

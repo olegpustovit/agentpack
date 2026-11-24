@@ -107,8 +107,7 @@ func benchmarkMaterializationHome(b *testing.B, packages bool) {
 }
 
 func BenchmarkCodexSetup(b *testing.B) {
-	// cold and warm are the budget fixture; warm-packages adds the 2,000-file
-	// package set and has no budget.
+	// warm-packages adds four cached 2,000-file packages. See docs/research/startup-performance.md.
 	for _, run := range []struct {
 		name           string
 		cold, packages bool

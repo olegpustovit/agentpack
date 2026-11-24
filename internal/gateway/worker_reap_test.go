@@ -3,10 +3,13 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/session"
@@ -52,5 +55,107 @@ func TestDeadCurrentEndpointPreservesSessionHistory(t *testing.T) {
 	}
 	if _, err := os.Stat(transcript); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReaperAuthenticatesEndpointBehindLivePID(t *testing.T) {
+	for _, tc := range []struct {
+		name                            string
+		healthy, fresh, replaced, ended bool
+	}{
+		{name: "reused PID", ended: true},
+		{name: "worker answers", healthy: true},
+		{name: "endpoint still starting", fresh: true},
+		{name: "endpoint replaced during probe", replaced: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			store := statetest.Open(t, home)
+			const id = "session-probed"
+			if err := session.UpsertSession(t.Context(), store.DB, session.SessionInfo{ID: id}); err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(home, "network", "sessions", id)
+			path := filepath.Join(dir, "worker.json")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			secret := strings.Repeat("s", 64)
+			probes := 0
+			worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				probes++
+				if r.Method != http.MethodGet || r.URL.Path != "/state" || r.Header.Get("Authorization") != "Bearer "+secret {
+					t.Error("expected an authenticated state probe")
+				}
+				if tc.healthy {
+					network.WriteJSON(w, session.TerminalState{})
+					return
+				}
+				if tc.replaced {
+					replacement := network.WorkerRecord{ID: id, PID: os.Getpid(), Address: r.Host, Secret: strings.Repeat("r", 64)}
+					if err := network.PublishWorkerEndpoint(dir, replacement); err != nil {
+						t.Error(err)
+					}
+				}
+				w.WriteHeader(http.StatusUnauthorized)
+			}))
+			defer worker.Close()
+			record := network.WorkerRecord{ID: id, PID: os.Getpid(), Address: strings.TrimPrefix(worker.URL, "http://"), Secret: secret}
+			if err := network.PublishWorkerEndpoint(dir, record); err != nil {
+				t.Fatal(err)
+			}
+			if !tc.fresh {
+				old := time.Now().Add(-2 * interruptedStartGrace)
+				if err := os.Chtimes(path, old, old); err != nil {
+					t.Fatal(err)
+				}
+			}
+			g := &Gateway{store: store, options: GatewayOptions{Home: home}}
+			g.reapWorkerEndpoints(t.Context())
+			if tc.healthy {
+				// An endpoint that answered is not probed again every round.
+				g.reapWorkerEndpoints(t.Context())
+				if probes != 1 {
+					t.Fatalf("probed a verified endpoint %d times", probes)
+				}
+			}
+			got, err := session.StoredSession(t.Context(), store.Reader, id)
+			if err != nil || !got.EndedAt.IsZero() != tc.ended {
+				t.Fatalf("ended at %v, want ended=%v: %v", got.EndedAt, tc.ended, err)
+			}
+			if _, err := os.Stat(path); !(tc.ended && errors.Is(err, os.ErrNotExist) || !tc.ended && err == nil) {
+				t.Fatalf("endpoint should be removed=%v: %v", tc.ended, err)
+			}
+		})
+	}
+}
+
+func TestReaperEndsOnlyOldLocalTerminalsWithoutEndpoint(t *testing.T) {
+	home := t.TempDir()
+	store := statetest.Open(t, home)
+	g := &Gateway{store: store, options: GatewayOptions{Home: home}}
+	now := time.Now()
+	old := now.Add(-2 * interruptedStartGrace)
+	for _, info := range []session.SessionInfo{
+		{ID: "session-orphan", LastUsed: old, Transport: "terminal"},
+		{ID: "session-new", LastUsed: now, Transport: "shell"},
+		{ID: "session-published", LastUsed: old, Transport: "terminal"},
+		{ID: "session-remote", LastUsed: old, Transport: "terminal"},
+		{ID: "session-chat", LastUsed: old, Transport: "acp", ConversationState: "idle"},
+	} {
+		if err := session.UpsertSession(t.Context(), store.DB, info); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.DB.Exec("UPDATE sessions SET node_id='other-node' WHERE id='session-remote'"); err != nil {
+		t.Fatal(err)
+	}
+	writeReaperEndpoint(t, home, "session-published", os.Getpid(), session.SessionInfo{})
+	g.reapStoppedChats(t.Context())
+	for _, id := range []string{"session-orphan", "session-new", "session-published", "session-remote", "session-chat"} {
+		info, err := session.StoredSession(t.Context(), store.Reader, id)
+		if err != nil || !info.EndedAt.IsZero() != (id == "session-orphan") {
+			t.Fatalf("%s ended at %v: %v", id, info.EndedAt, err)
+		}
 	}
 }

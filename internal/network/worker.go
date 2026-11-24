@@ -190,7 +190,16 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	var conversation *ConversationSession
 	var agent *acpAgent
 	var handler *WorkerHTTP
+	var server *http.Server
 	defer func() {
+		stop, cancel := context.WithTimeout(context.Background(), workerStopGrace)
+		if handler != nil {
+			_ = handler.Stop(stop)
+		} else if pty != nil {
+			_ = pty.Stop(stop)
+		}
+		cancel()
+		// Keep answering the liveness probe until the worker's final state is stored.
 		terminal := launch.Session.State
 		if handler != nil && handler.current() != nil {
 			terminal = handler.current().State()
@@ -202,6 +211,15 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 			event.Fail(err)
 			event.End()
 			result = errors.Join(result, err)
+		}
+		if server != nil {
+			drain, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = server.Shutdown(drain)
+			if handler != nil {
+				_ = handler.Shutdown(drain)
+			}
+			_ = server.Close()
 		}
 	}()
 	if launch.Transport == "acp" {
@@ -216,25 +234,6 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	if err := session.UpsertSession(ctx, store.DB, pending); err != nil {
 		return 1, fmt.Errorf("register session: %w", err)
 	}
-	var server *http.Server
-	defer func() {
-		stop, cancel := context.WithTimeout(context.Background(), workerStopGrace)
-		if handler != nil {
-			_ = handler.Stop(stop)
-		} else if pty != nil {
-			_ = pty.Stop(stop)
-		}
-		cancel()
-		if server != nil {
-			drain, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = server.Shutdown(drain)
-			if handler != nil {
-				_ = handler.Shutdown(drain)
-			}
-			_ = server.Close()
-		}
-	}()
 	var secret [32]byte
 	if _, err := rand.Read(secret[:]); err != nil {
 		return 1, fmt.Errorf("generate worker secret: %w", err)
@@ -309,6 +308,7 @@ func RunWorker(ctx context.Context, home, version string, launch WorkerLaunch, r
 	}
 	if pty != nil {
 		record.Session.State = pty.State()
+		record.Session.LastUsed = time.Now().UTC()
 	}
 	if err := session.UpsertSession(ctx, store.DB, record.Session); err != nil {
 		return 1, fmt.Errorf("register session: %w", err)
@@ -466,7 +466,7 @@ func prepareACPWorker(ctx context.Context, store *state.Store, record WorkerReco
 			return
 		}
 		switch r.Method + " " + r.URL.Path {
-		case "GET /conversation", "POST /conversation/prompt", "POST /conversation/prompt/images", "POST /conversation/config":
+		case "GET /state", "GET /conversation", "POST /conversation/prompt", "POST /conversation/prompt/images", "POST /conversation/config":
 			bootstrap.ServeHTTP(w, r)
 		default:
 			http.Error(w, "agent is starting", http.StatusServiceUnavailable)

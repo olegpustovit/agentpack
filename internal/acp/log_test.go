@@ -58,6 +58,7 @@ func TestEventLogCoalescesTinyChunks(t *testing.T) {
 		t.Fatal("expected truncated flag after bound pressure")
 	}
 	var text string
+	var size int
 	for _, entry := range all {
 		if entry.Kind != "agent_message_chunk" {
 			continue
@@ -70,10 +71,26 @@ func TestEventLogCoalescesTinyChunks(t *testing.T) {
 		if err := json.Unmarshal(entry.Payload, &body); err != nil {
 			t.Fatal(err)
 		}
+		size += entrySize(entry)
 		text += body.Text.Text
 	}
 	if len(text) != n {
 		t.Fatalf("lost bytes after coalesce: got %d want %d", len(text), n)
+	}
+	if log.bytes != size {
+		t.Fatalf("coalesced size is %d bytes, counted %d", size, log.bytes)
+	}
+}
+
+func TestEventLogRejectsInvalidPayloads(t *testing.T) {
+	entry := LogEntry{Seq: 1, TS: 1, Kind: "agent_message_chunk", Payload: json.RawMessage(`{"text":{"text":"bad\q"}}`)}
+	log := NewEventLog(1024)
+	if err := log.Restore([]LogEntry{entry}, entry.Seq, false); err == nil || log.Seq() != 0 {
+		t.Fatalf("invalid restore changed the log: seq=%d, err=%v", log.Seq(), err)
+	}
+	log.Append(entry.Kind, entry.TS, entry.Payload)
+	if len(log.Snapshot()) != 0 || log.bytes != 0 || !log.Truncated() {
+		t.Fatal("invalid payload was retained or not marked as dropped")
 	}
 }
 

@@ -401,12 +401,17 @@ func (g *Gateway) reapStoppedChats(ctx context.Context) { g.reapStoppedChatsExce
 // reapStoppedChatsExcept never resumes manual, the chat its caller is about to resume.
 func (g *Gateway) reapStoppedChatsExcept(ctx context.Context, manual string) {
 	g.reapWorkerEndpoints(ctx)
-	rows, err := session.QuerySessions(ctx, g.store.Reader, "SELECT "+session.SessionColumns+` FROM sessions WHERE transport='acp' AND archived_at=0 AND node_id=`+state.LocalNodeSQL+`
- AND ((ended_at>0 AND (conversation_state<>'idle' OR subagents<>'' OR waiting<>'' OR json_extract(state,'$.running')))
- OR (ended_at=0 AND conversation_state='starting' AND last_used<?))`, session.SessionTimestamp(time.Now().Add(-interruptedStartGrace)))
+	now := time.Now()
+	rows, err := session.QuerySessions(ctx, g.store.Reader, "SELECT "+session.SessionColumns+` FROM sessions WHERE archived_at=0 AND node_id=`+state.LocalNodeSQL+`
+ AND ((ended_at>0 AND transport='acp' AND (conversation_state<>'idle' OR subagents<>'' OR waiting<>'' OR json_extract(state,'$.running')))
+ OR (ended_at=0 AND last_used<? AND (transport<>'acp' OR conversation_state='starting')))`, session.SessionTimestamp(now.Add(-interruptedStartGrace)))
 	var resume []string
 	for _, info := range rows {
 		if info.EndedAt.IsZero() {
+			if info.Transport != "acp" {
+				err = errors.Join(err, g.reapUnpublishedWorker(ctx, info, now))
+				continue
+			}
 			// The previous gateway can exit before its start writes a worker endpoint.
 			if _, active := g.startingChats.Load(info.ID); !active {
 				_, endpointErr := network.ReadWorkerRecord(g.options.Home, info.ID)

@@ -12,6 +12,9 @@ func workerProcessAlive(pid int) (bool, error) {
 	if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
 		return false, nil
 	}
+	if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		return true, nil
+	}
 	if err != nil {
 		return true, err
 	}

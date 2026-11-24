@@ -2,9 +2,9 @@
 
 ## Core repair WP-D (2026-11-23)
 
-The budget benchmarks (`BenchmarkMaterializationHome`, `BenchmarkCodexSetup/cold`
-and `/warm`) keep the 32 MiB history fixture and no packages. Separate,
-unbudgeted variants add four cached, content-hashed plugins of 2,000 files
+The ARM64 budget benchmarks (`BenchmarkMaterializationHome`, `BenchmarkCodexSetup/cold`
+and `/warm`) keep the 32 MiB history fixture and no packages. Separate
+variants add four cached, content-hashed plugins of 2,000 files
 each: `BenchmarkMaterializationHomePackages` and `BenchmarkCodexSetup/warm-packages`.
 
 ```sh
@@ -29,6 +29,22 @@ documented metadata walk of every cached file (8,000 here). WP-D removed the
 capability catalog's walk of every cached file (selectors now `Lstat` one path)
 and the unread `DependencyTrees`; on the same host, the fastest package-set
 warm run went from 11.6 ms to 6.7 ms before the merge.
+
+## Warm launch with cached packages (2026-11-24)
+
+Linux x86_64 (Intel i9-12900K, Go 1.27.3), five runs with the same 32 MiB
+history fixture. `warm-packages` verifies the warm path with four cached
+plugins totaling 8,000 files. The proposed package-set budget is for this
+x86_64 host. ARM64 package-set measurements are pending.
+
+| Benchmark | Median (ms) | Range (ms) | Proposed budget (ms) |
+| --- | ---: | ---: | ---: |
+| `BenchmarkCodexSetup/warm` | 0.141 | 0.132 to 0.176 | |
+| `BenchmarkCodexSetup/warm-packages` | 6.432 | 6.346 to 7.001 | <15 |
+
+```sh
+go test ./internal/sync -run '^$' -bench '^BenchmarkCodexSetup$/^(warm|warm-packages)$' -count=5
+```
 
 ## Private staging and lock roots (2026-11-23)
 
