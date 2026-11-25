@@ -621,7 +621,7 @@ test("Sessions starts active and appearance settings persist across views and re
   // The terminal takes the theme it is attached under, so returning to the session shows light.
   await page.getByRole("link", { name: "Sessions", exact: true }).click()
   await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible()
-  await page.getByRole("link", { name: "Continue last session" }).click()
+  await page.getByRole("link", { name: "Continue “Terminal · Claude”", exact: true }).click()
   await expect.poll(() => page.evaluate(() => window.__agentpackTerminal?.options.theme?.background)).toBe("#ffffff")
 
   await page.getByRole("link", { name: "Library", exact: true }).click()

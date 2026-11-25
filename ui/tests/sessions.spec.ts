@@ -572,13 +572,15 @@ test("Refresh rereads sessions", async ({ page }) => {
 
   reply = renamed
   const before = fetches
-  await page.getByRole("button", { name: "Refresh sessions" }).click()
+  await page.getByRole("button", { name: "View options" }).click()
+  const refresh = page.getByRole("dialog", { name: "View options" }).getByRole("button", { name: "Refresh", exact: true })
+  await refresh.click()
   await expect.poll(() => fetches).toBeGreaterThan(before)
   await expect(page.getByRole("link", { name: /oracle main/ })).toBeVisible()
 
   await page.unroute("**/api/nodes")
   await page.route("**/api/nodes", (route) => route.fulfill({ status: 400, json: { error: "Tailscale is unavailable" } }))
-  await page.getByRole("button", { name: "Refresh sessions" }).click()
+  await refresh.click()
   await expect(list.getByRole("alert")).toHaveText(/Can't look for other machines: Tailscale is unavailable/)
 })
 
@@ -836,13 +838,16 @@ test("phone Work returns to the review group and clears its unread row", async (
   }))
   const review = { ...sessions[0], id: "review", name: "Docs sweep", transport: "acp", conversation_state: "idle" }
   const expired = { ...sessions[1], id: "expired", name: "Lint cleanup", transport: "acp", conversation_state: "needs_you" }
-  reply = [...working, review, expired]
+  reply = [...working, review, { ...review, id: "remaining", name: "Design sweep" }, expired]
   await page.goto("/sessions")
   await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible()
-  await expect(page.getByRole("region", { name: "Needs you" })).toContainText("Needs you · 0")
   await expect(page.getByRole("navigation", { name: "Tabs" }).getByRole("link", { name: "Sessions", exact: true })).toBeVisible()
   const group = page.getByRole("region", { name: "Ready for review" })
-  await group.getByRole("link", { name: "Review Docs sweep" }).click()
+  const reviewRow = group.getByRole("listitem").filter({ has: page.getByRole("link", { name: "Docs sweep", exact: true }) })
+  const time = reviewRow.locator("time")
+  await time.scrollIntoViewIfNeeded()
+  const bounds = (await time.boundingBox())!
+  await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
   await expect(page).toHaveURL(/\/sessions\/local\/review$/)
   await page.getByRole("link", { name: "Back to Sessions" }).click()
   await expect(group.getByRole("heading")).toBeFocused()
@@ -860,7 +865,8 @@ test("a phone deep link marks a chat seen while the list is unmounted", async ({
   await page.goto("/sessions/local/unread")
   await expect(page.getByRole("heading", { name: "Unread report", level: 1 })).toBeVisible()
   await page.getByRole("link", { name: "Back to Sessions" }).click()
-  await expect(page.getByRole("region", { name: "Ready for review" })).toContainText("Ready for review · 0")
+  await expect(page.getByText("Nothing needs attention", { exact: true })).toBeVisible()
+  await expect(page.getByRole("region", { name: "Ready for review" })).toHaveCount(0)
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem("agentpack.sessions.seen") ?? "{}")["local:unread"])).toBeGreaterThan(0)
 })
 

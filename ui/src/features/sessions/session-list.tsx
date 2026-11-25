@@ -18,7 +18,7 @@ import { LOCAL } from "@/lib/api"
 import { basename, harnessName, plural } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useSessionCommands } from "./actions"
-import { clearedFilter, filterSearch, filterTokens, matchesFilter, readFilter, type SessionFilter } from "./filter"
+import { clearedFilter, filterSearch, filterTokens, matchesFilter, readFilter, type FilterKey, type SessionFilter } from "./filter"
 import { groupSessions, nestHelpers, rowKey, treeSessions, type GroupMode, type ListedSession, type SessionSubhead } from "./group"
 import { NotifyOffer } from "@/features/shell/attention"
 import { loadStartChoices } from "./choices"
@@ -39,16 +39,6 @@ type Confirm = { kind: "stop" | "restart" | "archive"; rows: ListedSession[] }
 const SessionView = lazy(() => import("./session-view"))
 
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
-
-// Rewrites query keys on a full href and keeps the path, hash and every other key.
-function withSearch(href: string, patch: Record<string, string | undefined>): string {
-  const url = new URL(href, "http://gateway.local")
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === undefined) url.searchParams.delete(key)
-    else url.searchParams.set(key, value)
-  }
-  return `${url.pathname}${url.search}${url.hash}`
-}
 
 export function SessionList() {
   const { machines, queries, sessions } = useListedSessions()
@@ -130,8 +120,14 @@ export function SessionList() {
     return () => window.removeEventListener("keydown", onFind)
   }, [])
 
-  function setSearch(patch: Record<string, string | undefined>) {
-    void navigate({ href: withSearch(router.state.location.href, patch), replace: true })
+  function setSearch(patch: Partial<Record<FilterKey | "group", string>>) {
+    const current = router.state.location
+    // Keep a phone deep link in All sessions after clearing the filter that opened it.
+    const next = { ...current.search, ...(isPhone && !routeKey ? { tab: "all" } : {}), ...patch }
+    // Preserve search strings such as "123" through the router’s JSON parsing.
+    const query = router.options.stringifySearch(next)
+    const hash = current.hash ? `#${current.hash}` : ""
+    void navigate({ href: `${current.pathname}${query}${hash}`, replace: true })
   }
 
   function openRow(row: ListedSession, replace = false) {

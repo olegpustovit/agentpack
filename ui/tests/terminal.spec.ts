@@ -106,7 +106,7 @@ test("Continue last session reopens the terminal Sessions left, with its groupin
   await expect(page.locator(".xterm")).toHaveCount(0)
   await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Sessions", exact: true }).click()
   await expect(page).toHaveURL(/\/sessions$/)
-  await page.getByRole("link", { name: "Continue last session" }).click()
+  await page.getByRole("link", { name: "Continue “build”", exact: true }).click()
   await expect(page).toHaveURL(/\/sessions\/local\/s1\?group=machine/)
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused()
 })

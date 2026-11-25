@@ -37,16 +37,24 @@ export default function SessionView({
   const agents = [...new Set([...allAgents, ...filter.agents])].sort((a, b) => harnessName(a).localeCompare(harnessName(b)))
 
   return (
-    <Popover open={open} onOpenChange={onOpenChange}>
+    <Popover open={open} onOpenChange={(next, details) => {
+      // The lazy popup uses an external anchor. Let the button handle its own presses.
+      if (details.reason === "outside-press" && details.event.target instanceof Node && anchor.current?.contains(details.event.target)) {
+        details.cancel()
+        return
+      }
+      onOpenChange(next)
+    }}>
       <PopoverContent anchor={anchor} align="start" sideOffset={6} aria-label="View options"
         // Focus the search field, except on touch, where it would raise the keyboard over the filters.
         initialFocus={(type) => type !== "touch" && !matchMedia("(pointer: coarse)").matches}
+        finalFocus={anchor}
         className="w-80 gap-0 rounded-(--r-pop) bg-(--raised) p-0 text-(length:--fs) shadow-(--e-pop) ring-0">
         <div className="flex flex-col gap-(--s5) p-(--s5)">
           <SearchField
             aria-label="Filter sessions"
             placeholder="Filter sessions"
-            defaultValue={filter.q}
+            value={filter.q}
             onChange={(event) => onFilter({ q: event.target.value })}
           />
           <div className="flex items-center gap-(--s4)">

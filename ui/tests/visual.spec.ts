@@ -455,10 +455,11 @@ test.describe("session list behaviour", () => {
   test("?q filters rows and survives reload", async ({ page }) => {
     await desktop(page)
     await page.goto("/sessions")
+    await page.getByRole("button", { name: "View options" }).click()
     await page.getByRole("searchbox", { name: "Filter sessions" }).fill("another")
     await expect(page).toHaveURL(/q=another/)
     await expect(page.locator('[data-row-key="local:local-one"]')).toHaveCount(0)
-    await page.reload()
+    await page.reload({ waitUntil: "commit" })
     await expect(page.locator('[data-row-key="local:local-two"]')).toBeVisible()
     await expect(page.locator('[data-row-key="local:local-one"]')).toHaveCount(0)
   })

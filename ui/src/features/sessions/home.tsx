@@ -104,7 +104,7 @@ export function SessionsHome({ draft, setDraft, onReview, rememberPosition, take
         </form>
 
         {needsYou.length > 0 && (
-          <Section title="Needs you" count={needsYou.length} tone="warn" aside={<span className="text-(--fg3)">{`${isMac ? "⌘⇧J" : "Ctrl+Shift+J"} next`}</span>}>
+          <Section title="Needs you" count={needsYou.length} tone="warn" limit={5} aside={<span className="text-(--fg3)">{`${isMac ? "⌘⇧J" : "Ctrl+Shift+J"} next`}</span>}>
             {needsYou.map((session) => <WaitingItem key={rowKey(session)} session={session} now={now} />)}
           </Section>
         )}
@@ -183,7 +183,7 @@ function HomeRow({ session, now, state, reason, children }: { session: ListedSes
         </Link>
         <span className="truncate text-(length:--fs-sm) text-(--fg2)" title={reason || undefined}>{reason ? `${meta} · ${reason}` : meta}</span>
       </div>
-      <div className="relative flex items-center gap-(--s4)">
+      <div className="pointer-events-none relative flex items-center gap-(--s4)">
         {children}
         {when && <time dateTime={when} className="min-w-8 text-right text-(length:--fs-sm) text-(--fg3) tabular-nums">{shortAge(new Date(when), now)}</time>}
       </div>
@@ -195,7 +195,7 @@ function HomeRow({ session, now, state, reason, children }: { session: ListedSes
 function RowAction({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
   return (
     <Button type="button" variant="ghost" size="icon" aria-label={label} title={label} onClick={onClick}
-      className="relative z-1 -my-(--s2) opacity-0 transition-opacity duration-(--dur-1) group-hover/row:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100">
+      className="pointer-events-auto relative z-1 -my-(--s2) opacity-0 transition-opacity duration-(--dur-1) group-hover/row:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100">
       {children}
     </Button>
   )
