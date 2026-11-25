@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useState } from "react"
 import { Link, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router"
 import { ChevronLeft, Command, PanelLeft, Settings } from "lucide-react"
 import { Announcement } from "@/components/kit/feedback"
+import { slidingThumb, useSlidingThumb } from "@/components/kit/list"
 import { ActivityViewer } from "./activity"
 import { useDiscovering } from "@/features/machines/queries"
 import { sessionsQuery, useListedSessions } from "@/features/sessions/queries"
@@ -25,6 +26,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   useShellShortcuts()
   useAttention()
   useDetailHeadingFocus()
+  useViewEnter()
   // The palette's starting query while open; null while closed. The toolbar's Commands button opens it too.
   const [palette, setPalette] = useState<string | null>(null)
   return (
@@ -48,6 +50,20 @@ export function AppShell({ children }: { children: ReactNode }) {
       </AppWindow>
     </ToolbarProvider>
   )
+}
+
+// Switching views (Sessions, Library, …) fades the new pane in with a hint of lift; within a view nothing moves.
+function useViewEnter() {
+  const router = useRouter()
+  useEffect(() => router.subscribe("onRendered", ({ fromLocation, toLocation }) => {
+    if (!fromLocation || routePosition(fromLocation.pathname).view === routePosition(toLocation.pathname).view) return
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return
+    const token = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+    document.getElementById("main")?.animate(
+      [{ opacity: 0, translate: `0 ${token("--enter-shift")}` }, { opacity: 1, translate: "0 0" }],
+      { duration: parseFloat(token("--dur-2")), easing: token("--ease") },
+    )
+  }), [router])
 }
 
 function useDetailHeadingFocus() {
@@ -169,6 +185,7 @@ function AppToolbar({ onCommands }: { onCommands: () => void }) {
   const title = tab?.label ?? "Agentpack"
   const backTo = view === "machines" ? "/machines" : tab?.to ?? "/sessions"
   const hasSidebar = listDetailViews.includes(view)
+  const viewsTrack = useSlidingThumb<HTMLElement>('[aria-current="page"]')
 
   return (
     <Toolbar>
@@ -193,7 +210,7 @@ function AppToolbar({ onCommands }: { onCommands: () => void }) {
           <ChevronLeft />
         </Link>
       )}
-      <nav aria-label="Views" className="me-(--s3) flex h-(--ctl-h) shrink-0 items-center rounded-full bg-(--track) p-0.5 max-[760px]:hidden">
+      <nav ref={viewsTrack} aria-label="Views" className={cn("me-(--s3) flex h-(--ctl-h) shrink-0 items-center rounded-full bg-(--track) p-0.5 max-[760px]:hidden", slidingThumb, "before:inset-y-0.5 before:rounded-full before:bg-(--control) before:shadow-(--shadow-ctl)")}>
         {views.map((item, index) => (
           <Link
             key={item.id}
@@ -201,8 +218,8 @@ function AppToolbar({ onCommands }: { onCommands: () => void }) {
             aria-current={item.id === view ? "page" : undefined}
             title={`⌘${index + 1}`}
             className={cn(
-              "flex h-full cursor-default items-center rounded-full px-(--s5) text-(length:--fs-sm) font-medium text-(--fg2)",
-              item.id === view && "bg-(--control) text-(--fg) shadow-(--shadow-ctl)",
+              "flex h-full cursor-default items-center rounded-full px-(--s5) text-(length:--fs-sm) font-medium text-(--fg2) transition-colors duration-(--dur-2) ease-(--ease)",
+              item.id === view && "text-(--fg)",
             )}
           >
             {item.label}

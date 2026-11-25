@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ComponentProps, type ReactElement, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, type ComponentProps, type ReactElement, type KeyboardEvent } from "react";
 import { useRender } from "@base-ui/react/use-render";
 import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -102,12 +102,49 @@ export function GroupHeader({ className, ...props }: ComponentProps<"div">) {
   );
 }
 
+// A selection thumb that slides between items (--dur-2, --ease) instead of jumping. The track draws it
+// as ::before from --thumb-x/--thumb-w, measured from the item matching `selector`; it appears in
+// place on first paint and moves only on later changes. Reduced motion turns the slide off globally.
+export function useSlidingThumb<T extends HTMLElement>(selector: string) {
+  const ref = useRef<T>(null);
+  useLayoutEffect(() => {
+    const track = ref.current;
+    if (!track) return;
+    const place = () => {
+      const on = track.querySelector<HTMLElement>(selector);
+      track.style.setProperty("--thumb-x", `${on?.offsetLeft ?? 0}px`);
+      track.style.setProperty("--thumb-w", `${on?.offsetWidth ?? 0}px`);
+      track.dataset.thumb = on ? "on" : "off";
+    };
+    place();
+    const frame = requestAnimationFrame(() => { track.dataset.thumbReady = ""; });
+    const attributes = new MutationObserver(place);
+    attributes.observe(track, { subtree: true, attributes: true, attributeFilter: ["aria-pressed", "aria-current"] });
+    // Absent in jsdom; browsers always have it.
+    const size = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(place);
+    size?.observe(track);
+    return () => { cancelAnimationFrame(frame); attributes.disconnect(); size?.disconnect(); };
+  }, [selector]);
+  return ref;
+}
+
+// The ::before thumb; the caller sets its inset, radius and fill.
+export const slidingThumb =
+  "relative isolate before:absolute before:start-0 before:-z-1 before:w-(--thumb-w) before:translate-x-(--thumb-x) data-[thumb=off]:before:opacity-0 data-thumb-ready:before:transition-[translate,width,opacity] data-thumb-ready:before:duration-(--dur-2) data-thumb-ready:before:ease-(--ease)";
+
 export function SegmentedControl({ className, ...props }: ComponentProps<typeof ToggleGroup>) {
+  const ref = useSlidingThumb<HTMLDivElement>('[aria-pressed="true"]');
   return (
     <ToggleGroup
+      ref={ref}
       data-slot="segmented-control"
       spacing={1}
-      className={cn("h-(--ctl-h) gap-0 rounded-(--r-ctl) bg-(--track) p-(--s1)", className)}
+      className={cn(
+        "h-(--ctl-h) gap-0 rounded-(--r-ctl) bg-(--track) p-(--s1)",
+        slidingThumb,
+        "before:inset-y-(--s1) before:rounded-(--r-row) before:bg-(--control) before:shadow-(--shadow-ctl)",
+        className,
+      )}
       {...props}
     />
   );
@@ -117,7 +154,7 @@ export function SegmentedControlItem({ className, ...props }: ComponentProps<typ
   return (
     <ToggleGroupItem
       className={cn(
-        "h-(--ctl-h-sm) min-w-(--ctl-h-sm) rounded-(--r-row) px-(--s3) text-(length:--fs-sm) font-normal text-(--fg2) hover:bg-transparent aria-pressed:bg-(--control) aria-pressed:text-(--fg) aria-pressed:shadow-(--shadow-ctl) aria-pressed:hover:bg-(--control)",
+        "h-(--ctl-h-sm) min-w-(--ctl-h-sm) rounded-(--r-row) px-(--s3) text-(length:--fs-sm) font-normal text-(--fg2) transition-colors duration-(--dur-2) ease-(--ease) hover:bg-transparent aria-pressed:bg-transparent aria-pressed:text-(--fg) aria-pressed:hover:bg-transparent",
         className,
       )}
       {...props}

@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Folder, CornerLeftUp } from "lucide-react"
-import { SearchField, SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@/components/kit/list"
+import { ChevronLeft, Folder, CornerLeftUp } from "lucide-react"
+import { SearchField, SourceList, SourceRow } from "@/components/kit/list"
 import { Button } from "@/components/ui/button"
 import type { Machine } from "@/features/machines/queries"
 import { api, ApiError, routeMissing } from "@/lib/api"
@@ -68,12 +68,13 @@ export function useFolderBrowser(machine: Machine | undefined, needsUpdate: bool
   }
 }
 
-export function FolderBrowser({ browser, query, setQuery, setBrowsing, pick, filters, children, className, done }: {
+export function FolderBrowser({ browser, query, setQuery, setBrowsing, pick, tools, filters, children, className, done }: {
   browser: ReturnType<typeof useFolderBrowser>
   query: string
   setQuery: (query: string) => void
   setBrowsing: (browse: boolean) => void
   pick: (machine: string, row: ProjectRow) => void
+  tools?: ReactNode
   filters: ReactNode
   children: ReactNode
   className?: string
@@ -144,21 +145,17 @@ export function FolderBrowser({ browser, query, setQuery, setBrowsing, pick, fil
 
   return (
     <aside ref={aside} className={cn("flex min-h-0 flex-col gap-(--s3) border-r-[0.5px] border-(--sep) bg-(--sidebar) pt-(--s5) max-[760px]:border-r-0", className)}>
+      {/* One field: search projects, or type a path (/ or ~/) to browse folders. The filter button and tokens come from the caller. */}
       <div className="flex min-w-0 items-center gap-(--s2) px-(--s5)">
-        <SegmentedControl aria-label="Find a project" className="min-w-0 flex-1" value={[browsing ? "browse" : "search"]}
-          onValueChange={([value]) => { if (value) setBrowsing(value === "browse") }}>
-          <SegmentedControlItem value="search" className="flex-1" disabled={creation.isPending}>Search projects</SegmentedControlItem>
-          <SegmentedControlItem value="browse" className="flex-1" disabled={!machineId || creation.isPending}>Browse folders</SegmentedControlItem>
-        </SegmentedControl>
-        {done && <Button type="button" size="sm" className="min-[761px]:hidden" disabled={creation.isPending} onClick={done}>Done</Button>}
-      </div>
-      {filters}
-      {!machineId && <p className="px-(--s5) text-(length:--fs-xs) text-(--fg2)">Choose a machine to browse its folders.</p>}
-      <div className="px-(--s5)">
+        {browsing && (
+          <Button type="button" variant="ghost" size="icon" aria-label="Back to projects" title="Back to projects (Esc)" disabled={creation.isPending} onClick={() => setBrowsing(false)}>
+            <ChevronLeft aria-hidden />
+          </Button>
+        )}
         <SearchField
           type="text"
           aria-label={browsing ? "Folder path" : "Search projects"}
-          placeholder={browsing ? "Folder path" : "Search recent and found projects"}
+          placeholder={browsing ? "Folder path" : "Search, or type a path"}
           autoComplete="off"
           spellCheck={false}
           aria-controls={browsing ? id : undefined}
@@ -170,7 +167,10 @@ export function FolderBrowser({ browser, query, setQuery, setBrowsing, pick, fil
           }}
           onKeyDown={onKeyDown}
         />
+        {tools}
+        {done && <Button type="button" size="sm" className="min-[761px]:hidden" disabled={creation.isPending} onClick={done}>Done</Button>}
       </div>
+      {filters}
       {browsing ? (
         <SourceList id={id} aria-label="Folders" className="flex-1 px-(--s3)">
           <div className="flex flex-wrap items-center justify-between gap-(--s2) px-(--s3) pb-(--s2)">

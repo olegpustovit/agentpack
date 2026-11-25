@@ -5,7 +5,11 @@ import { Link } from "@tanstack/react-router"
 import { FieldError, PopupSelect } from "@/components/kit/forms"
 import { StatusGlyph } from "@/components/kit/status-dot"
 import { Kbd, Spinner } from "@/components/kit/feedback"
+import { FilterButton, FilterChip, FilterFacet, FilterToken } from "@/components/kit/filters"
 import { GroupHeader, SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@/components/kit/list"
+import { Popover, PopoverContent } from "@/components/ui/popover"
+import { ChevronRight, FolderSearch, History } from "lucide-react"
+import { isFolderPath } from "./folder-path"
 import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useMachineQueries, useMachines, useReplicatedQueries } from "@/features/machines/queries"
@@ -13,7 +17,7 @@ import { agentsQuery, type AgentAccount } from "@/features/agents/queries"
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { api, ApiError, errorText, LOCAL, routeMissing } from "@/lib/api"
 import type { AgentSession, ProjectRow } from "@/lib/api-types"
-import { harnessName, plural, relativeTime, shortAge } from "@/lib/format"
+import { harnessName, plural, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { agentIds, canStart, defaultAgent, mergeProjects, modeChoices, modeEffect, offlineProjects, placeKey, placeLabel, projectGroups, projectLocation, stubRow, type MergedProject, type SessionView } from "./rules"
 import { useStartSession, type StartInput } from "./start"
@@ -104,6 +108,10 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
   const [query, setQuery] = useState("")
   const [folderPath, setFolderPath] = useState("~/")
   const [browseFolders, setBrowseFolders] = useState(false)
+  // The machine to browse when no machine filter is set; defaults to this machine.
+  const [browseOn, setBrowseOn] = useState<string | null>(null)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const filterButton = useRef<HTMLButtonElement>(null)
   const [chooseProjectOnPhone, setChooseProjectOnPhone] = useState(false)
   const isPhone = useIsPhone()
   const [chosenWorkspace, setWorkspace] = useState<string | null>(null)
@@ -119,6 +127,9 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
   const machineFilter = machines.some((machine) => machine.id === filters.machine) ? filters.machine : "all"
   const agentFilter = agentIds.includes(filters.agent) ? filters.agent : "all"
   const browserMachine = machines.find((machine) => machine.id === machineFilter)
+    ?? machines.find((machine) => machine.id === browseOn)
+    ?? machines.find((machine) => machine.id === LOCAL && machine.online)
+    ?? online[0]
   const browsing = browseFolders && Boolean(browserMachine)
   const needsFoldersUpdate = (machine: string) => foundQueries.byMachine[machine]?.needsUpdate === true || projectQueries.byMachine[machine]?.needsUpdate === true
   const rows: Record<string, ProjectRow[] | undefined> = {}
@@ -240,7 +251,6 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
   function changeFilters(next: typeof filters) {
     if (isPhone && !history) setChooseProjectOnPhone(true)
     if (filters.machine !== next.machine) setFolderPath("~/")
-    if (next.machine === "all") setBrowseFolders(false)
     setFilters(next)
     saveProjectFilters(next)
     resetProject()
@@ -290,9 +300,10 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
     }
   }
 
+  // With a message typed, resuming sends it; "Resume only" keeps it as a draft.
   function submit(event: FormEvent) {
     event.preventDefault()
-    launch()
+    launch(resuming && Boolean(prompt.trim()))
   }
 
   function submitShortcut(event: KeyboardEvent<HTMLFormElement>) {
@@ -333,8 +344,14 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
         </>
       ),
       group: machine.online ? undefined : "Offline",
+      offline: !machine.online,
     }
   })
+  const filtered = machineFilter !== "all" || agentFilter !== "all"
+  // Faceted counts: what each choice would list alongside the other filter and the search.
+  const countOf = (machine: string, agent: string) => projectGroups(projects, found, machine, agent, query, now).reduce((sum, group) => sum + group.rows.length, 0)
+  const machineCount = (machine: string) => countOf(machine, agentFilter)
+  const agentCount = (agent: string) => countOf(machineFilter, agent)
   const projectRow = (item: MergedProject) => {
     const best = item.places.find(canStart)
     const source = best ?? item.places[0]!
@@ -382,6 +399,12 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
             if (picked?.browsed) setPicked(undefined)
           } : (value) => {
             if (isPhone && !history) setChooseProjectOnPhone(true)
+            // A path switches the same field to folder browsing.
+            if (browserMachine && !history && isFolderPath(value)) {
+              setFolderPath(value)
+              setBrowseFolders(true)
+              return
+            }
             setQuery(value)
           }}
           setBrowsing={setBrowseFolders}
@@ -392,28 +415,55 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
             if (!picked?.browsed) setBrowseFolders(false)
             setChooseProjectOnPhone(false)
           } : undefined}
-          filters={(
-            <div className="flex min-w-0 items-center gap-(--s2) px-(--s5)">
-              <PopupSelect
-                label="Filter by machine"
-                value={machineFilter}
-                onValueChange={(machine) => changeFilters({ ...filters, machine })}
-                items={[
-                  { value: "all", label: "All machines", detail: String(projects.length) },
-                  ...machineItems,
-                ]}
-              />
-              {!browsing && <>
-                <PopupSelect label="Filter by agent" value={agentFilter} onValueChange={(agent) => changeFilters({ ...filters, agent })} items={[
-                  { value: "all", label: "All agents" },
-                  ...agentIds.map((value) => ({ value, label: harnessName(value) })),
-                ]} />
-                {(machineFilter !== "all" || agentFilter !== "all" || query.trim()) && (
-                  <span className="shrink-0 text-(length:--fs-xs) text-(--fg2)">{shown.length} of {total}</span>
-                )}
-              </>}
-            </div>
+          tools={!browsing && (
+            <>
+              <FilterButton ref={filterButton} active={filtered} aria-expanded={filtersOpen} onClick={() => setFiltersOpen(!filtersOpen)}
+                aria-label={filtered ? "Filters, on" : "Filters"} title="Filter by machine or agent" />
+              <Popover open={filtersOpen} onOpenChange={setFiltersOpen}>
+                <PopoverContent anchor={filterButton} align="end" sideOffset={6} aria-label="Project filters"
+                  className="w-80 gap-(--s5) rounded-(--r-pop) bg-(--raised) p-(--s5) text-(length:--fs) shadow-(--e-pop) ring-0">
+                  {machines.length > 1 && (
+                    <FilterFacet label="Machine" active={machineFilter !== "all"} onClear={() => changeFilters({ ...filters, machine: "all" })}>
+                      {machineItems.map((item) => (
+                        <FilterChip key={item.value} pressed={machineFilter === item.value} count={machineCount(item.value)}
+                          onClick={() => changeFilters({ ...filters, machine: machineFilter === item.value ? "all" : item.value })}>
+                          {item.offline && <span aria-hidden className="size-1.5 rounded-full border border-dashed border-(--fg3)" />}
+                          {item.label}
+                        </FilterChip>
+                      ))}
+                    </FilterFacet>
+                  )}
+                  <FilterFacet label="Used with" active={agentFilter !== "all"} onClear={() => changeFilters({ ...filters, agent: "all" })}>
+                    {agentIds.filter((agent) => agent === agentFilter || agentCount(agent) > 0).map((agent) => (
+                      <FilterChip key={agent} pressed={agentFilter === agent} count={agentCount(agent)}
+                        onClick={() => changeFilters({ ...filters, agent: agentFilter === agent ? "all" : agent })}>
+                        {harnessName(agent)}
+                      </FilterChip>
+                    ))}
+                  </FilterFacet>
+                </PopoverContent>
+              </Popover>
+            </>
           )}
+          filters={browsing ? (
+            <div className="flex min-w-0 items-center gap-(--s3) px-(--s5) text-(length:--fs-sm) text-(--fg2)">
+              <span className="shrink-0">Browsing on</span>
+              <PopupSelect label="Browse folders on" value={browserMachine?.id ?? ""} onValueChange={(machine) => {
+                setFolderPath("~/")
+                if (machineFilter !== "all") changeFilters({ ...filters, machine })
+                else setBrowseOn(machine)
+              }} items={machineItems.filter((item) => !item.offline).map(({ value, label }) => ({ value, label }))} />
+            </div>
+          ) : (filtered || query.trim()) ? (
+            <div role="group" aria-label="Active filters" className="flex min-w-0 flex-wrap items-center gap-(--s2) px-(--s5)">
+              {machineFilter !== "all" && <FilterToken label="Machine" value={browserMachine?.name ?? machineFilter} onOpen={() => setFiltersOpen(true)} onRemove={() => changeFilters({ ...filters, machine: "all" })} />}
+              {agentFilter !== "all" && <FilterToken label="Used with" value={harnessName(agentFilter)} onOpen={() => setFiltersOpen(true)} onRemove={() => changeFilters({ ...filters, agent: "all" })} />}
+              <span className="ms-auto flex items-center gap-(--s2) text-(length:--fs-xs) text-(--fg2) tabular-nums">
+                {`${shown.length} of ${total}`}
+                {filtered && <button type="button" onClick={() => changeFilters({ ...filters, machine: "all", agent: "all" })} className="rounded-(--r-xs) font-medium text-(--accent) hover:underline">Clear</button>}
+              </span>
+            </div>
+          ) : null}
         >
           <SourceList aria-label="Projects" className="flex-1 px-(--s4)">
             {groups.map((group) => group.rows.length > 0 && (
@@ -422,6 +472,12 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
                 {group.rows.map(projectRow)}
               </Fragment>
             ))}
+            {!history && browserMachine && (
+              <SourceRow type="button" onClick={() => setBrowseFolders(true)} className="mt-(--s3) text-(--fg2)">
+                <FolderSearch aria-hidden className="size-4" />
+                <span className="min-w-0 flex-1 truncate">{`Browse folders on ${browserMachine.name}…`}</span>
+              </SourceRow>
+            )}
             {!shown.length && (
               <p className="px-(--s3) text-(--fg2)">
                 {projectQueries.firstLoadPending || foundQueries.firstLoadPending
@@ -445,163 +501,131 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
             </div>
           ) : project && place && row ? (
             <>
-              <section aria-label="Where" className="flex min-w-0 flex-col gap-(--s2)">
-                <h2 className="font-semibold">Where</h2>
-                <div className="flex flex-wrap items-center gap-(--s3)">
-                  <h3 className="min-w-0 flex-1 wrap-anywhere text-(length:--fs-lg) font-semibold">{project.name}</h3>
-                  <Button type="button" size="sm" className="min-[761px]:hidden" onClick={() => setChooseProjectOnPhone(true)}>Choose project…</Button>
-                  <PopupSelect
-                    label="Machine"
-                    value={place.key}
-                    onValueChange={choosePlace}
-                    items={project.places.map((entry) => ({ value: entry.key, label: placeLabel(entry, project.places), disabled: !canStart(entry) }))}
-                  />
+              {/* The project, then one card: the task with how to run it. Everything else appears only when it matters. */}
+              <header className="flex min-w-0 items-start gap-(--s4)">
+                <div className="flex min-w-0 flex-1 flex-col gap-(--s1)">
+                  <h2 className="truncate text-(length:--fs-lg) font-semibold">{project.name}</h2>
+                  <p className="truncate text-(length:--fs-sm) text-(--fg2)" title={row.directory}>
+                    {row.directory}{row.git?.branch && <span className="text-(--fg3)">{` · ${row.git.branch}`}{dirty > 0 && ` · ${plural(dirty, "change")}`}</span>}
+                  </p>
                 </div>
-                <p className="wrap-anywhere font-(family-name:--mono) text-(length:--fs-xs) text-(--fg2) max-[760px]:max-h-10 max-[760px]:overflow-y-auto">{row.directory}</p>
-              </section>
+                <Button type="button" size="sm" className="min-[761px]:hidden" onClick={() => setChooseProjectOnPhone(true)}>Change…</Button>
+                {project.places.length > 1 ? (
+                  <PopupSelect label="Machine" value={place.key} onValueChange={choosePlace}
+                    items={project.places.map((entry) => ({ value: entry.key, label: placeLabel(entry, project.places), disabled: !canStart(entry) }))} />
+                ) : <span className="flex h-(--ctl-h) shrink-0 items-center text-(length:--fs-sm) text-(--fg2)">{machineName}</span>}
+              </header>
 
-              <section aria-label="What" className="flex min-w-0 flex-col gap-(--s4)">
-                <h2 className="font-semibold">What</h2>
-                <div className="flex flex-wrap items-center gap-(--s3)">
-                  <SegmentedControl value={[view]} onValueChange={chooseView} aria-label="Session view">
-                    <SegmentedControlItem value="chat" disabled={Boolean(chatUnavailableHint)}>Chat</SegmentedControlItem>
-                    <SegmentedControlItem value="terminal">Terminal</SegmentedControlItem>
-                  </SegmentedControl>
-                  {view === "chat" && (
-                    <SegmentedControl aria-label="Conversation mode" value={[resume ? "resume" : "new"]} onValueChange={([value]) => {
-                      if (value) setResume(value === "resume")
-                    }}>
-                      <SegmentedControlItem value="new">New conversation</SegmentedControlItem>
-                      <SegmentedControlItem value="resume">Resume</SegmentedControlItem>
-                    </SegmentedControl>
-                  )}
-                </div>
-
-                <Choice label="Agent">
-                  <div role="group" aria-label="Agent" className="flex flex-wrap gap-(--s2)">
-                    {agentIds.map((id) => {
-                      const used = row.launches.find((launch) => launch.harness === id)
-                      const missing = accounts.data?.some((entry) => entry.harness === id && !entry.installed)
-                      return (
-                        <Button key={id} type="button" variant={id === harnessId ? "primary" : "default"} aria-pressed={id === harnessId}
-                          disabled={missing} className="h-auto min-h-(--ctl-h) whitespace-normal"
-                          title={used && !missing ? `Last used ${relativeTime(new Date(used.last_used), now)}` : undefined}
-                          onClick={() => { setHarness(id); setResumeId("") }}>
-                          {harnessName(id)}
-                          {missing ? <span className="text-(length:--fs-xs)">· not installed on {machineName}</span>
-                            : used && <span className="text-(length:--fs-xs) opacity-70">{shortAge(new Date(used.last_used), now)}</span>}
-                        </Button>
-                      )
-                    })}
-                  </div>
-                  {account?.installed && !account.signedIn && !account.checkRequired && (
-                    <div className="flex flex-wrap items-center gap-(--s2) text-(length:--fs-sm) text-(--fg2)">
-                      <p>{harnessName(harnessId)} isn't signed in on {machineName}.
-                        {view === "chat" && !resuming && " You can also sign in after starting the chat."}
-                      </p>
-                      {account.methods.length > 0 ? (
-                        <Button type="button" size="sm" onClick={() => setSignInTarget({ machine: place.machine, name: machineName, account })}>Sign in…</Button>
-                      ) : <p>Run {harnessName(harnessId)} on {machineName} to sign in.</p>}
+              <div className="flex min-w-0 flex-col gap-(--s3)">
+                <div className="flex min-w-0 flex-col rounded-(--r-pop) bg-(--field) shadow-[inset_0_0_0_.5px_var(--control-edge)] transition-shadow duration-(--dur-1) ease-(--ease) has-[textarea:focus]:shadow-[inset_0_0_0_1px_var(--accent),0_0_0_3px_var(--accent-tint)]">
+                  {resuming && (
+                    <div className="flex min-w-0 items-center gap-(--s3) border-b-[0.5px] border-(--sep-soft) px-(--s5) py-(--s3) text-(length:--fs-sm)">
+                      <History aria-hidden className="size-3.5 shrink-0 text-(--fg2)" />
+                      <span className="min-w-0 flex-1 truncate">{resumeTitle ? <>Resuming <strong>{resumeTitle}</strong></> : "Choose a conversation to resume"}</span>
+                      <button type="button" onClick={() => { setResume(false); setResumeId("") }} className="shrink-0 text-(--accent) hover:underline">New conversation</button>
                     </div>
                   )}
-                </Choice>
-
-                <Choice label="Mode" note="chooses what loads below">
-                  <SegmentedControl value={[modeValue]} onValueChange={([value]) => {
-                    if (typeof value === "string") { setMode(value); setResumeId("") }
-                  }} aria-label="Mode" className="w-full">
-                    {modes.map((name) => (
-                      <SegmentedControlItem key={name} value={name} className="min-w-0 flex-1 truncate">{name}</SegmentedControlItem>
-                    ))}
-                  </SegmentedControl>
-                </Choice>
-
-                {resuming && (
-                  <Choice label="Conversation">
-                    {pastSessions.isLoading ? (
-                      <span role="status" className="text-(--fg2)">Loading conversations…</span>
-                    ) : pastSessions.data?.length ? (
-                      <div role="radiogroup" aria-label="Past conversations" className="flex max-h-48 flex-col overflow-y-auto">
-                        {pastSessions.data.map((item) => (
-                          <label key={item.id} className="flex min-h-(--row-h) min-w-0 items-center gap-(--s4) rounded-(--r-row) px-(--s3) hover:bg-(--hover)">
-                            <input type="radio" name="conversation" value={item.id} checked={resumeId === item.id} onChange={() => setResumeId(item.id)} className="accent-(--accent)" />
-                            <span className="min-w-0 flex-1 wrap-anywhere">{item.title?.trim() || item.id}</span>
-                          </label>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-(--fg2)">{signInError(pastSessions.error) ? "Sign in to list past conversations." : pastSessions.isError ? "Past conversations are unavailable." : "No conversations to resume for this project and agent."}</p>
-                    )}
-                  </Choice>
-                )}
-
-                {view === "chat" && (
-                  <Choice label={resuming ? "Unsent draft" : "First message"} note={resuming ? "Resume keeps this draft in Work" : "optional, sent when the agent is ready"}>
+                  {view === "chat" ? (
                     <textarea
-                      aria-label={resuming ? "Unsent draft" : "First message"}
+                      aria-label={resuming ? "Message to send after resuming" : "First message"}
                       rows={3}
                       value={prompt}
                       onChange={(event) => setPrompt(event.currentTarget.value)}
-                      placeholder="Describe the task"
-                      className="w-full resize-y rounded-(--r-ctl) border-[0.5px] border-(--control-edge) bg-(--field) px-(--s3) py-(--s2) text-(length:--fs) outline-none focus:ring-2 focus:ring-(--accent)"
+                      placeholder={resuming ? "Message to send after resuming (optional)" : `Describe the task for ${harnessName(harnessId)} (optional)`}
+                      className="field-sizing-content max-h-[30dvh] min-h-20 resize-none bg-transparent px-(--s5) pt-(--s4) text-(length:--fs) outline-none placeholder:text-(--fg3)"
                     />
-                  </Choice>
-                )}
-              </section>
-
-              {showWorkspace && !resuming && (
-                <div role="group" aria-label="Worktree" tabIndex={-1} ref={worktreeControl}
-                  aria-invalid={worktreeError ? true : undefined} aria-describedby={worktreeError ? worktreeErrorId : undefined}>
-                  <Choice label="Worktree">
-                    <SegmentedControl
-                      value={workspace === "folder" || workspace === "new" ? [workspace] : []}
-                      onValueChange={([value]) => {
-                        if (value === "folder" || value === "new") { setWorkspace(value); start.reset() }
-                      }}
-                      aria-label="Workspace"
-                      className="w-full"
-                    >
-                      <SegmentedControlItem value="folder" className="flex-1">
-                        This folder
-                      </SegmentedControlItem>
-                      <SegmentedControlItem value="new" className="flex-1" disabled={!canWorktree} title={worktreesNeedUpdate ? `Update Agentpack on ${machineName} to use worktrees` : undefined}>
-                        {worktreesNeedUpdate ? "New worktree · Needs update" : "New worktree"}
-                      </SegmentedControlItem>
-                    </SegmentedControl>
-                    {canWorktree && projectWorktrees.length > 0 && (
-                      <div role="group" aria-label="Existing worktrees" className="flex flex-wrap gap-(--s2)">
-                        {projectWorktrees.map((item) => (
-                          <Button key={item.path} type="button" size="sm" variant={item.path === workspace ? "primary" : "default"} aria-pressed={item.path === workspace} title={item.path} onClick={() => { setWorkspace(item.path); start.reset() }}>
-                            Continue branch {item.branch} (existing)
-                          </Button>
-                        ))}
+                  ) : (
+                    <p className="px-(--s5) pt-(--s4) pb-(--s2) text-(length:--fs-sm) text-(--fg2)">{`Opens ${harnessName(harnessId)} in an interactive terminal. Nothing is sent.`}</p>
+                  )}
+                  {/* How it runs: macOS pop-up buttons, one per decision, with remembered defaults. */}
+                  <div className="flex min-w-0 flex-wrap items-center gap-(--s2) px-(--s3) pt-(--s2) pb-(--s3)">
+                    <PopupSelect label="Agent" value={harnessId} onValueChange={(id) => { setHarness(id); setResumeId("") }}
+                      items={agentIds.map((id) => {
+                        const used = row.launches.find((launch) => launch.harness === id)
+                        const missing = accounts.data?.some((entry) => entry.harness === id && !entry.installed)
+                        return { value: id, label: harnessName(id), disabled: missing, detail: missing ? "not installed" : used ? shortAge(new Date(used.last_used), now) : undefined }
+                      })} />
+                    {modes.length > 1 && (
+                      <PopupSelect label="Mode" value={modeValue} onValueChange={(value) => { setMode(value); setResumeId("") }}
+                        items={modes.map((name) => ({ value: name, label: name === "default" ? "Default mode" : name }))} />
+                    )}
+                    {showWorkspace && !resuming && (
+                      <div ref={worktreeControl} tabIndex={-1} aria-invalid={worktreeError ? true : undefined} aria-describedby={worktreeError ? worktreeErrorId : undefined} className="contents">
+                        <PopupSelect label="Workspace" value={workspace} onValueChange={(value) => { setWorkspace(value); start.reset() }}
+                          items={[
+                            { value: "folder", label: "This folder" },
+                            { value: "new", label: "New worktree", disabled: !canWorktree, detail: worktreesNeedUpdate ? "needs update" : undefined },
+                            ...(canWorktree ? projectWorktrees.map((item) => ({ value: item.path, label: item.branch ?? item.path, group: "Continue a worktree", detail: plural(item.sessions.length, "session") })) : []),
+                          ]} />
                       </div>
                     )}
-                    <p className="text-(length:--fs-sm) text-(--fg2)">
-                      {workspace === "new"
-                        ? `Branch ${branchName} from ${row.git?.branch || "the current commit"}.`
-                        : continued
-                          ? `Shares ${continued.branch} with ${plural(continued.sessions.length, "other session")}.`
-                          : "Runs in the folder itself."}
-                      {othersHere.length > 0 && ` ${plural(othersHere.length, "other agent")} ${othersHere.length === 1 ? "is" : "are"} working in ${project.name}.`}
-                    </p>
-                    {workspace === "new" && dirty > 0 && (
-                      <label className="flex items-center gap-(--s3) text-(length:--fs-sm)">
-                        <input type="checkbox" checked={carry} onChange={(event) => setCarry(event.currentTarget.checked)} className="accent-(--accent)" />
-                        Bring {plural(dirty, "uncommitted change")}
-                        <span className="text-(--fg3)">· untracked files stay behind</span>
-                      </label>
-                    )}
-                    {worktreeError && <FieldError id={worktreeErrorId}>{worktreeError}</FieldError>}
-                  </Choice>
+                    <SegmentedControl value={[view]} onValueChange={chooseView} aria-label="Open as" className="ms-auto">
+                      <SegmentedControlItem value="chat" disabled={Boolean(chatUnavailableHint)} title={chatUnavailableHint}>Chat</SegmentedControlItem>
+                      <SegmentedControlItem value="terminal">Terminal</SegmentedControlItem>
+                    </SegmentedControl>
+                  </div>
                 </div>
+
+                {/* One quiet line per thing worth knowing, each with its own action. */}
+                <div className="flex min-w-0 flex-col gap-(--s2) px-(--s2) text-(length:--fs-sm) text-(--fg2) empty:hidden">
+                  {view === "chat" && !resuming && (pastSessions.data?.length ?? 0) > 0 && (
+                    <button type="button" onClick={() => setResume(true)} className="flex items-center gap-(--s2) self-start text-(--accent) hover:underline">
+                      <History aria-hidden className="size-3.5" />
+                      {`Resume a past ${harnessName(harnessId)} conversation (${pastSessions.data!.length})`}
+                    </button>
+                  )}
+                  {workspace === "new" && (
+                    <p className="flex flex-wrap items-center gap-x-(--s3) gap-y-(--s1)">
+                      <span>{view === "chat" && prompt.trim() ? `New branch ${branchName} from ${row.git?.branch || "the current commit"}.` : view === "chat" ? `New branch from ${row.git?.branch || "the current commit"}, named after the first message.` : `New branch from ${row.git?.branch || "the current commit"}.`}</span>
+                      {dirty > 0 && (
+                        <label className="flex items-center gap-(--s2)">
+                          <input type="checkbox" checked={carry} onChange={(event) => setCarry(event.currentTarget.checked)} className="accent-(--accent)" />
+                          {`Bring ${plural(dirty, "uncommitted change")}`}
+                        </label>
+                      )}
+                    </p>
+                  )}
+                  {continued && <p>{`Shares ${continued.branch} with ${plural(continued.sessions.length, "other session")}.`}</p>}
+                  {workspace === "folder" && othersHere.length > 0 && (
+                    <p className="flex flex-wrap items-center gap-x-(--s3)">
+                      <span>{`${plural(othersHere.length, "other agent")} ${othersHere.length === 1 ? "is" : "are"} working in this folder.`}</span>
+                      {canWorktree && <button type="button" onClick={() => { setWorkspace("new"); start.reset() }} className="text-(--accent) hover:underline">Use a new worktree</button>}
+                    </p>
+                  )}
+                  {account?.installed && !account.signedIn && !account.checkRequired && (
+                    <p className="flex flex-wrap items-center gap-x-(--s3)">
+                      <span>{`${harnessName(harnessId)} isn't signed in on ${machineName}.`}{view === "chat" && !resuming && " You can also sign in from the chat."}</span>
+                      {account.methods.length > 0
+                        ? <button type="button" onClick={() => setSignInTarget({ machine: place.machine, name: machineName, account })} className="text-(--accent) hover:underline">Sign in…</button>
+                        : <span>{`Run ${harnessName(harnessId)} on ${machineName} to sign in.`}</span>}
+                    </p>
+                  )}
+                  {worktreeError && <FieldError id={worktreeErrorId}>{worktreeError}</FieldError>}
+                </div>
+              </div>
+
+              {resuming && (
+                <section aria-label="Conversations" className="flex min-w-0 flex-col gap-(--s2)">
+                  <GroupHeader className="px-(--s2)">{`${harnessName(harnessId)} conversations in ${project.name}`}</GroupHeader>
+                  {pastSessions.isLoading ? (
+                    <span role="status" className="px-(--s2) text-(--fg2)">Loading conversations…</span>
+                  ) : pastSessions.data?.length ? (
+                    <SourceList aria-label="Past conversations" className="max-h-56 overflow-y-auto">
+                      {pastSessions.data.map((item) => (
+                        <SourceRow key={item.id} type="button" selected={resumeId === item.id} onClick={() => setResumeId(item.id)}>
+                          <span className="min-w-0 flex-1 truncate">{item.title?.trim() || item.id}</span>
+                        </SourceRow>
+                      ))}
+                    </SourceList>
+                  ) : (
+                    <p className="px-(--s2) text-(--fg2)">{signInError(pastSessions.error) ? "Sign in to list past conversations." : pastSessions.isError ? "Past conversations are unavailable." : "No conversations to resume for this project and agent."}</p>
+                  )}
+                </section>
               )}
 
               {contentsLoading ? (
-                <p className="text-(--fg2)">Loading what this folder loads on {machineName}…</p>
-              ) : row?.details_deferred ? (
-                <p className="text-(length:--fs-sm) text-(--fg2)">Select this project to see what it loads.</p>
-              ) : (
+                <p className="text-(length:--fs-sm) text-(--fg2)">{`Loading what this folder loads on ${machineName}…`}</p>
+              ) : row?.details_deferred ? null : (
                 <LoadedContents key={place.key} project={row} mode={modeValue} machine={place.machine} machineName={machineName} />
               )}
             </>
@@ -638,29 +662,14 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
             {start.error && !worktreeError && <FieldError>{start.needsTerminalUpdate
               ? `Needs update · Install a newer Agentpack on ${machineName} to launch a terminal.`
               : start.error.message}</FieldError>}
-            {row && !showProjectPicker && (
-              <div aria-label="Launch summary" role="status" className="max-h-[24dvh] min-w-0 overflow-y-auto wrap-anywhere text-(length:--fs-sm) text-(--fg2)">
-                <strong className="text-(--fg)">{harnessName(harnessId)} {view === "chat" ? "chat" : "terminal"} on {machineName}</strong>
-                {" · "}{modeValue} · {resumeConversation?.cwd || continued?.path || row.directory}
-                {resuming ? resumeTitle ? ` · Resume “${resumeTitle}”` : " · Choose a conversation"
-                  : workspace === "new" ? ` · New worktree ${branchName}` : continued ? ` · Continue branch ${continued.branch}` : ""}
-                {view === "chat" && (resuming ? (prompt.trim() ? " · Resume leaves the draft unsent" : " · Sends no message") : prompt.trim() ? " · Sends the first message" : " · Sends no message")}
-              </div>
-            )}
-            {!blocked && resuming && prompt.trim() && (
-              <details open className="min-w-0 text-(length:--fs-sm) text-(--fg2)">
-                <summary className="cursor-pointer">Message queued by Resume and send</summary>
-                <pre className="max-h-20 overflow-y-auto py-(--s2) whitespace-pre-wrap wrap-anywhere">{prompt.trim()}</pre>
-              </details>
-            )}
             <SheetActions pinned={false}>
               {!showProjectPicker && (
                 <>
+                  {resuming && prompt.trim() && <Button type="button" disabled={blocked} onClick={() => launch()}>Resume only</Button>}
                   <Button type="submit" variant="primary" disabled={blocked}>
-                    {resuming ? "Resume" : "Start session"}
+                    {resuming ? prompt.trim() ? "Resume and send" : "Resume" : view === "terminal" ? "Open terminal" : prompt.trim() ? "Start and send" : "Start chat"}
                     <Kbd aria-hidden className="text-current opacity-70">{isMac ? "⌘↵" : "Ctrl+↵"}</Kbd>
                   </Button>
-                  {resuming && prompt.trim() && <Button type="button" disabled={blocked} onClick={() => launch(true)}>Resume and send</Button>}
                 </>
               )}
             </SheetActions>
@@ -688,18 +697,6 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
   </>
 }
 
-function Choice({ label, note, children }: { label: string; note?: string; children: ReactNode }) {
-  return (
-    <div className="flex min-w-0 flex-col gap-(--s3)">
-      <span className="text-(length:--fs-xs) font-semibold text-(--fg2)">
-        {label}
-        {note && <span className="font-normal text-(--fg3)"> · {note}</span>}
-      </span>
-      {children}
-    </div>
-  )
-}
-
 // Everything the session loads from pack.lock, with what the chosen mode turns off.
 function LoadedContents({ project, mode, machine, machineName }: { project: ProjectRow; mode: string; machine: string; machineName: string }) {
   const connections = useQuery(connectionsQuery(useEventsConnected()))
@@ -710,14 +707,13 @@ function LoadedContents({ project, mode, machine, machineName }: { project: Proj
   const off = project.packages.filter((pkg) => effect.offPackages.has(pkg.module)).length + project.mcp.filter((server) => server.disabled || effect.offMCP.has(server.name)).length
   const active = project.packages.length + project.mcp.length - off
   return (
-    <section aria-label="Loaded in this session" className="flex min-w-0 flex-col gap-(--s3)">
-      <span className="text-(length:--fs-xs) font-semibold text-(--fg2)">
-        Loaded in this session
-        <span className="font-normal text-(--fg3)">
-          {" "}
-          · {active} active{off > 0 && `, ${off} turned off by mode “${mode}”`}
-        </span>
-      </span>
+    // Folded by default: it's reference, not a decision. Opens itself when a login must be picked or the lock is broken.
+    <details aria-label="Loaded in this session" open={choosable || Boolean(project.error) || undefined} className="group/loads flex min-w-0 flex-col gap-(--s3) open:[&>summary]:mb-(--s3)">
+      <summary className="flex cursor-default list-none items-center gap-(--s2) rounded-(--r-xs) text-(length:--fs-sm) text-(--fg2) hover:text-(--fg) [&::-webkit-details-marker]:hidden">
+        <ChevronRight aria-hidden className="size-3.5 transition-transform duration-(--dur-1) ease-(--ease) group-open/loads:rotate-90" />
+        {project.packages.length + project.mcp.length === 0 ? "Loads only the agent's own skills" : `Loads ${[project.packages.length && plural(project.packages.length, "package"), project.mcp.length && plural(project.mcp.length, "MCP server")].filter(Boolean).join(" and ")}`}
+        <span className="text-(--fg3)">{` · ${active} active${off > 0 ? `, ${off} off in ${mode}` : ""}`}</span>
+      </summary>
       {project.error ? (
         <p className="text-(length:--fs-sm) text-(--danger)">Couldn't read this project's pack.lock: {project.error}</p>
       ) : (
@@ -754,7 +750,7 @@ function LoadedContents({ project, mode, machine, machineName }: { project: Proj
       )}
       <ProjectSignInStatus signIn={signIn} />
       {choosable && <p className="text-(length:--fs-xs) text-(--fg3)">{`Logins you pick are saved for ${project.name} on ${machineName} and used by its new sessions.`}</p>}
-    </section>
+    </details>
   )
 }
 

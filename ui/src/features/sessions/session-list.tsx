@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react"
+import { lazy, Suspense, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate, useParams, useRouter, useSearch } from "@tanstack/react-router"
-import { Folder, Laptop, Plus, RefreshCw, Server } from "lucide-react"
+import { Folder, Laptop, Plus, Server } from "lucide-react"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
-import { GroupHeader, SearchField, SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
+import { FilterButton, FilterToken } from "@/components/kit/filters"
+import { GroupHeader } from "@/components/kit/list"
 import { RowContextMenu, RowContextMenuCheckboxItem, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
 import { ContextMenuSeparator } from "@/components/ui/context-menu"
-import { Button, buttonVariants } from "@/components/ui/button"
+import { buttonVariants } from "@/components/ui/button"
 import { useEventsConnected } from "@/features/events/use-events"
 import { nodesQuery } from "@/features/machines/queries"
 import { useIsPhone } from "@/features/shell/use-is-phone"
@@ -17,7 +18,8 @@ import { LOCAL } from "@/lib/api"
 import { basename, harnessName, plural } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useSessionCommands } from "./actions"
-import { groupSessions, matchesSession, nestHelpers, rowKey, treeSessions, type GroupMode, type ListedSession, type SessionSubhead } from "./group"
+import { clearedFilter, filterSearch, filterTokens, matchesFilter, readFilter, type SessionFilter } from "./filter"
+import { groupSessions, nestHelpers, rowKey, treeSessions, type GroupMode, type ListedSession, type SessionSubhead } from "./group"
 import { NotifyOffer } from "@/features/shell/attention"
 import { loadStartChoices } from "./choices"
 import { agentIds, defaultAgent, sessionRules } from "./rules"
@@ -33,6 +35,8 @@ import { SessionActionAlert } from "./session-action-alert"
 // drops it without an effect.
 type Cursor = { key: string; from: string | undefined }
 type Confirm = { kind: "stop" | "restart" | "archive"; rows: ListedSession[] }
+
+const SessionView = lazy(() => import("./session-view"))
 
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
 
@@ -85,8 +89,14 @@ export function SessionList() {
   const routeKey = params.machine && params.sessionId ? `${params.machine}:${params.sessionId}` : undefined
   const selectedKey = cursor?.from === routeKey ? cursor?.key : routeKey
 
-  const query = search.q ?? ""
-  const shown = treeSessions(sessions).filter((session) => !archiving.has(rowKey(session)) && matchesSession(session, query))
+  const filter = readFilter(search)
+  const listed = treeSessions(sessions).filter((session) => !archiving.has(rowKey(session)))
+  const shown = listed.filter((session) => matchesFilter(session, filter))
+  const tokens = filterTokens(filter, (id) => machines.find((machine) => machine.id === id)?.name ?? id)
+  const isDefault = tokens.length === 0 && groupMode === "project"
+  const [viewOpen, setViewOpen] = useState(false)
+  const [viewLoaded, setViewLoaded] = useState(false)
+  const viewButton = useRef<HTMLButtonElement>(null)
   // Pinned above the machine and project groups, and listed only there.
   const needsYou = shown.filter((session) => sessionGlyphState(session) === "needsYou")
   const pinned = new Set(needsYou)
@@ -102,6 +112,27 @@ export function SessionList() {
   const failed = Object.keys(queries.errors).length > 0
 
   useEffect(() => () => window.clearTimeout(pending.current), [])
+
+  function openView(open: boolean) {
+    if (open) setViewLoaded(true)
+    setViewOpen(open)
+  }
+
+  // ⌘F opens the view options with the filter field focused; the field lives in the popover.
+  useEffect(() => {
+    function onFind(event: globalThis.KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault()
+        openView(true)
+      }
+    }
+    window.addEventListener("keydown", onFind)
+    return () => window.removeEventListener("keydown", onFind)
+  }, [])
+
+  function setSearch(patch: Record<string, string | undefined>) {
+    void navigate({ href: withSearch(router.state.location.href, patch), replace: true })
+  }
 
   function openRow(row: ListedSession, replace = false) {
     void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: row.machine, sessionId: row.id }, search: true, replace })
@@ -280,46 +311,51 @@ export function SessionList() {
     )
   }
 
-  function chooseGroup(value: unknown[]) {
-    const next = value[0]
-    if (next !== "machine" && next !== "project") return
-    void navigate({ href: withSearch(router.state.location.href, { group: next }), replace: true })
-  }
-
-  const refreshButton = (
-    <Button variant="ghost" size="icon" aria-label="Refresh sessions" title="Refresh sessions" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
-      <RefreshCw aria-hidden className={cn(refresh.isPending && "animate-spin motion-reduce:animate-none")} />
-    </Button>
+  const filtered = tokens.length > 0
+  const viewLabel = filtered ? `View options, ${plural(tokens.length, "filter")} on` : "View options"
+  const viewTrigger = (
+    <FilterButton ref={viewButton} active={filtered} aria-label={viewLabel} title={`${viewLabel} (${isMac ? "⌘F" : "Ctrl+F"})`}
+      aria-expanded={viewOpen} onClick={() => openView(!viewOpen)} />
   )
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       {!routeKey && <ToolbarTitle title="Sessions" subtitle={`${plural(sessions.length, "session")} on ${plural(machines.length, "machine")}`} />}
-      {isPhone && <ToolbarSlot>{refreshButton}<NewSessionLink /></ToolbarSlot>}
+      {isPhone && <ToolbarSlot>{viewTrigger}<NewSessionLink /></ToolbarSlot>}
       {!isPhone && (
-        <div className="px-(--s2) pt-(--s3)">
-          <Link to="/sessions" search={{ q: search.q, group: search.group, tab: "work" }} activeOptions={{ exact: true, includeSearch: false }}
-            className="flex min-h-(--row-h) items-center rounded-(--r-row) px-(--s3) font-medium hover:bg-(--hover) aria-[current=page]:bg-(--page) aria-[current=page]:shadow-(--e-ctl)">
-            Work
-          </Link>
+        // One row: the Work link fills it and the view and New buttons sit on its trailing edge.
+        <div className="shrink-0 px-(--s2) pt-(--s3) pb-(--s2)">
+          <div className="relative">
+            <Link to="/sessions" search={{ q: search.q, group: search.group, agent: search.agent, status: search.status, host: search.host, tab: "work" }} activeOptions={{ exact: true, includeSearch: false }}
+              className="flex min-h-(--row-h) items-center rounded-(--r-row) ps-(--s3) pe-[calc(2*var(--ctl-h)+var(--s2))] font-medium hover:bg-(--hover) aria-[current=page]:bg-(--page) aria-[current=page]:shadow-(--e-ctl)">
+              Work
+            </Link>
+            <div className="absolute inset-y-0 end-(--s1) flex items-center">
+              {viewTrigger}
+              <NewSessionLink />
+            </div>
+          </div>
         </div>
       )}
-      <div className="flex shrink-0 flex-col gap-(--s3) p-(--s3)">
-        <div className="flex items-center gap-(--s2)">
-          <SearchField
-            aria-label="Filter sessions"
-            placeholder="Filter sessions"
-            defaultValue={query}
-            onChange={(event) => void navigate({ href: withSearch(router.state.location.href, { q: event.target.value || undefined }), replace: true })}
-          />
-          {!isPhone && refreshButton}
-          {!isPhone && <NewSessionLink />}
+      {filtered && (
+        <div role="group" aria-label="Active filters" className="flex shrink-0 flex-wrap items-center gap-(--s2) px-(--s4) pb-(--s3) max-[760px]:pt-(--s3)">
+          {tokens.map((token) => <FilterToken key={token.key} label={token.label} value={token.value} onOpen={() => openView(true)} onRemove={() => setSearch({ [token.key]: undefined })} />)}
+          <span className="ms-auto flex items-center gap-(--s2) text-(length:--fs-xs) text-(--fg2) tabular-nums">
+            {`${shown.length} of ${listed.length}`}
+            <button type="button" onClick={() => setSearch(clearedFilter)} className="rounded-(--r-xs) font-medium text-(--accent) hover:underline">Clear</button>
+          </span>
         </div>
-        <SegmentedControl value={[groupMode]} onValueChange={chooseGroup} aria-label="Group sessions by" className="w-full">
-          <SegmentedControlItem value="machine" className="flex-1">Machine</SegmentedControlItem>
-          <SegmentedControlItem value="project" className="flex-1">Project</SegmentedControlItem>
-        </SegmentedControl>
-      </div>
+      )}
+      {viewLoaded && (
+        <Suspense fallback={null}>
+          <SessionView anchor={viewButton} open={viewOpen} onOpenChange={openView}
+            filter={filter} group={groupMode} sessions={listed} machines={machines} isDefault={isDefault}
+            onFilter={(patch: Partial<SessionFilter>) => setSearch(filterSearch(patch))}
+            onGroup={(group) => setSearch({ group: group === "project" ? undefined : group })}
+            onReset={() => setSearch({ ...clearedFilter, group: undefined })}
+            refresh={{ pending: refresh.isPending, run: () => refresh.mutate() }} />
+        </Suspense>
+      )}
 
       <nav
         aria-label="Sessions"
@@ -334,8 +370,11 @@ export function SessionList() {
           return error ? <Banner key={machine.id} tone="danger">{`Couldn't load sessions from ${machine.name}: ${error.message}`}</Banner> : null
         })}
         {loading && [0, 1, 2].map((index) => <RowSkeleton key={index} />)}
-        {!loading && !failed && rows.length === 0 && (query ? (
-          <Empty title="No matches">Try another name, folder or machine.</Empty>
+        {!loading && !failed && rows.length === 0 && (filtered ? (
+          <Empty title="No matching sessions">
+            {`${plural(listed.length, "session")} hidden by filters. `}
+            <button type="button" onClick={() => setSearch(clearedFilter)} className="font-medium text-(--accent) hover:underline">Clear filters</button>
+          </Empty>
         ) : (
           <Empty title="No sessions yet">
             Start an agent with New session, or from the CLI on a machine.
@@ -466,3 +505,4 @@ function NewInFolder({ head }: { head: SessionSubhead }) {
     </RowContextMenu>
   )
 }
+

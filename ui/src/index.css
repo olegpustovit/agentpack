@@ -66,6 +66,8 @@
   /* Dialogs: one inset everywhere (header, body, footer, every column), one gap between sections. */
   --dlg-pad:20px;--dlg-gap:16px;
   --dur-1:120ms;--dur-2:200ms;--dur-3:320ms;--ease:cubic-bezier(.2,.8,.2,1);
+  /* Entry motion for popups and panes: a hint of scale and lift, never more. */
+  --enter-scale:.98;--enter-shift:4px;
 
   /* 3 · Density: compact ─────────────────────────────────────── */
   --bar-h:48px;--status-h:26px;--ctl-h:26px;--ctl-h-sm:22px;--row-h:28px;--row-h-2:40px;--head-h:26px;--tab-h:52px;

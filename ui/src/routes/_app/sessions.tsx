@@ -17,7 +17,7 @@ function SessionsLayout() {
   const isPhone = useIsPhone()
   const [draft, setDraft] = useState("")
   const restore = useRef<WorkPosition | null>(null)
-  const all = search.tab === "all" || (search.tab !== "work" && Boolean(search.q || search.group))
+  const all = search.tab === "all" || (search.tab !== "work" && Boolean(search.q || search.group || search.agent || search.status || search.host))
   const work = <SessionsHome draft={draft} setDraft={setDraft}
     rememberPosition={(position) => { restore.current = position }}
     takePosition={() => {
@@ -63,6 +63,9 @@ export const Route = createFileRoute("/_app/sessions")({
   validateSearch: looseSearch({
     q: "text",
     group: "text",
+    agent: "text",
+    status: "text",
+    host: "text",
     tab: "text",
     new: "flag",
     machine: "text",
