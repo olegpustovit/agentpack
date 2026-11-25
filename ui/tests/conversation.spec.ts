@@ -250,7 +250,7 @@ test("boolean ACP config options send a JSON boolean", async ({ page }) => {
     return route.fulfill({ json: { accepted: true } })
   })
   await page.goto("/sessions/local/chat-one")
-  await page.getByRole("button", { name: "Options" }).click()
+  await page.getByRole("button", { name: "Options", exact: true }).click()
   const toggle = page.getByRole("menuitemcheckbox", { name: "Verbose output" })
   await expect(toggle).toHaveAttribute("aria-checked", "false")
   await toggle.click()

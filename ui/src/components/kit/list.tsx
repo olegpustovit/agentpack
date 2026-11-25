@@ -117,20 +117,22 @@ export function useSlidingThumb<T extends HTMLElement>(selector: string) {
       track.dataset.thumb = on ? "on" : "off";
     };
     place();
-    const frame = requestAnimationFrame(() => { track.dataset.thumbReady = ""; });
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => { track.dataset.thumbReady = ""; });
+    });
     const attributes = new MutationObserver(place);
-    attributes.observe(track, { subtree: true, attributes: true, attributeFilter: ["aria-pressed", "aria-current"] });
+    attributes.observe(track, { subtree: true, attributes: true, childList: true, attributeFilter: ["aria-pressed", "aria-current"] });
     // Absent in jsdom; browsers always have it.
     const size = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(place);
     size?.observe(track);
-    return () => { cancelAnimationFrame(frame); attributes.disconnect(); size?.disconnect(); };
+    return () => { cancelAnimationFrame(frame); attributes.disconnect(); size?.disconnect(); delete track.dataset.thumbReady; };
   }, [selector]);
   return ref;
 }
 
 // The ::before thumb; the caller sets its inset, radius and fill.
 export const slidingThumb =
-  "relative isolate before:absolute before:start-0 before:-z-1 before:w-(--thumb-w) before:translate-x-(--thumb-x) data-[thumb=off]:before:opacity-0 data-thumb-ready:before:transition-[translate,width,opacity] data-thumb-ready:before:duration-(--dur-2) data-thumb-ready:before:ease-(--ease)";
+  "relative isolate before:absolute before:left-0 before:-z-1 before:w-(--thumb-w) before:translate-x-(--thumb-x) data-[thumb=off]:before:opacity-0 data-thumb-ready:before:transition-[translate,width,opacity] data-thumb-ready:before:duration-(--dur-2) data-thumb-ready:before:ease-(--ease)";
 
 export function SegmentedControl({ className, ...props }: ComponentProps<typeof ToggleGroup>) {
   const ref = useSlidingThumb<HTMLDivElement>('[aria-pressed="true"]');

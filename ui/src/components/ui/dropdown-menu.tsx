@@ -38,7 +38,7 @@ function DropdownMenuContent({
       >
         <MenuPrimitive.Popup
           data-slot="dropdown-menu-content"
-          className={cn("z-50 max-h-(--available-height) w-(--anchor-width) min-w-32 origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-(--dur-1) ease-(--ease) outline-none data-[side=bottom]:slide-in-from-top-[var(--enter-shift)] data-[side=inline-end]:slide-in-from-left-[var(--enter-shift)] data-[side=inline-start]:slide-in-from-right-[var(--enter-shift)] data-[side=left]:slide-in-from-right-[var(--enter-shift)] data-[side=right]:slide-in-from-left-[var(--enter-shift)] data-[side=top]:slide-in-from-bottom-[var(--enter-shift)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[var(--enter-scale)] data-closed:animate-out data-closed:overflow-hidden data-closed:fade-out-0 data-closed:zoom-out-[var(--enter-scale)]", className )}
+          className={cn("z-50 max-h-(--available-height) w-(--anchor-width) min-w-32 origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-(--dur-1) ease-(--ease) outline-none data-[side=bottom]:[--tw-enter-translate-y:calc(-1*var(--enter-shift))] data-[side=inline-end]:[--tw-enter-translate-x:calc(-1*var(--enter-shift))] data-[side=inline-start]:[--tw-enter-translate-x:var(--enter-shift)] data-[side=left]:[--tw-enter-translate-x:var(--enter-shift)] data-[side=right]:[--tw-enter-translate-x:calc(-1*var(--enter-shift))] data-[side=top]:[--tw-enter-translate-y:var(--enter-shift)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[var(--enter-scale)] data-closed:animate-out data-closed:overflow-hidden data-closed:fade-out-0 data-closed:zoom-out-[var(--enter-scale)]", className )}
           {...props}
         />
       </MenuPrimitive.Positioner>
@@ -132,7 +132,7 @@ function DropdownMenuSubContent({
   return (
     <DropdownMenuContent
       data-slot="dropdown-menu-sub-content"
-      className={cn("w-auto min-w-[96px] rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 duration-(--dur-1) ease-(--ease) data-[side=bottom]:slide-in-from-top-[var(--enter-shift)] data-[side=left]:slide-in-from-right-[var(--enter-shift)] data-[side=right]:slide-in-from-left-[var(--enter-shift)] data-[side=top]:slide-in-from-bottom-[var(--enter-shift)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[var(--enter-scale)] data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-[var(--enter-scale)]", className )}
+      className={cn("w-auto min-w-[96px] rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 duration-(--dur-1) ease-(--ease) data-[side=bottom]:[--tw-enter-translate-y:calc(-1*var(--enter-shift))] data-[side=left]:[--tw-enter-translate-x:var(--enter-shift)] data-[side=right]:[--tw-enter-translate-x:calc(-1*var(--enter-shift))] data-[side=top]:[--tw-enter-translate-y:var(--enter-shift)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[var(--enter-scale)] data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-[var(--enter-scale)]", className )}
       align={align}
       alignOffset={alignOffset}
       side={side}

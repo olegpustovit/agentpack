@@ -59,9 +59,10 @@ function useViewEnter() {
     if (!fromLocation || routePosition(fromLocation.pathname).view === routePosition(toLocation.pathname).view) return
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) return
     const token = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+    const duration = token("--dur-2")
     document.getElementById("main")?.animate(
       [{ opacity: 0, translate: `0 ${token("--enter-shift")}` }, { opacity: 1, translate: "0 0" }],
-      { duration: parseFloat(token("--dur-2")), easing: token("--ease") },
+      { duration: parseFloat(duration) * (duration.endsWith("ms") ? 1 : 1000), easing: token("--ease") },
     )
   }), [router])
 }
