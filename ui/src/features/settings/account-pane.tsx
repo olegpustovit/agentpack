@@ -1,13 +1,13 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { RowSkeleton } from "@/components/kit/feedback"
-import { FieldGrid } from "@/components/kit/forms"
+import { FormGroup, FormRow } from "@/components/kit/forms"
 import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
 import { identityQuery } from "@/features/machines/queries"
 import { statusQuery } from "@/features/status/queries"
 import { useGatewayActions } from "./actions"
-import { LoadError, Pane, Row } from "./panes"
+import { LoadError, Pane } from "./panes"
 
 // Identity only: who is signed in and where their logins live. Stopping this machine is in General.
 export function AccountPane() {
@@ -24,24 +24,18 @@ export function AccountPane() {
   return (
     <>
       <Pane title="Account">
-        <FieldGrid>
-          <Row label="Signed in as">{status.data?.email || identity.data.auth}</Row>
-          <Row label="Tailscale user">{identity.data.tailscale_user || "None"}</Row>
-          <Row label="Connected assistants">
-            <p className="text-(length:--fs-sm) text-(--fg2)">Sign out everywhere also ends this account’s logins in connected assistants.</p>
-          </Row>
-          <Row label="">
-            <p className="text-(length:--fs-sm) text-(--fg2)">
-              Sessions are attributed to your account. Signing out leaves existing agents running.
-            </p>
-            <Button disabled={actions.signOut.isPending} onClick={() => actions.signOut.mutate("current")}>
-              Sign out
-            </Button>
-            <Button disabled={actions.signOut.isPending} onClick={() => setConfirm(true)}>
-              Sign out everywhere…
-            </Button>
-          </Row>
-        </FieldGrid>
+        <FormGroup>
+          <FormRow label="Signed in as" description="Sessions you start are attributed to this account.">{status.data?.email || identity.data.auth}</FormRow>
+          <FormRow label="Tailscale user">{identity.data.tailscale_user || "None"}</FormRow>
+        </FormGroup>
+        <FormGroup title="Sign out" footer="Signing out leaves running agents running.">
+          <FormRow label="This browser">
+            <Button disabled={actions.signOut.isPending} onClick={() => actions.signOut.mutate("current")}>Sign out</Button>
+          </FormRow>
+          <FormRow label="Everywhere" description="Every browser and connected assistant (Claude.ai, ChatGPT) signs in again.">
+            <Button variant="destructive" disabled={actions.signOut.isPending} onClick={() => setConfirm(true)}>Sign out everywhere…</Button>
+          </FormRow>
+        </FormGroup>
       </Pane>
       <ConfirmAlert open={confirm} onOpenChange={setConfirm}>
         <ConfirmAlertContent

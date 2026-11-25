@@ -7,3 +7,10 @@ export const settingsQuery = queryOptions({
   queryFn: () => api<Settings>("/api/settings"),
   staleTime: 5 * 60 * 1000,
 })
+
+// Mesh-wide defaults for new chats; a peer without the route reads as Needs update.
+export type AgentDefaults = { agentpack_tools: boolean; replace_subagents: boolean }
+export const agentDefaultsQuery = queryOptions({
+  queryKey: ["agent-defaults"],
+  queryFn: () => api<AgentDefaults>("/api/agents/defaults"),
+})

@@ -68,6 +68,31 @@ async function openToolsPackage(page: Page) {
 test.describe("kit styling", () => {
   test.skip(({ isMobile }) => isMobile, "desktop chrome")
 
+  test("settings form groups have inset hairlines, padded rows and trailing controls", async ({ page }) => {
+    await desktop(page)
+    await page.goto("/settings/sharing")
+    const group = page.locator('[data-slot="form-group"]').filter({ hasText: "Tailnet" })
+    const box = group.locator(":scope > div").nth(1)
+    const rows = box.locator('[data-slot="form-row"]')
+    const first = rows.nth(0)
+    const second = rows.nth(1)
+    await expect(box).toHaveCSS("border-radius", "10px")
+    // At 1× device scale a positive fractional border occupies one device pixel.
+    const hairline = await page.evaluate(() => `${Math.max(0.5, 1 / devicePixelRatio)}px`)
+    await expect(box).toHaveCSS("border-top-width", hairline)
+    await expect(first).toHaveCSS("border-top-width", "0px")
+    await expect(second).toHaveCSS("border-top-width", hairline)
+    await expect(first).toHaveCSS("padding", "6px 12px")
+    const alignment = await first.evaluate((row) => {
+      const toggle = row.querySelector('[role="switch"]')!.getBoundingClientRect()
+      const bounds = row.getBoundingClientRect()
+      return { inset: bounds.right - toggle.right, centerOffset: (bounds.top + bounds.bottom - toggle.top - toggle.bottom) / 2 }
+    })
+    expect(alignment.inset).toBeCloseTo(12)
+    expect(alignment.centerOffset).toBeCloseTo(0, 1)
+  })
+
+
   test("base rules do not outrank utilities", async ({ page }) => {
     await desktop(page)
     await page.goto("/sessions")

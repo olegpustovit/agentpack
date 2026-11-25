@@ -1,9 +1,10 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Section } from "@/components/kit/data"
+import { FormGroup, FormRow } from "@/components/kit/forms"
+import { StatusGlyph } from "@/components/kit/status-dot"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
-import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
+import { ConfirmAlert, ConfirmAlertContent, Menu, MenuContent, MenuItem, MenuTrigger, RowMoreButton } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
 import { useEventsConnected } from "@/features/events/use-events"
 import { replicationQuery } from "@/features/library/queries"
@@ -20,7 +21,7 @@ export function ReplicationPane() {
   const live = useEventsConnected()
   const settings = useQuery(settingsQuery)
   const nodes = useQuery(nodesQuery(live, true))
-  const replication = useQuery({ ...replicationQuery, refetchInterval: 30_000 })
+  const replication = useQuery({ ...replicationQuery, refetchInterval: live ? false : 30_000 })
   const [removedPeer, setRemovedPeer] = useState("")
   const failed = settings.error ?? nodes.error ?? replication.error
   if (failed) {
@@ -42,16 +43,12 @@ export function ReplicationPane() {
   const canManage = settings.data.can_manage !== false
   const enrolled = new Map((replication.data.peers ?? []).map((replica) => [replica.node, replica] as const))
   return (
-    <>
-      <Banner>
-        {sharing
-          ? "Enroll on both machines to sync accounts, chat history, limits and library data. Every mesh member is fully trusted. Only an owner can enroll or remove machines."
-          : "Enable Tailscale sharing before enrolling a machine."}
-      </Banner>
+    <div className="flex min-w-0 flex-col gap-(--s7)">
+      {!sharing && <Banner tone="warn" action={<Link className="text-(--accent)" to="/settings/$pane" params={{ pane: "sharing" }}>Open Sharing</Link>}>Turn on Tailscale sharing before enrolling a machine.</Banner>}
       {removedPeer && <Banner tone="warn" action={<Link className="text-(--accent)" to="/settings/$pane" params={{ pane: "connections" }}>Open Connections</Link>}>
         {`${removedPeer} keeps the MCP logins it already received. Sign out of OAuth logins in Connections and rotate other credentials at their providers.`}
       </Banner>}
-      <Section title="Machines">
+      <FormGroup title="Machines" footer={canManage ? undefined : "Only the gateway owner can enroll or remove machines."}>
         {nodes.data.length === 0 ? (
           <Empty title="No allowed Tailscale peers">
             None are discovered right now. Check the allow list on the Sharing pane.
@@ -69,8 +66,8 @@ export function ReplicationPane() {
             />
           ))
         )}
-      </Section>
-    </>
+      </FormGroup>
+    </div>
   )
 }
 
@@ -100,31 +97,29 @@ function PeerRow({
   const status = trust ? "Waiting for trust" : contact?.needs_update ? "Needs update" : stale && synced ? "Stale"
     : contact?.error ? "Sync failed" : syncTime ? `Synced ${relativeTime(syncTime, Math.max(now, syncTime.getTime()))}` : replicationStatus(peer, replica)
   const unavailable = !canManage ? "Only the gateway owner can change enrollment." : !sharing ? "Turn on Tailscale sharing to sync or enroll." : !peer.online ? "Sync and enrollment require the machine to be online." : ""
+  const dot = !replica ? (peer.online ? "stopped" : "offline") : contact?.needs_update ? "needsUpdate" : trust || contact?.error ? "needsYou" : stale ? (peer.online ? "idle" : "offline") : "running"
   const busy = enroll.isPending || sync.isPending || remove.isPending
 
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-(--s4) border-b-[0.5px] border-(--sep) py-(--s3)">
-      <div className="min-w-0 flex-1 max-[760px]:basis-full">
-        <p className="truncate font-medium">{peer.name}</p>
-        <p className="text-(length:--fs-sm) text-(--fg2)">{status}</p>
+    <FormRow
+      label={<span className="flex items-center gap-(--s3)"><StatusGlyph state={dot} />{peer.name}</span>}
+      description={[status, contact?.schema_version ? `schema ${contact.schema_version}` : "", unavailable && replica?.mesh ? "" : unavailable].filter(Boolean).join(" · ")}
+      detail={(trust || (contact?.error && !trust)) && <>
         {trust && <p className="text-(length:--fs-sm) text-(--fg2)">{replica?.mesh ? `Enroll this gateway on ${peer.name} to begin syncing.` : "Enroll to approve sharing with this machine."}</p>}
-        {syncTime && <p className="text-(length:--fs-xs) text-(--fg2)">{`Last successful sync ${syncTime.toLocaleString()}`}</p>}
-        {unavailable && <p className="text-(length:--fs-xs) text-(--fg2)">{unavailable}</p>}
-        {contact?.schema_version ? <p className="text-(length:--fs-xs) text-(--fg3)">{`Schema ${contact.schema_version} · Lag ${contact.lag ?? "unknown"} versions`}</p> : null}
-        {contact?.error && !trust ? (
-          <p className="break-words text-(length:--fs-sm) text-(--danger-word)">{contact.error}</p>
-        ) : (
-          contact?.at && <p className="text-(length:--fs-xs) text-(--fg3)">{`Last contact ${new Date(contact.at).toLocaleString()}`}</p>
-        )}
-      </div>
+        {contact?.error && !trust && <p className="break-words text-(length:--fs-sm) text-(--danger-word)">{contact.error}</p>}
+      </>}
+    >
       {replica?.mesh ? (
         <>
-          <Button disabled={Boolean(unavailable) || busy} onClick={() => sync.mutate(peer)}>
-            Sync now
-          </Button>
-          <Button variant="ghost" disabled={!canManage || busy} onClick={() => setRemoving(true)}>
-            Remove
-          </Button>
+          <Button disabled={Boolean(unavailable) || busy} onClick={() => sync.mutate(peer)}>Sync now</Button>
+          <Menu>
+            <MenuTrigger render={<RowMoreButton aria-label={`${peer.name} actions`} className="opacity-100" />} />
+            <MenuContent align="end">
+              <MenuItem disabled>{syncTime ? `Last sync ${syncTime.toLocaleString()}` : "Never synced"}</MenuItem>
+              {contact?.at && <MenuItem disabled>{`Last contact ${new Date(contact.at).toLocaleString()}`}</MenuItem>}
+              <MenuItem danger disabled={!canManage || busy} onClick={() => setRemoving(true)}>Remove from replication…</MenuItem>
+            </MenuContent>
+          </Menu>
         </>
       ) : (
         <Button disabled={Boolean(unavailable) || busy} onClick={() => setEnrolling(true)}>
@@ -153,6 +148,6 @@ function PeerRow({
           />
         )}
       </ConfirmAlert>
-    </div>
+    </FormRow>
   )
 }

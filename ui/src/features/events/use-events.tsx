@@ -32,6 +32,7 @@ export const STATE_FAMILIES: Record<string, string[][]> = {
   mcp_credentials: [["mcp-credentials"]],
   mcp_credential_approvals: [["mcp-credentials"]],
   agent_snapshots: [["agent-snapshot"]],
+  agent_defaults: [["agent-defaults"]],
   agent_credentials: [["agents"]],
   registry_objects: [["m", LOCAL, "library"], ["drafts"]],
   registry_names: [["m", LOCAL, "library"], ["drafts"]],

@@ -12,13 +12,8 @@ import { identityQuery, useMachines } from "@/features/machines/queries"
 import { api, LOCAL } from "@/lib/api"
 import { plural, relativeTime } from "@/lib/format"
 import { hud } from "@/lib/hud"
-import { issueFilters, issueLabels, issueStatus, resolutionError, type DiagnosticIssue, type IssueFilter } from "./diagnostics-model"
+import { issuesQuery, issueFilters, issueLabels, issueStatus, resolutionError, type DiagnosticIssue, type IssueFilter } from "./diagnostics-model"
 import { LoadError, Pane } from "./panes"
-
-const issuesQuery = (status: IssueFilter) => queryOptions({
-  queryKey: ["diagnostics", "issues", status],
-  queryFn: () => api<DiagnosticIssue[]>("/api/logs/issues", { query: { status: status === "all" ? "" : status } }),
-})
 
 const issueQuery = (fingerprint: string) => queryOptions({
   queryKey: ["diagnostics", "issue", fingerprint],

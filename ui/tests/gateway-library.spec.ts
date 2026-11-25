@@ -293,7 +293,7 @@ test("replication requires explicit trust and reports sync progress per peer", a
   await page.route("**/api/library/packages**", (route) => route.fulfill({ json: [item] }))
   await page.route("**/api/library/agentpacks**", (route) => route.fulfill({ json: [] }))
   await page.goto("/settings/replication")
-  await expect(page.getByText("Enroll on both machines to sync accounts, chat history, limits and library data. Every mesh member is fully trusted. Only an owner can enroll or remove machines.")).toBeVisible()
+  await expect(page.getByText("Enrolled machines share accounts, chat history, limits and Library data, and every member is fully trusted. Enroll on both machines to start syncing.")).toBeVisible()
   await expect(page.getByText("Not enrolled")).toBeVisible()
   await page.getByRole("button", { name: "Enroll", exact: true }).click()
   expect(enrolled).toBe(false)
@@ -302,7 +302,7 @@ test("replication requires explicit trust and reports sync progress per peer", a
   await page.getByRole("button", { name: "Sync now" }).click()
   await expect(page.getByText("Sync requested with Build server.")).toBeVisible()
   await expect(page.getByText("Enrolled · online")).toBeVisible()
-  await expect(page.getByText("Schema 22 · Lag 0 versions")).toBeVisible()
+  await expect(page.getByText("Enrolled · online · schema 22")).toBeVisible()
 })
 
 test("offline restore saves the exact agentpack revision as a draft", async ({ page }) => {

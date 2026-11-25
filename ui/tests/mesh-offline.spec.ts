@@ -59,5 +59,5 @@ test("legacy Library peers require explicit full mesh trust", async ({page}) => 
   await page.getByRole("button",{name:"Trust and enroll"}).click()
   await expect.poll(()=>enrollments).toBe(1)
   await expect(page.getByRole("button",{name:"Sync now"})).toBeVisible()
-  await expect(page.getByText("Schema 12 · Lag 0 versions")).toBeVisible()
+  await expect(page.getByText("Stale · schema 12")).toBeVisible()
 })

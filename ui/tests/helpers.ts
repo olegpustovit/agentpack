@@ -110,6 +110,8 @@ export async function mockAPI(page: Page, { authenticated = true, unclaimed = fa
       else return route.fulfill({ status: 404, body: "Folder not found." })
     } else if (url.pathname === "/api/packages") data = req.method() === "POST" ? {} : [{ module: "github.com/acme/tools", commit: "abcd1234" }]
     else if (url.pathname === "/api/settings") data = { running: true, platform: "linux", sharing_enabled: true, allowed_peers: ["tag:server"] }
+    else if (url.pathname === "/api/logs/issues") data = []
+    else if (url.pathname === "/api/mcp/credentials") data = { credentials: [] }
     else if (url.pathname === "/api/settings/sharing") data = { sharing_enabled: body?.enabled }
     else if (url.pathname === "/api/topology") data = { self: { id: "gateway", name: "Gateway machine", os: "linux", relay: "" }, peers: [] }
     else if (url.pathname === "/api/library/packages") data = []

@@ -48,29 +48,25 @@ test.beforeEach(async ({ page }) => {
 test("a role and a switch save network-wide", async ({ page }) => {
   const writes = await mockOmp(page, anthropic)
   await page.goto("/settings/omp")
-  const architect = page.getByRole("row", { name: /Architect/ })
+  const architect = page.locator('[data-slot="form-row"]').filter({ has: page.getByRole("button", { name: "Architect model" }) })
   await expect(architect).toContainText("Not signed in on laptop · Sign in…")
   await expect(architect.getByRole("link", { name: "Sign in…" })).toHaveAttribute("href", "/machines/n2")
-  await expect(page.getByRole("row", { name: /Default/ })).toContainText("All machines")
+  const defaultModel = page.getByRole("button", { name: "Default model" })
 
-  await page.getByRole("button", { name: "Default model" }).click()
+  await defaultModel.click()
   const sheet = page.getByRole("dialog", { name: "Default model" })
   await sheet.getByRole("button", { name: "Claude Sonnet 5.5" }).click()
   await sheet.getByRole("group", { name: "Thinking" }).getByRole("button", { name: "medium" }).click()
   await sheet.getByRole("button", { name: "Use for Default" }).click()
   await expect(sheet).toBeHidden()
-  await expect(page.getByRole("row", { name: /Default/ })).toContainText("Claude Sonnet 5.5")
+  await expect(defaultModel).toContainText("Claude Sonnet 5.5")
 
   await page.getByRole("group", { name: "Oh My Pi settings" }).getByRole("button", { name: "Interaction" }).click()
   const setting = page.getByRole("switch", { name: "Enable Git Integration" })
-  await expect(setting.locator("../../..")).toContainText("Inherited On")
+  await expect(setting).toBeChecked()
   await setting.click()
-  expect(writes).toHaveLength(1)
-  const save = setting.locator("..").getByRole("button", { name: "Save", exact: true })
-  await save.click()
-  await expect(setting.locator("../../..")).toContainText("Mesh override Off")
-  await expect(setting.locator("../../..")).toContainText("Effective Off")
-  await expect(setting.locator("../../..")).toContainText("Saved")
+  await expect(setting).not.toBeChecked()
+  await expect(page.getByRole("button", { name: "Reset Enable Git Integration" })).toBeVisible()
 
   await expect.poll(() => writes).toEqual([
     { request: "PUT /api/omp/settings/modelRoles.default", body: { value: "anthropic/claude-sonnet-5-5:medium" } },
@@ -81,15 +77,11 @@ test("a role and a switch save network-wide", async ({ page }) => {
 test("a peer without the models route reads as Needs update", async ({ page }) => {
   await mockOmp(page)
   await page.goto("/settings/omp")
-  const row = page.getByRole("row", { name: /Default/ })
+  const modelButton = page.getByRole("button", { name: "Default model" })
+  const row = page.locator('[data-slot="form-row"]').filter({ has: modelButton })
   await expect(row).toContainText("Needs update on laptop")
   await page.setViewportSize({ width: 320, height: 568 })
-  const [role, model, thinking] = await row.getByRole("cell").all()
-  const name = (await role!.boundingBox())!
-  const choice = (await model!.boundingBox())!
-  const level = (await thinking!.boundingBox())!
-  expect(name.y + name.height).toBeLessThan(choice.y)
-  expect(choice.y + choice.height).toBeLessThan(level.y)
+  await expect(modelButton).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
 })
 
@@ -97,11 +89,46 @@ test("invalid numbers remain visible with an error after blur and send no change
   const writes = await mockOmp(page)
   await page.goto("/settings/omp")
   await page.getByRole("group", { name: "Oh My Pi settings" }).getByRole("button", { name: "Interaction" }).click()
-  const number = page.getByLabel("Maximum history")
+  const number = page.getByRole("textbox", { name: "Maximum history", exact: true })
   await number.fill("many")
   await number.press("Tab")
   await expect(number).toHaveValue("many")
   await expect(number).toHaveAccessibleDescription("Enter a valid number.")
-  await expect(number.locator("..").getByRole("button", { name: "Save", exact: true })).toBeDisabled()
   expect(writes).toHaveLength(0)
+})
+
+test("typed values commit on Enter and blur and menus apply immediately", async ({ page }) => {
+  const writes = await mockOmp(page)
+  await page.goto("/settings/omp")
+  await page.getByRole("button", { name: "Interaction", exact: true }).click()
+  const number = page.getByRole("textbox", { name: "Maximum history", exact: true })
+  await number.fill("20")
+  await number.press("Enter")
+  const reset = page.getByRole("button", { name: "Reset Maximum history" })
+  await expect(reset).toBeVisible()
+  await number.fill("30")
+  await number.press("Tab")
+  await expect(number).toHaveValue("30")
+  await page.getByRole("combobox", { name: "Steering Mode" }).click()
+  await page.getByRole("option", { name: "all", exact: true }).click()
+  await expect(page.getByRole("button", { name: "Reset Steering Mode" })).toBeVisible()
+  expect(writes).toEqual([
+    { request: "PUT /api/omp/settings/maxHistory", body: { value: 20 } },
+    { request: "PUT /api/omp/settings/maxHistory", body: { value: 30 } },
+    { request: "PUT /api/omp/settings/steeringMode", body: { value: "all" } },
+  ])
+})
+
+test("Changed shows overrides across tabs and All returns to the selected tab", async ({ page }) => {
+  await mockOmp(page)
+  await page.goto("/settings/omp")
+  await page.getByRole("button", { name: "Interaction", exact: true }).click()
+  const git = page.getByRole("switch", { name: "Enable Git Integration" })
+  await expect(git).toBeVisible()
+  await page.getByRole("button", { name: "Changed · 2" }).click()
+  await expect(git).toBeHidden()
+  await expect(page.getByRole("combobox", { name: "Thinking Level" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Architect model" })).toBeVisible()
+  await page.getByRole("button", { name: "All", exact: true }).click()
+  await expect(git).toBeVisible()
 })

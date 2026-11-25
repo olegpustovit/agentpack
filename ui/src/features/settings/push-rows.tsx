@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react"
 import { useMutation } from "@tanstack/react-query"
-import { FieldError } from "@/components/kit/forms"
+import { FieldError, FormRow } from "@/components/kit/forms"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { errorText, routeMissing } from "@/lib/api"
 import { hud } from "@/lib/hud"
-import { Row } from "./panes"
 import { currentPushSubscription, pushBlocker, pushBlockerText, subscribePush, testPush, unsubscribePush } from "./push"
 
 function pushError(error: unknown): string {
@@ -44,7 +43,17 @@ export function PushRows({ permission, onPermissionChange }: { permission: Notif
   const on = Boolean(subscription)
   const failure = change.error ?? test.error
   return (
-    <Row label="Push to this device" htmlFor="push-device">
+    <FormRow
+      label="Push to this device"
+      htmlFor="push-device"
+      description={blocker ? (permission !== "denied" && !(permission === "unsupported" && blocker === "unsupported") ? pushBlockerText[blocker] : "Unavailable") : on ? "Arrives even with every tab closed" : "Off"}
+      detail={failure && permission !== "denied" ? <FieldError>{pushError(failure)}</FieldError> : undefined}
+    >
+      {subscription && !blocker && (
+        <Button variant="ghost" disabled={test.isPending} onClick={() => test.mutate(subscription)}>
+          Send test
+        </Button>
+      )}
       <Switch
         id="push-device"
         checked={change.isPending ? Boolean(change.variables?.on) : on}
@@ -54,20 +63,6 @@ export function PushRows({ permission, onPermissionChange }: { permission: Notif
           permission: next ? Notification.requestPermission().then((result) => { onPermissionChange(result); return result }) : undefined,
         })}
       />
-      <span className="text-(length:--fs-sm) text-(--fg2)">
-        {blocker ? "Unavailable" : on ? "On. Arrives even with every tab closed" : "Off"}
-      </span>
-      {subscription && !blocker && (
-        <Button variant="ghost" disabled={test.isPending} onClick={() => test.mutate(subscription)}>
-          Send push test
-        </Button>
-      )}
-      {blocker && permission !== "denied" && !(permission === "unsupported" && blocker === "unsupported") && (
-        <p data-slot="push-blocker" className="m-0 basis-full max-w-[60ch] text-(length:--fs-xs) text-(--fg2)">
-          {pushBlockerText[blocker]}
-        </p>
-      )}
-      {failure && permission !== "denied" && <FieldError className="basis-full">{pushError(failure)}</FieldError>}
-    </Row>
+    </FormRow>
   )
 }

@@ -1,3 +1,5 @@
+import { queryOptions } from "@tanstack/react-query"
+import { api } from "@/lib/api"
 export type IssueStatus = "open" | "resolved" | "ignored"
 export type IssueFilter = IssueStatus | "all"
 
@@ -27,3 +29,8 @@ export function issueStatus(issue: Pick<DiagnosticIssue, "status" | "regressed">
 export function resolutionError(version: string) {
   return version.trim() ? "" : "Enter the version containing the fix."
 }
+
+export const issuesQuery = (status: IssueFilter) => queryOptions({
+  queryKey: ["diagnostics", "issues", status],
+  queryFn: () => api<DiagnosticIssue[]>("/api/logs/issues", { query: { status: status === "all" ? "" : status } }),
+})

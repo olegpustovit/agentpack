@@ -2,9 +2,8 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react"
 import { Plus } from "lucide-react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { getRouteApi } from "@tanstack/react-router"
-import { Section } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
-import { Field, FieldError, FieldGrid, FieldLabel } from "@/components/kit/forms"
+import { Field, FieldError, FieldGrid, FieldLabel, FormGroup, FormRow } from "@/components/kit/forms"
 import { SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
 import { ConfirmAlert, ConfirmAlertContent, Menu, MenuContent, MenuItem, MenuTrigger, RowMoreButton, Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
@@ -89,10 +88,7 @@ export function ConnectionsPane() {
   }
   return (
     <Pane title="Connections">
-      <div className="flex flex-col gap-(--s6)">
-        <Banner>
-          Sign in to a remote MCP server once and every machine in this mesh can use it. With more than one login, projects use the default unless you pick another in New session.
-        </Banner>
+      <div className="flex flex-col gap-(--s7)">
         {feedback && !target && <Banner tone={feedback.retry ? "warn" : "info"} action={
           <div className="flex flex-wrap gap-(--s2)">
             {feedback.retry && <Button size="sm" onClick={() => { dismissFeedback(); setAdding("") }}>Try again</Button>}
@@ -104,9 +100,9 @@ export function ConnectionsPane() {
         )}
         {servers.map((match) => <ServerGroup key={match} match={match} logins={loginsFor(match, remote)} onAdd={() => setAdding(match)} targetID={target?.id} feedback={feedback} dismissFeedback={dismissFeedback} />)}
         {local.length > 0 && (
-          <Section title="Local servers">
-            <LoginList>{local.map((connection) => <ConnectionRow key={connection.id} connection={connection} single />)}</LoginList>
-          </Section>
+          <FormGroup title="Local servers">
+            <ul>{local.map((connection) => <ConnectionRow key={connection.id} connection={connection} single />)}</ul>
+          </FormGroup>
         )}
         <div><Button onClick={() => setAdding("")}><Plus aria-hidden className="size-3.5" />Add connection…</Button></div>
         <Sheet open={adding !== undefined} onOpenChange={(open) => !open && setAdding(undefined)}>
@@ -118,25 +114,19 @@ export function ConnectionsPane() {
   )
 }
 
-function LoginList({ children }: { children: ReactNode }) {
-  return <ul className="overflow-hidden rounded-(--r-pop) border-[0.5px] border-(--sep) bg-(--window)">{children}</ul>
-}
-
 function ServerGroup({ match, logins, onAdd, targetID, feedback, dismissFeedback }: { match: string; logins: Connection[]; onAdd: () => void; targetID?: string; feedback?: LoginFeedback; dismissFeedback: () => void }) {
   const name = serverName(match)
   const oauth = logins.some((connection) => connection.kind === "oauth")
   return (
-    <Section
+    <FormGroup
       title={<>{name}<span className="font-normal text-(--fg3)"> · {new URL(match).host}</span></>}
       action={oauth && <Button size="sm" onClick={onAdd}><Plus aria-hidden className="size-3.5" />Add login…</Button>}
+      footer={logins.length > 1 && "The first login added is the default. Pick another for a project in New session."}
     >
-      <LoginList>{logins.map((connection, index) => (
+      <ul>{logins.map((connection, index) => (
         <ConnectionRow key={connection.id} connection={connection} single={logins.length === 1} first={index === 0} feedback={targetID === connection.id ? feedback : undefined} dismissFeedback={dismissFeedback} />
-      ))}</LoginList>
-      {logins.length > 1 && (
-        <p className="mt-(--s2) text-(length:--fs-xs) text-(--fg3)">The first login added is the default. Pick another for a project in New session.</p>
-      )}
-    </Section>
+      ))}</ul>
+    </FormGroup>
   )
 }
 
@@ -242,11 +232,10 @@ function RevokeAll() {
     onError: (error) => hud.error(`Couldn't sign out of the logins: ${errorText(error)}`, () => revoke.mutate()),
   })
   return (
-    <Section title="Removed a machine?">
-      <div className="flex items-center justify-between gap-(--s6) max-[760px]:flex-wrap">
-        <p>A machine that left the mesh keeps the logins it received. Sign out of your OAuth logins, then reconnect the ones you use. Rotate token headers and variables at their providers.</p>
+    <FormGroup title="Removed a machine?" footer="Rotate token headers and variables at their providers.">
+      <FormRow label="Sign out of all OAuth logins" description="A machine that left the mesh keeps the logins it received. Sign out, then reconnect the ones you use.">
         <Button variant="destructive" disabled={revoke.isPending} onClick={() => setConfirming(true)}>Sign out of all…</Button>
-      </div>
+      </FormRow>
       <ConfirmAlert open={confirming} onOpenChange={setConfirming}>
         {confirming && <ConfirmAlertContent
           title="Sign out of all MCP logins?"
@@ -255,7 +244,7 @@ function RevokeAll() {
           onConfirm={() => { setConfirming(false); revoke.mutate() }}
         />}
       </ConfirmAlert>
-    </Section>
+    </FormGroup>
   )
 }
 

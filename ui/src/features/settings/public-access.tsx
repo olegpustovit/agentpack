@@ -2,14 +2,13 @@ import { useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Check, Copy, X } from "lucide-react"
 import { Banner, Spinner } from "@/components/kit/feedback"
-import { FieldError } from "@/components/kit/forms"
+import { FieldError, FormRow } from "@/components/kit/forms"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { apiLines, errorText } from "@/lib/api"
 import type { PublicAccess, Settings } from "@/lib/api-types"
 import { useCopied } from "@/lib/hud"
-import { Row } from "./panes"
 import { settingsQuery } from "./queries"
 
 type CheckResult = { check: string; ok: boolean; detail: string }
@@ -89,14 +88,7 @@ export function PublicAccessRows({ access, canManage }: { access: PublicAccess; 
         : "Off. Only this machine and your tailnet can reach it"
   return (
     <>
-      <Row label="Public access" htmlFor="public-access">
-        <Switch
-          id="public-access"
-          checked={access.enabled}
-          disabled={unavailable || !access.enabled}
-          onCheckedChange={(next) => { if (!next) change.mutate({ action: "disable" }) }}
-        />
-        <span role="status" className="min-w-0 break-all text-(length:--fs-sm) text-(--fg2)">{label}</span>
+      <FormRow label="Public access" htmlFor="public-access" description={<span role="status" className="break-all">{label}</span>} detail={<>
         {access.catch_all && !access.enabled && (
           <Input
             aria-label="Public address"
@@ -156,8 +148,15 @@ export function PublicAccessRows({ access, canManage }: { access: PublicAccess; 
                   : "Put an HTTPS proxy or Tailscale Funnel in front of this gateway and open its address once; it appears here."}
             </p>
         )}
-        {change.error && <FieldError className="basis-full">{errorText(change.error)}</FieldError>}
-      </Row>
+        {change.error && <FieldError>{errorText(change.error)}</FieldError>}
+      </>}>
+        <Switch
+          id="public-access"
+          checked={access.enabled}
+          disabled={unavailable || !access.enabled}
+          onCheckedChange={(next) => { if (!next) change.mutate({ action: "disable" }) }}
+        />
+      </FormRow>
       {access.enabled && access.origin && <McpAddress address={`${access.origin}/mcp`} />}
     </>
   )
@@ -166,16 +165,14 @@ export function PublicAccessRows({ access, canManage }: { access: PublicAccess; 
 function McpAddress({ address }: { address: string }) {
   const [copied, copy] = useCopied()
   return (
-    <Row label="MCP address">
-      <code className="rounded-(--r-ctl) bg-(--code) px-(--s2) font-(family-name:--mono) text-(length:--fs-sm)">{address}</code>
+    <FormRow label="MCP address" description={<>
+      <code className="font-(family-name:--mono) text-(--fg)">{address}</code>
+      <span className="block">Paste it into Claude.ai, ChatGPT, Claude Code or codemode. They sign in through this gateway.</span>
+    </>}>
       <Button onClick={() => copy(address, "Couldn't copy. Select the address and copy it manually.")}>
         {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
         {copied ? "Copied" : "Copy"}
       </Button>
-      <p className="m-0 max-w-[60ch] basis-full text-(length:--fs-xs) text-(--fg2)">
-        Paste it into Claude.ai, ChatGPT, Claude Code or codemode. They sign in through this gateway; nothing else to
-        configure.
-      </p>
-    </Row>
+    </FormRow>
   )
 }

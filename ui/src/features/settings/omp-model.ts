@@ -190,10 +190,10 @@ export const ompTabs = [
 const hidden = new Set(["modelRoleStorage"])
 
 // Settings shown on a tab, or every match for a search across label, description and key.
-export function visibleSettings(schema: OmpSetting[], tab: string, query: string): OmpSetting[] {
+export function visibleSettings(schema: OmpSetting[], tab: string | undefined, query: string): OmpSetting[] {
   const shown = schema.filter((item) => !hidden.has(item.key) && ompTabs.some((known) => known.id === item.tab))
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
-  if (words.length === 0) return shown.filter((item) => item.tab === tab)
+  if (words.length === 0) return tab === undefined ? shown : shown.filter((item) => item.tab === tab)
   return shown.filter((item) => {
     const text = `${item.label} ${item.description} ${item.key}`.toLowerCase()
     return words.every((word) => text.includes(word))
@@ -206,7 +206,9 @@ export function groupSettings(items: OmpSetting[], searching: boolean): [string,
   for (const item of items) {
     const tab = ompTabs.find((known) => known.id === item.tab)?.label ?? item.tab
     const name = searching ? [tab, item.group].filter(Boolean).join(" · ") : item.group || tab
-    groups.set(name, [...(groups.get(name) ?? []), item])
+    const rows = groups.get(name)
+    if (rows) rows.push(item)
+    else groups.set(name, [item])
   }
   return [...groups]
 }

@@ -506,7 +506,7 @@ test("gateway settings stay separate from selected remote sessions", async ({ pa
   expect(settingsQueries.every((value) => !value.includes("node="))).toBeTruthy()
 
   await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "General" }).click()
-  await page.getByRole("button", { name: "Stop all agents…", exact: true }).click()
+  await page.getByRole("button", { name: "Stop agents…", exact: true }).click()
   await page.getByRole("alertdialog").getByRole("button", { name: "Stop all agents", exact: true }).click()
   await expect(page.getByText("Agents on the gateway machine have been stopped.")).toBeVisible()
   expect(requests.some((value) => value.path === "/api/node/stop-agents")).toBeTruthy()

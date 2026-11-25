@@ -114,10 +114,7 @@ test("general shows gateway state, platform, version and hostname", async ({ pag
   await expect(page.getByText("linux", { exact: true })).toBeVisible()
   await expect(page.getByText("0.9.0", { exact: true })).toBeVisible()
   await expect(page.getByRole("main").or(page.locator("body")).getByText("host-a", { exact: true }).last()).toBeVisible()
-  const details = page.getByRole("navigation", { name: "Gateway details" })
-  await expect(details.getByRole("link", { name: "Machine details" })).toHaveAttribute("href", "/machines/local")
-  await expect(details.getByRole("link", { name: "Connectivity" })).toHaveAttribute("href", "/settings/sharing")
-  await expect(details.getByRole("link", { name: "Diagnostics" })).toHaveAttribute("href", "/settings/diagnostics")
+  await expect(page.getByRole("link", { name: /Machine details/ })).toHaveAttribute("href", "/machines/local")
 })
 
 test("blocked browser delivery keeps event preferences editable", async ({ page }) => {
@@ -127,11 +124,11 @@ test("blocked browser delivery keeps event preferences editable", async ({ page 
   })
   await page.goto("/settings/notifications")
   await expect(page.getByText(/Notifications are blocked for this site/)).toHaveCount(1)
-  await expect(page.getByText("Applies once delivery is on.")).toBeVisible()
-  const alert = page.getByRole("checkbox", { name: "A turn finishes" })
-  await expect(alert).toBeEnabled()
-  await alert.check()
+  await expect(page.getByText(/^Applies once delivery is on\./)).toBeVisible()
+  const alert = page.getByRole("switch", { name: "A turn finishes" })
   await expect(alert).toBeChecked()
+  await alert.click()
+  await expect(alert).not.toBeChecked()
   await expect(page.getByRole("switch", { name: "Push to this device" })).toBeDisabled()
 })
 
@@ -146,9 +143,7 @@ test("the sharing switch sends the new state and says when it applies", async ({
 
   await expect.poll(() => calls).toEqual([{ request: "POST /api/settings/sharing", body: { enabled: false } }])
   await expect(page.getByText("Disabled. Local CLI sessions still work.")).toBeVisible()
-  await expect(
-    page.getByText("Sharing change applies within five seconds. Local CLI sessions keep running."),
-  ).toBeVisible()
+  await expect(page.getByText("Sharing change applies within five seconds. Local CLI sessions keep running.")).toBeVisible()
 })
 
 test("a catch-all proxy suggests nothing; the owner types the address and it is checked", async ({ page }) => {
@@ -215,7 +210,7 @@ test("replication rows show enrollment, enroll only online peers and sync one", 
   await mockGateway(page)
   await page.goto("/settings/replication")
   await expect(page.getByText("Enrolled · online")).toBeVisible()
-  await expect(page.getByText("Offline · enrollment unavailable")).toBeVisible()
+  await expect(page.getByText(/Offline · enrollment unavailable/)).toBeVisible()
   await expect(page.getByRole("button", { name: "Enroll" })).toBeDisabled()
 
   await page.getByRole("button", { name: "Sync now" }).click()
@@ -231,7 +226,8 @@ test("replication lists what a peer receives and links removal to credential rec
   const dialog = page.getByRole("alertdialog")
   await expect(dialog).toContainText("password hashes, chat history, limits, Library data and shared MCP logins")
   await dialog.getByRole("button", { name: "Cancel" }).click()
-  await page.getByRole("button", { name: "Remove", exact: true }).click()
+  await page.getByRole("button", { name: "oracle-vm actions" }).click()
+  await page.getByRole("menuitem", { name: "Remove from replication…" }).click()
   await expect(dialog).toContainText("Previously replicated data remains")
   await expect(dialog.getByRole("link", { name: "Connections" })).toHaveAttribute("href", "/settings/connections")
   await dialog.getByRole("button", { name: "Remove", exact: true }).click()
@@ -258,7 +254,7 @@ test("terminal screen reader mode lives in Accessibility and explains its browse
   await mockGateway(page)
   await page.goto("/settings/accessibility")
   const mode = page.getByRole("switch", { name: "Terminal screen reader mode" })
-  await expect(mode).toHaveAccessibleDescription("Applies to this browser only. Open terminals reconnect with this setting.")
+  await expect(mode).toHaveAccessibleDescription("Open terminals reconnect with this setting.")
   await mode.click()
   await page.reload()
   await expect(mode).toBeChecked()
@@ -267,20 +263,17 @@ test("terminal screen reader mode lives in Accessibility and explains its browse
 test("account shows the signed-in identity and the attribution sentence", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings/account")
-  // Signed in as and Tailscale user are the same address in this fixture.
-  await expect(page.getByText("ada@example.com", { exact: true }).first()).toBeVisible()
-  await expect(
-    page.getByText(
-      "Sessions are attributed to your account. Signing out leaves existing agents running.",
-    ),
-  ).toBeVisible()
+  const account = page.getByRole("region", { name: "Account" })
+  await expect(account.getByText("ada@example.com", { exact: true })).toHaveCount(2)
+  await expect(account.getByText("Sessions you start are attributed to this account.")).toBeVisible()
+  await expect(account.getByText("Signing out leaves running agents running.")).toBeVisible()
 })
 
 test("stop all agents asks first and sends nothing until confirmed", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings/general")
 
-  await page.getByRole("button", { name: "Stop all agents" }).click()
+  await page.getByRole("button", { name: "Stop agents…" }).click()
   const dialog = page.getByRole("alertdialog")
   await expect(dialog).toContainText("Stop all agents on host-a?")
   expect(calls).toEqual([])
@@ -294,7 +287,7 @@ test("stop gateway in General names the machine and how to reconnect", async ({ 
   await mockGateway(page)
   await page.goto("/settings/general")
 
-  await page.getByRole("button", { name: "Stop gateway" }).click()
+  await page.getByRole("button", { name: "Stop gateway…" }).click()
   const dialog = page.getByRole("alertdialog")
   await expect(dialog).toContainText("Stop the gateway on host-a?")
   await expect(dialog).toContainText("ap gateway start on host-a")
@@ -305,7 +298,7 @@ test("stop gateway in General names the machine and how to reconnect", async ({ 
 
   await dialog.getByRole("button", { name: "Stop gateway" }).click()
   await expect.poll(() => calls).toEqual([{ request: "POST /api/node/stop", body: null }])
-  await expect(page.getByRole("button", { name: "Stop gateway" })).toBeDisabled()
+  await expect(page.getByRole("button", { name: "Stop gateway…" })).toBeDisabled()
 })
 
 test("account holds identity only; machine controls live in General", async ({ page }) => {
@@ -456,7 +449,7 @@ test("connections group logins by server and a second login needs its own name",
     { id: "c2", match: linear, kind: "oauth", label: "Client", status: "connected" },
   ] }))
   await page.goto("/settings/connections")
-  const logins = page.locator("section").filter({ hasText: "mcp.linear.app" }).getByRole("listitem")
+  const logins = page.getByRole("listitem")
   await expect(logins).toHaveCount(2)
   await expect(logins.first()).toContainText("Default")
   await expect(logins.nth(1)).not.toContainText("Default")
@@ -485,4 +478,72 @@ test("phone Connections shows visible actions and the OAuth return state on its 
   await expect(work.getByText(/link expired or was already used/)).toBeVisible()
   await expect(work.getByRole("button", { name: "Try again" })).toBeVisible()
   await expect(page.getByRole("listitem").filter({ hasText: "Client" }).getByRole("button", { name: "Try again" })).toHaveCount(0)
+})
+
+test("sidebar search filters sections, opens the first match on Enter and clears on Escape", async ({ page }) => {
+  await mockGateway(page)
+  await page.goto("/settings")
+  const sidebar = page.getByRole("navigation", { name: "Settings sections" })
+  const search = page.getByLabel("Search settings")
+  await search.fill("mcp")
+  await expect(sidebar.getByRole("link")).toHaveCount(3)
+  await expect(sidebar.getByRole("link", { name: "Appearance" })).toBeHidden()
+  await search.press("Enter")
+  await expect(page).toHaveURL(/\/settings\/sharing$/)
+  await search.press("Escape")
+  await expect(search).toHaveValue("")
+  await expect(sidebar.getByRole("link", { name: "Appearance" })).toBeVisible()
+})
+
+test("sidebar shows badges for issues, expired logins and peers that are behind", async ({ page }) => {
+  await mockGateway(page)
+  await page.route("**/api/logs/issues*", (route) => answer(route, [{ regressed: true }, { regressed: false }]))
+  await page.route("**/api/mcp/credentials", (route) => answer(route, { credentials: [
+    { id: "c1", match: "https://mcp.example/mcp", kind: "oauth", label: "Work", status: "needs_login" },
+  ] }))
+  await page.route("**/api/library/replication/peers", (route) => answer(route, {
+    ...replication, contacts: { n2: { needs_update: true } },
+  }))
+  await page.goto("/settings")
+  const sidebar = page.getByRole("navigation", { name: "Settings sections" })
+  for (const name of ["Diagnostics 2", "Connections 1 to sign in", "Replication 1 not syncing"]) {
+    await expect(sidebar.getByRole("link", { name, exact: true })).toBeVisible()
+  }
+})
+
+test("turning agentpack tools off writes only that default and disables replacement", async ({ page }) => {
+  await mockGateway(page)
+  let defaults = { agentpack_tools: true, replace_subagents: true }
+  await page.route("**/api/agents/defaults", (route) => {
+    if (route.request().method() === "PUT") defaults = { ...defaults, ...route.request().postDataJSON() }
+    return answer(route, defaults)
+  })
+  await page.goto("/settings/agents")
+  const tools = page.getByRole("switch", { name: "agentpack tools" })
+  const replacement = page.getByRole("switch", { name: "Replace built-in subagents" })
+  await expect(replacement).toBeChecked()
+  await tools.click()
+  await expect(tools).not.toBeChecked()
+  await expect(replacement).toBeDisabled()
+  await expect(replacement).not.toBeChecked()
+  expect(calls).toEqual([{ request: "PUT /api/agents/defaults", body: { agentpack_tools: false } }])
+})
+
+test("non-owners can read agent defaults with both switches disabled", async ({ page }) => {
+  await mockGateway(page)
+  await page.route("**/api/settings", (route) => answer(route, { can_manage: false }))
+  await page.route("**/api/agents/defaults", (route) => answer(route, { agentpack_tools: true, replace_subagents: true }))
+  await page.goto("/settings/agents")
+  await expect(page.getByText("Only the gateway owner can change agent defaults.")).toBeVisible()
+  for (const name of ["agentpack tools", "Replace built-in subagents"]) {
+    await expect(page.getByRole("switch", { name })).toBeDisabled()
+  }
+})
+
+test("an older gateway shows Needs update for agent defaults", async ({ page }) => {
+  await mockGateway(page)
+  await page.route("**/api/agents/defaults", (route) => answer(route, { error: "not found" }, 404))
+  await page.goto("/settings/agents")
+  await expect(page.getByText("Needs update", { exact: true })).toBeVisible()
+  await expect(page.getByRole("switch")).toHaveCount(0)
 })

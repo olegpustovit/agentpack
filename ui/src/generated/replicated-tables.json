@@ -1,6 +1,7 @@
 [
   "acp_session_owners",
   "agent_credentials",
+  "agent_defaults",
   "agent_snapshots",
   "archive_blobs",
   "archive_edits",

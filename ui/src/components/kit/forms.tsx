@@ -86,3 +86,35 @@ export function PopupSelect({
     </Select>
   );
 }
+
+// macOS grouped form: an inset box of rows, an optional title above and a footer note below.
+export function FormGroup({ title, action, footer, className, children }: { title?: ReactNode; action?: ReactNode; footer?: ReactNode; className?: string; children: ReactNode }) {
+  return (
+    <section data-slot="form-group" className={cn("flex min-w-0 flex-col gap-(--s3)", className)}>
+      {(title || action) && (
+        <div className="flex min-h-(--ctl-h) items-end gap-(--s3) px-(--s2)">
+          <h3 className="min-w-0 flex-1 text-(length:--fs-sm) font-semibold text-(--fg2)">{title}</h3>
+          {action}
+        </div>
+      )}
+      <div className="overflow-hidden rounded-(--r-pop) border-[0.5px] border-(--sep) bg-(--window)">{children}</div>
+      {footer && <div className="px-(--s2) text-(length:--fs-sm) text-(--fg2)">{footer}</div>}
+    </section>
+  );
+}
+
+// Label and description lead, the control trails; `detail` spans the row below (checks, errors, inputs).
+export function FormRow({ label, description, htmlFor, detail, className, children }: { label: ReactNode; description?: ReactNode; htmlFor?: string; detail?: ReactNode; className?: string; children?: ReactNode }) {
+  return (
+    <div data-slot="form-row" className={cn("flex min-h-(--row-h-2) min-w-0 flex-col justify-center gap-(--s3) border-t-[0.5px] border-(--sep-soft) px-(--s5) py-(--s3) first:border-t-0", className)}>
+      <div className="flex min-w-0 items-center gap-(--s5) max-[760px]:flex-wrap">
+        <div className="min-w-0 flex-1">
+          {htmlFor ? <label htmlFor={htmlFor}>{label}</label> : <div>{label}</div>}
+          {description && <div className="text-(length:--fs-sm) text-(--fg2)">{description}</div>}
+        </div>
+        {children !== undefined && <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-(--s3) text-(--fg2) max-[760px]:shrink">{children}</div>}
+      </div>
+      {detail && <div className="flex min-w-0 flex-col items-start gap-(--s3)">{detail}</div>}
+    </div>
+  );
+}

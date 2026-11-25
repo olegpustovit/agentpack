@@ -1,9 +1,10 @@
-import { useState, type ReactNode } from "react"
+import { useDeferredValue, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow } from "@/components/kit/data"
+import { ChevronsUpDown } from "lucide-react"
 import { Empty, RowSkeleton } from "@/components/kit/feedback"
-import { FieldError, PopupSelect } from "@/components/kit/forms"
+import { FieldError, FormGroup, FormRow, PopupSelect } from "@/components/kit/forms"
 import { SearchField, SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
 import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
@@ -73,6 +74,9 @@ export function OmpPane() {
   const models = useMachineQueries(ompModelsQuery)
   const [tab, setTab] = useState("roles")
   const [query, setQuery] = useState("")
+  const [changedOnly, setChangedOnly] = useState(false)
+  // Keep input updates responsive while broad matches mount their controls.
+  const deferredQuery = useDeferredValue(query)
   if (settings.error) {
     if (routeMissing(settings.error)) return <Empty title="Needs update">Update agentpack on this gateway to manage Oh My Pi settings.</Empty>
     return <LoadError what="Oh My Pi settings" error={settings.error} retry={() => void settings.refetch()} />
@@ -82,63 +86,68 @@ export function OmpPane() {
   const availability: Availability[] = machines
     .filter((machine) => machine.online)
     .map((machine) => ({ id: machine.id, name: machine.name, models: models.byMachine[machine.id]?.data, needsUpdate: models.byMachine[machine.id]?.needsUpdate ?? false }))
-  const searching = query.trim() !== ""
-  const count = machines.length
+  const searching = deferredQuery.trim() !== ""
+  const changedKeys = new Set(Object.keys(data.network))
+  // "Changed" spans every tab, like VS Code's @modified filter.
+  const filtering = searching || changedOnly
+  const visible = visibleSettings(data.schema, changedOnly ? undefined : tab, deferredQuery)
+  const items = changedOnly ? visible.filter((item) => isChanged(data, item.key)) : visible
   return (
     <Pane title="Oh My Pi">
-      <div className="flex flex-col gap-(--s5)">
-        <div className="flex items-end gap-(--s4) max-[760px]:flex-col max-[760px]:items-stretch">
-          <p className="max-w-[70ch] flex-1 text-(length:--fs-sm) text-(--fg2)">
-            {`One configuration for every Oh My Pi session on your ${count} machine${count === 1 ? "" : "s"}. Changes apply to new chats; a running chat keeps its settings. Settings you never change keep each machine's own value.`}
-          </p>
-          <div className="flex w-60 max-[760px]:w-full">
-            <SearchField aria-label="Search Oh My Pi settings" placeholder={`Search ${data.schema.length} settings`} value={query} onChange={(event) => setQuery(event.currentTarget.value)} />
-          </div>
-        </div>
+      <div className="sticky top-0 z-1 -mx-(--s2) flex flex-wrap items-center gap-(--s3) bg-(--page) px-(--s2) py-(--s2)">
         <SegmentedControl
           aria-label="Oh My Pi settings"
-          className="h-auto flex-wrap self-start"
-          value={searching ? [] : [tab]}
+          className="h-auto flex-wrap"
+          value={filtering ? [] : [tab]}
           onValueChange={(values) => {
             if (typeof values[0] !== "string") return
             setTab(values[0])
             setQuery("")
+            setChangedOnly(false)
           }}
         >
           {ompTabs.map((item) => (
             <SegmentedControlItem key={item.id} value={item.id}>{item.label}</SegmentedControlItem>
           ))}
         </SegmentedControl>
-        {!searching && tab === "roles" ? (
-          <ModelsTab settings={data} availability={availability} />
-        ) : (
-          <SettingsList settings={data} items={visibleSettings(data.schema, tab, query)} searching={searching} query={query} />
-        )}
+        <span className="flex-1" />
+        <SegmentedControl aria-label="Show" value={[changedOnly ? "changed" : "all"]} onValueChange={(values) => typeof values[0] === "string" && setChangedOnly(values[0] === "changed")}>
+          <SegmentedControlItem value="all">All</SegmentedControlItem>
+          <SegmentedControlItem value="changed">{`Changed · ${changedKeys.size}`}</SegmentedControlItem>
+        </SegmentedControl>
+        <div className="flex w-56 max-[760px]:w-full">
+          <SearchField aria-label="Search Oh My Pi settings" placeholder={`Search ${data.schema.length} settings`} value={query} onChange={(event) => setQuery(event.currentTarget.value)} />
+        </div>
       </div>
+      {!filtering && tab === "roles" ? (
+        <ModelsTab settings={data} availability={availability} />
+      ) : changedOnly && !searching ? (
+        <>
+          <RolesGroup title="Model roles" roles={[...chatRoles, ...kindRoles].filter((role) => isChanged(data, roleKey(role.id)))} settings={data} availability={availability} />
+          <SettingsList settings={data} items={items.filter((item) => item.tab !== "roles")} searching query="" empty="Nothing is set for every machine yet. Each machine uses its own Oh My Pi settings." />
+        </>
+      ) : (
+        <SettingsList settings={data} items={items} searching={filtering} query={deferredQuery} />
+      )}
     </Pane>
   )
 }
 
-function GroupTitle({ children }: { children: ReactNode }) {
-  return <h3 className="mt-(--s4) text-(length:--fs-sm) font-semibold text-(--fg2) first:mt-0">{children}</h3>
-}
-
-function SettingsList({ settings, items, searching, query }: { settings: OmpSettings; items: OmpSetting[]; searching: boolean; query: string }) {
-  if (items.length === 0) return <p className="text-(length:--fs-sm) text-(--fg2)">{`No settings match “${query.trim()}”.`}</p>
+function SettingsList({ settings, items, searching, query, empty }: { settings: OmpSettings; items: OmpSetting[]; searching: boolean; query: string; empty?: string }) {
+  if (items.length === 0) return empty === undefined ? <p className="text-(length:--fs-sm) text-(--fg2)">{`No settings match “${query.trim()}”.`}</p> : null
   return (
-    <div className="flex flex-col">
+    <>
       {groupSettings(items, searching).map(([group, rows]) => (
-        <section key={group}>
-          <GroupTitle>{group}</GroupTitle>
+        <FormGroup key={group} title={group}>
           {rows.map((item) => <SettingRow key={item.key} setting={item} settings={settings} />)}
-        </section>
+        </FormGroup>
       ))}
-    </div>
+    </>
   )
 }
 
 function ChangedDot() {
-  return <span role="img" aria-label="Changed" title="Changed for every machine" className="size-1.5 shrink-0 rounded-full bg-(--accent)" />
+  return <span aria-hidden="true" title="Set for every machine" className="me-(--s2) inline-block size-1.5 shrink-0 rounded-full bg-(--accent) align-middle" />
 }
 
 function valueLabel(value: unknown) {
@@ -148,19 +157,13 @@ function valueLabel(value: unknown) {
   return String(value)
 }
 
+// Only a mesh override is worth a line: the control already shows the effective value.
 function SettingValues({ settings, settingKey, fallback }: { settings: OmpSettings; settingKey: string; fallback?: unknown }) {
-  const inherited = valueLabel(inheritedValue(settings, settingKey) ?? fallback)
-  const override = overrideValue(settings, settingKey)
-  const effective = valueLabel(effectiveValue(settings, settingKey) ?? fallback)
-  return (
-    <dl className="mt-(--s1) flex flex-wrap gap-x-(--s3) gap-y-(--s1) break-words text-(length:--fs-xs) text-(--fg2)">
-      <div className="min-w-0"><dt className="inline">Inherited</dt>{" "}<dd className="inline font-medium">{inherited}</dd></div>
-      <div className="min-w-0"><dt className="inline">Mesh override</dt>{" "}<dd className="inline font-medium">{override === undefined ? "None" : valueLabel(override)}</dd></div>
-      <div className="min-w-0"><dt className="inline">Effective</dt>{" "}<dd className="inline font-medium">{effective}</dd></div>
-    </dl>
-  )
+  if (overrideValue(settings, settingKey) === undefined) return null
+  return <p className="mt-(--s1) break-words text-(length:--fs-xs) text-(--fg2)">{`Set for every machine · replaces ${valueLabel(inheritedValue(settings, settingKey) ?? fallback)}`}</p>
 }
 
+// Switches and menus apply at once; typed values apply on Enter or when the field loses focus.
 function SettingRow({ setting, settings }: { setting: OmpSetting; settings: OmpSettings }) {
   const save = useOmpSetting(setting.key)
   const [editing, setEditing] = useState(false)
@@ -168,50 +171,47 @@ function SettingRow({ setting, settings }: { setting: OmpSetting; settings: OmpS
   const value = effectiveValue(settings, setting.key) ?? setting.default
   const hasOverride = isChanged(settings, setting.key)
   const scalar = ["boolean", "enum", "number", "string"].includes(setting.type)
+  const typed = setting.type === "number" || (setting.type === "string" && !isRoleReference(value) && !isRoleReference(setting.default))
   const number = setting.type === "number"
   const invalidNumber = number && draft !== null && (String(draft.value).trim() === "" || !Number.isFinite(Number(draft.value)))
-  const next = draft !== null && number ? Number(draft.value) : draft?.value
-  const dirty = draft !== null && !Object.is(next, value)
   const id = `omp-${setting.key}`
-  function commit(value?: unknown) {
-    save.mutate({ value }, { onSuccess: () => setDraft(null) })
+  function commit(next?: unknown) {
+    if (next !== undefined && Object.is(next, value)) return setDraft(null)
+    save.mutate({ value: next }, { onSuccess: () => setDraft(null) })
+  }
+  function commitDraft() {
+    if (draft === null || invalidNumber || save.isPending) return
+    commit(number ? Number(draft.value) : draft.value)
   }
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-(--s4) border-b-[0.5px] border-(--sep-soft) py-(--s3) max-[760px]:grid-cols-1">
-      <div className="min-w-0">
-        <div className="flex items-center gap-(--s2)">
-          {hasOverride && <ChangedDot />}
-          <label htmlFor={id}>{setting.label}</label>
-        </div>
-        {setting.description && <p className="mt-0.5 max-w-[72ch] text-(length:--fs-xs) text-(--fg2)">{setting.description}</p>}
+    <FormRow
+      label={<>{hasOverride && <ChangedDot />}{setting.label}</>}
+      htmlFor={id}
+      description={<>
+        {setting.description}
         <SettingValues settings={settings} settingKey={setting.key} fallback={setting.default} />
-        {invalidNumber && <FieldError id={`${id}-error`} className="mt-(--s1)">Enter a valid number.</FieldError>}
-        {save.error && <FieldError className="mt-(--s1)">{errorText(save.error)}</FieldError>}
-        {(save.isPending || save.isSuccess) && <p role="status" className="mt-(--s1) text-(length:--fs-xs) text-(--fg2)">{save.isPending ? "Saving…" : "Saved"}</p>}
-      </div>
-      <div className="flex min-w-0 flex-wrap items-center justify-end gap-(--s2) max-[760px]:justify-start">
-        {hasOverride && <Button variant="ghost" size="sm" className="text-(--accent)" aria-label={`Reset ${setting.label}`} disabled={save.isPending} onClick={() => commit()}>Reset</Button>}
-        {scalar ? (
-          <form className="flex min-w-0 flex-wrap items-center gap-(--s2)" onSubmit={(event) => {
-            event.preventDefault()
-            if (dirty && !invalidNumber && !save.isPending) commit(next)
-          }}>
-            <SettingControl id={id} setting={setting} value={draft?.value ?? value} invalid={invalidNumber} disabled={save.isPending} edit={(next) => {
-              if (save.error || save.isSuccess) save.reset()
-              setDraft({ value: next })
-            }} />
-            <Button type="submit" size="sm" disabled={!dirty || invalidNumber || save.isPending}>Save</Button>
-          </form>
-        ) : (
-          <>
-            <Button id={id} size="sm" disabled={save.isPending} onClick={() => { save.reset(); setEditing(true) }}>Edit…</Button>
-            <Sheet open={editing} onOpenChange={setEditing}>
-              {editing && <ValueEditor setting={setting} value={value} save={save} onDone={() => setEditing(false)} />}
-            </Sheet>
-          </>
-        )}
-      </div>
-    </div>
+      </>}
+      detail={(invalidNumber || save.error) && <FieldError id={`${id}-error`}>{invalidNumber ? "Enter a valid number." : errorText(save.error)}</FieldError>}
+    >
+      {hasOverride && <Button variant="ghost" size="sm" className="text-(--accent)" aria-label={`Reset ${setting.label}`} disabled={save.isPending} onClick={() => commit()}>Reset</Button>}
+      {scalar ? (
+        <form className="contents" onSubmit={(event) => { event.preventDefault(); commitDraft() }} onBlur={() => typed && commitDraft()}>
+          <SettingControl id={id} setting={setting} value={draft?.value ?? value} invalid={invalidNumber} disabled={save.isPending} edit={(next) => {
+            if (save.error) save.reset()
+            if (typed) setDraft({ value: next })
+            else commit(next)
+          }} />
+        </form>
+      ) : (
+        <>
+          <span className="max-w-48 truncate text-(length:--fs-sm)">{valueLabel(value)}</span>
+          <Button id={id} size="sm" disabled={save.isPending} onClick={() => { save.reset(); setEditing(true) }}>Edit…</Button>
+          <Sheet open={editing} onOpenChange={setEditing}>
+            {editing && <ValueEditor setting={setting} value={value} save={save} onDone={() => setEditing(false)} />}
+          </Sheet>
+        </>
+      )}
+    </FormRow>
   )
 }
 
@@ -310,30 +310,34 @@ function ValueEditor({ setting, value, save, onDone }: { setting: OmpSetting; va
 }
 
 function ModelsTab({ settings, availability }: { settings: OmpSettings; availability: Availability[] }) {
+  const schema = new Map(settings.schema.map((item) => [item.key, item]))
+  return (
+    <>
+      <RolesGroup title="Chat roles" footer="Automatic lets Oh My Pi pick from the models each machine can use." roles={chatRoles} settings={settings} availability={availability} />
+      <RolesGroup title="Model kinds" roles={kindRoles} settings={settings} availability={availability} />
+      <FormGroup title="Switching and fallback">
+        {switchingRows.map((row) => (
+          <SettingRow key={row.key} setting={{ ...row, type: schema.get(row.key)?.type ?? row.type }} settings={settings} />
+        ))}
+      </FormGroup>
+    </>
+  )
+}
+
+function RolesGroup({ title, footer, roles, settings, availability }: { title: string; footer?: string; roles: Role[]; settings: OmpSettings; availability: Availability[] }) {
   const [browsing, setBrowsing] = useState<Role | undefined>()
   const catalog = new Map<string, OmpModel>()
   for (const machine of availability) for (const model of machine.models ?? []) if (!catalog.has(model.selector)) catalog.set(model.selector, model)
-  const table = (roles: Role[]) => (
-    <RolesTable roles={roles} settings={settings} catalog={catalog} availability={availability} onChoose={setBrowsing} />
-  )
-  const schema = new Map(settings.schema.map((item) => [item.key, item]))
+  if (roles.length === 0) return null
   return (
-    <div className="flex flex-col">
-      <GroupTitle>Chat roles</GroupTitle>
-      <p className="mb-(--s2) text-(length:--fs-xs) text-(--fg2)">Click a role to choose its model and thinking level. Automatic lets Oh My Pi pick from the models each machine can use.</p>
-      {table(chatRoles)}
-      <GroupTitle>Model kinds</GroupTitle>
-      {table(kindRoles)}
-      <GroupTitle>Switching and fallback</GroupTitle>
-      {switchingRows.map((row) => (
-        <SettingRow key={row.key} setting={{ ...row, type: schema.get(row.key)?.type ?? row.type }} settings={settings} />
-      ))}
+    <FormGroup title={title} footer={footer}>
+      {roles.map((role) => <RoleRow key={role.id} role={role} settings={settings} catalog={catalog} availability={availability} onChoose={() => setBrowsing(role)} />)}
       <Sheet open={browsing !== undefined} onOpenChange={(open) => !open && setBrowsing(undefined)}>
         {browsing && (
           <ModelBrowser role={browsing} settings={settings} catalog={[...catalog.values()]} availability={availability} onDone={() => setBrowsing(undefined)} />
         )}
       </Sheet>
-    </div>
+    </FormGroup>
   )
 }
 
@@ -352,7 +356,7 @@ function Level({ level }: { level: string }) {
   )
 }
 
-// "All machines", the machines missing the provider with a way to sign in, or the ones that predate the API.
+// Nothing when every machine can use it; otherwise the machines missing the provider with a way to sign in, or the ones that predate the API.
 function Machines({ provider, availability }: { provider: string; availability: Availability[] }) {
   const missing = missingMachines(provider, availability)
   if (missing[0]) {
@@ -365,70 +369,38 @@ function Machines({ provider, availability }: { provider: string; availability: 
   }
   const outdated = availability.filter((machine) => machine.needsUpdate)
   if (outdated.length > 0) return <span className="text-(length:--fs-sm) text-(--fg2)">{`Needs update on ${outdated.map((machine) => machine.name).join(", ")}`}</span>
-  return <span className="text-(length:--fs-sm) text-(--fg2)">All machines</span>
+  return null
 }
 
-function RolesTable({ roles, settings, catalog, availability, onChoose }: { roles: Role[]; settings: OmpSettings; catalog: Map<string, OmpModel>; availability: Availability[]; onChoose: (role: Role) => void }) {
-  return (
-    <DataGrid className="min-w-0" role="table">
-      <DataGridHead className="max-[760px]:sr-only" role="rowgroup">
-        <tr>
-          <DataGridHeaderCell className="w-[24%]">Role</DataGridHeaderCell>
-          <DataGridHeaderCell>Model</DataGridHeaderCell>
-          <DataGridHeaderCell className="w-[16%]">Thinking</DataGridHeaderCell>
-          <DataGridHeaderCell className="w-[28%]">Machines</DataGridHeaderCell>
-          <DataGridHeaderCell className="w-20"><span className="sr-only">Reset</span></DataGridHeaderCell>
-        </tr>
-      </DataGridHead>
-      <tbody role="rowgroup" className="max-[760px]:block">
-        {roles.map((role) => <RoleRow key={role.id} role={role} settings={settings} catalog={catalog} availability={availability} onChoose={() => onChoose(role)} />)}
-      </tbody>
-    </DataGrid>
-  )
-}
-
+// A role reads like a System Settings popup row: name, then its model as a button that opens the browser.
 function RoleRow({ role, settings, catalog, availability, onChoose }: { role: Role; settings: OmpSettings; catalog: Map<string, OmpModel>; availability: Availability[]; onChoose: () => void }) {
   const reset = useOmpSetting(roleKey(role.id))
   const current = parseRoleModel(effectiveValue(settings, roleKey(role.id)))
   const name = current ? catalog.get(current.selector)?.name ?? current.selector : "Automatic"
+  const changed = isChanged(settings, roleKey(role.id))
   return (
-    <DataGridRow
-      role="row"
-      className="h-8 max-[760px]:grid max-[760px]:h-auto max-[760px]:gap-(--s2) max-[760px]:py-(--s3)"
-      onClick={(event) => {
-        if (!(event.target as HTMLElement).closest("a, button")) onChoose()
-      }}
+    <FormRow
+      label={<>{changed && <ChangedDot />}{role.name}<span className="ms-(--s2) text-(length:--fs-xs) text-(--fg3)">{role.id}</span></>}
+      description={current && <><Machines provider={current.provider} availability={availability} /><SettingValues settings={settings} settingKey={roleKey(role.id)} fallback="Automatic" /></>}
     >
-      <DataGridCell role="cell">
-        <span className="font-medium">{role.name}</span>
-        <span className="ms-(--s2) text-(length:--fs-xs) text-(--fg3)">{role.id}</span>
-      </DataGridCell>
-      <DataGridCell role="cell" className="whitespace-normal py-(--s2)">
-        <button type="button" aria-label={`${role.name} model`} className="max-w-full truncate text-left outline-none focus-visible:ring-2 focus-visible:ring-(--accent)" onClick={onChoose}>
-          <span className={current ? "" : "text-(--fg3)"}>{name}</span>
-          {current && <span className="ms-(--s2) text-(length:--fs-xs) text-(--fg3)">{current.provider}</span>}
-        </button>
-        <SettingValues settings={settings} settingKey={roleKey(role.id)} fallback="Automatic" />
-      </DataGridCell>
-      <DataGridCell role="cell">{current && <><span className="hidden text-(--fg2) max-[760px]:inline">Thinking </span><Level level={current.level} /></>}</DataGridCell>
-      <DataGridCell role="cell">{current && <><span className="hidden text-(--fg2) max-[760px]:inline">Machines </span><Machines provider={current.provider} availability={availability} /></>}</DataGridCell>
-      <DataGridCell role="cell" className="text-right max-[760px]:text-left">
-        {isChanged(settings, roleKey(role.id)) && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-(--accent)"
-            aria-label={`Reset ${role.name}`}
-            disabled={reset.isPending}
-            onClick={() =>
-              reset.mutate({}, { onError: (error) => hud.error(`Couldn't reset the ${role.name} role: ${errorText(error)}`, () => reset.mutate({})) })
-            }
-          >
-            Reset
-          </Button>
-        )}
-      </DataGridCell>
-    </DataGridRow>
+      {changed && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-(--accent)"
+          aria-label={`Reset ${role.name}`}
+          disabled={reset.isPending}
+          onClick={() => reset.mutate({}, { onError: (error) => hud.error(`Couldn't reset the ${role.name} role: ${errorText(error)}`, () => reset.mutate({})) })}
+        >
+          Reset
+        </Button>
+      )}
+      <Button aria-label={`${role.name} model`} className="max-w-80 justify-between gap-(--s3)" onClick={onChoose}>
+        <span className={current ? "truncate" : "truncate text-(--fg2)"}>{name}</span>
+        {current?.level && <Level level={current.level} />}
+        <ChevronsUpDown aria-hidden className="size-3 shrink-0 text-(--fg3)" />
+      </Button>
+    </FormRow>
   )
 }
 

@@ -57,6 +57,8 @@ Components live in `ui/src/components/kit/` (shell pieces in `ui/src/features/sh
 | `SegmentedControl` | `ToggleGroup` | `--ctl-h` track (`--sunken`), `--ctl-h-sm` thumb (`--control-fill` + `--e-ctl`) |
 | `SearchField` | `Input` | `--sunken` fill, inset icon, `⌘F` focuses it |
 | `Field`, `FieldGrid` | `Input`, `Select` | 120 px right-aligned labels, 12 px row gap (16 px stacked on phone) |
+| `FormGroup` | `<section>` | Inset rows inside a 0.5 px outline with `--r-pop` radius. Optional heading and action above, footer below. |
+| `FormRow` | flex | Label and description lead, control aligns to the trailing edge. Uses `--row-h-2` minimum height, `--s5` side padding and 0.5 px dividers. Optional details span the row below. |
 | `Sheet`, `SheetActions` | `Dialog` | Drops 8 px from toolbar on desktop; bottom sheet on phone. Follows Dialog metrics above |
 | `ConfirmAlert` | `AlertDialog` | 300 px centered; title quotes the object name. Follows Dialog metrics above |
 | `Menu`, `RowContextMenu` | `DropdownMenu`, `ContextMenu` | macOS 26 NSMenu: `--menu` translucent material, 12 px corners, 5 px padding, `--ctl-h` rows with 6 px pill, separators inset 16 px. `danger` rows are red and highlight `--menu-danger` |

@@ -269,8 +269,9 @@ describe("stateFamilies", () => {
     expect(stateFamilies(["agent_credentials"])).toEqual([["agents"]])
     expect(stateFamilies(["registry_heads"])).toEqual([["m", LOCAL, "library"], ["drafts"]])
     expect(stateFamilies(["node_settings"])).toContainEqual(["settings"])
-    expect(stateFamilies(undefined)).toHaveLength(16)
-    expect(stateFamilies(["a_future_table"])).toHaveLength(16)
+    expect(stateFamilies(["agent_defaults"])).toEqual([["agent-defaults"]])
+    expect(stateFamilies(undefined)).toHaveLength(17)
+    expect(stateFamilies(["a_future_table"])).toHaveLength(17)
   })
 
   // internal/state TestReplicatedTablesMatchUIList keeps the JSON in step with the schema.
