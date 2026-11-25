@@ -246,14 +246,19 @@ func (worker *workerRuntime) run(ctx, startCtx context.Context, started *obs.Eve
 	if err := worker.publishSession(ctx, &record, pty, server == nil); err != nil {
 		return 1, err
 	}
-	wireConversation := func(current *ConversationSession) {
-		wireWorkerConversation(ctx, store, record, directory, launch.Session.Goal, current)
+	wireConversation := func(current *ConversationSession) error {
+		return wireWorkerConversation(ctx, store, record, directory, launch.Session.Goal, current)
 	}
 	if conversation != nil {
 		conversation.configMu.Lock()
-		wireConversation(conversation)
-		conversation.ResumeTurns()
+		err := wireConversation(conversation)
+		if err == nil {
+			conversation.ResumeTurns()
+		}
 		conversation.configMu.Unlock()
+		if err != nil {
+			return 1, err
+		}
 	}
 	handler, err = WorkerHandler(ctx, pty, conversation, record.Secret, directory)
 	if err != nil {
@@ -446,7 +451,7 @@ func PublishWorkerEndpoint(directory string, record WorkerRecord) error {
 }
 
 // wireWorkerConversation applies saved options and mesh defaults before resuming turns.
-func wireWorkerConversation(ctx context.Context, store *state.Store, record WorkerRecord, directory string, goal *session.Goal, current *ConversationSession) {
+func wireWorkerConversation(ctx context.Context, store *state.Store, record WorkerRecord, directory string, goal *session.Goal, current *ConversationSession) error {
 	current.wireStore(ctx, store, record.Session, directory)
 	current.restoreGoal(goal)
 	defaults, err := state.ReadAgentDefaults(ctx, store.Reader)
@@ -468,14 +473,14 @@ func wireWorkerConversation(ctx context.Context, store *state.Store, record Work
 		}
 	}
 	if err != nil {
-		_, event := obs.Start(ctx, "worker", "load_saved_config")
-		event.Set("session_id", record.ID)
-		event.Fail(err)
-		event.End()
-	} else {
-		current.applyWantedConfig(ctx, wanted)
+		return fmt.Errorf("load saved agent options: %w", err)
 	}
+	if err := current.applyStartOptions(ctx, store.DB, record.ID, wanted); err != nil {
+		return err
+	}
+	current.applyWantedConfig(ctx, wanted)
 	current.logConfiguration()
+	return nil
 }
 
 // prepareACPWorker restores the chat's log and, under the prompt hand-off lock, publishes the
@@ -566,7 +571,7 @@ type acpAgent struct {
 	directory string
 	cancel    context.CancelCauseFunc
 	handler   *WorkerHTTP
-	wire      func(*ConversationSession)
+	wire      func(*ConversationSession) error
 	cleanup   func()
 
 	createdNativeSession bool
@@ -714,7 +719,10 @@ func (agent *acpAgent) restart(ctx context.Context) (result error) {
 	}
 	launch.Session = info
 	agent.cleanup = cleanup
-	agent.wire(next)
+	if err := agent.wire(next); err != nil {
+		agent.close()
+		return err
+	}
 	agent.handler.mu.Lock()
 	agent.handler.Conversation = next
 	agent.handler.mu.Unlock()

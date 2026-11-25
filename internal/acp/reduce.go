@@ -242,8 +242,10 @@ func (reducer *ThreadReducer) Apply(entry LogEntry) ThreadState {
 		}
 		state.NeedsYou = hasOutstandingRequests(state.Items)
 	case "prompt":
-		state.Working = true
-		reducer.inTurn = true
+		if !entry.SteeredPrompt() {
+			state.Working = true
+			reducer.inTurn = true
+		}
 		if reducer.keepItems {
 			state.Items = append(state.Items, ThreadItem{Kind: "user_message_chunk", Data: entry.Payload})
 		}

@@ -51,12 +51,16 @@ export function startSessionBody(input: {
   agentSessionId?: string
   prompt?: string
   sendOnResume?: boolean
+  model?: string
+  effort?: string
   // "new" or the path of an existing worktree of directory; absent runs in the folder itself.
   worktree?: string
   worktreeName?: string
   carry?: boolean
 }) {
   const message = input.view === "chat" && (!input.agentSessionId || input.sendOnResume) ? input.prompt?.trim() : undefined
+  const model = input.view === "chat" ? input.model?.trim() : undefined
+  const effort = input.view === "chat" ? input.effort?.trim() : undefined
   return {
     directory: input.directory,
     harness: input.harness,
@@ -64,6 +68,8 @@ export function startSessionBody(input: {
     transport: input.view === "chat" ? "acp" : "terminal",
     ...(input.agentSessionId ? { agent_session_id: input.agentSessionId } : {}),
     ...(message ? { first_message: message } : {}),
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
     ...(input.worktree ? { worktree: input.worktree, ...(input.worktreeName ? { worktree_name: input.worktreeName } : {}), ...(input.carry ? { carry: true } : {}) } : {}),
   }
 }

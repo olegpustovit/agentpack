@@ -229,7 +229,8 @@ The gateway serves its own MCP server at `/mcp` (see [Deploy the public gateway]
 | `run_helper` | For a chat's agent: starts a helper chat in its folder and mode and `ask`s it the task; it returns the helper and `task_id` at once. Agents told to prefer it over a built-in subagent tool the chat cannot show, such as Antigravity's `invoke_subagent`; the parent chat shows the helper as a card. |
 | `ask`, `reply`, `cancel_task`, `tasks` | For a chat's agent: message another chat and get its answer back; see below. |
 | `show` | For a chat's agent: adds a card to its own chat for the person, with a title, Markdown, a table (up to 12 columns and 100 rows) and an image (`image_path` on the chat's machine or inline base64; PNG, JPEG, GIF or WebP). The image goes to the session's blob store; the card does not reach the agent or other chats, and `read_conversation` lists it as a `card`. |
-| `start_session` | Starts a chat (or, with `terminal`, a terminal session) and returns at once; an optional `prompt` is sent when the chat is ready. |
+| `list_chat_options` | Reads the selected machine's last advertised ACP model and reasoning options. Use choice IDs as `model` and `effort` in `start_session` or `run_helper`. |
+| `start_session` | Starts a chat, or a terminal session with `terminal`, and returns while it starts. Set `top_level: true` for a standalone chat. The first `prompt` waits for the agent to apply any selected options. |
 | `restart_session` | Restarts a running agent, keeping its conversation and reloading its MCP tools (after a deploy added some), or resumes a stopped chat (its machine restarted or its worker died) with its conversation. |
 
 ### agentpack tools inside a chat
@@ -248,7 +249,9 @@ For routine messages and replies, use normal delivery. A busy chat takes the mes
 
 Messages travel as `POST /api/sessions/{id}/conversation/message` on the machine that runs the chat, through the same owner check and mesh routing as prompts. Each machine keeps its side of a task in its local `agent_tasks` table: `out` rows for chats that asked, `in` rows for chats that were asked. A gateway pass every 2 s marks tasks working, answers tasks whose turn ended, and retries answers a machine could not take, for up to a day. The sender is recorded in the prompt's log entry (`from`); only the gateway sets it. A request asked while answering another counts one hop more and is refused beyond 4 hops, a chat sends at most 20 messages a minute, and rows are deleted after 7 days.
 
-Guardrails: an agent can never answer permission requests or questions. What it starts or forks is a helper of its own chat (`parent_id`, shown nested under the parent whatever its agent, folder or machine, and "started by Claude"). Helpers are at most 2 levels below their root chat, and at most 6 work at once per root chat (an idle or stopped helper holds no slot). An agent stops, restarts and cancels only its own chat and its helpers on its machine, with one exception: `restart_session` may resume any stopped chat of the same account on any machine, because resuming sends nothing to that chat's agent.
+An agent can start chats in previously used folders on its own machine. Starts and forks are helpers of its chat unless the person asks for a standalone chat with `start_session(top_level: true)`. Up to six agent-started standalone chats per account and machine can be active at once. Helpers can run two levels below the root, with up to six active helpers per root. Idle or stopped chats free their slots.
+
+Permission and question answers come from the person. An agent can stop, restart or cancel its own chat and its helpers on its machine. It can also use `restart_session` to resume a stopped chat on its account anywhere on the mesh.
 
 ## Toggling servers per mode
 

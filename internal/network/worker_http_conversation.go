@@ -27,7 +27,7 @@ var promptAcceptWait = 2 * time.Second
 // While a turn runs the prompt is queued instead, and its queue ID is returned.
 func startPrompt(ctx context.Context, session *ConversationSession, prompt acp.PromptInput, steer bool) (string, error) {
 	if prompt.From == nil && !strings.HasPrefix(strings.TrimSpace(prompt.Text), "/goal") {
-		session.InterruptGoal(ctx, steer)
+		session.pauseGoalForPrompt(ctx)
 	}
 	queued, first, err := session.Submit(ctx, prompt, steer)
 	if err != nil || first == nil {

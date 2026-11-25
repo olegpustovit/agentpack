@@ -48,6 +48,15 @@ func (g *Gateway) serveStartSession(w http.ResponseWriter, r *http.Request) {
 	if !network.ReadJSON(w, r, &input) {
 		return
 	}
+	if input.ChatStartOptions != (network.ChatStartOptions{}) {
+		if input.Transport != "acp" || !input.ChatStartOptions.Valid() {
+			http.Error(w, "model and effort must be valid ACP choice IDs for a chat", http.StatusBadRequest)
+			return
+		}
+		if input.ID == "" {
+			input.ID = "session-" + network.RandomToken()[:32]
+		}
+	}
 	actor, ok := session.ActorFrom(r.Context())
 	if !ok {
 		actor = session.BrowserActor(g.auth.email(r))
@@ -305,6 +314,7 @@ func (g *Gateway) serveResumeSession(w http.ResponseWriter, r *http.Request) {
 }
 
 type chatStartRequest struct {
+	network.ChatStartOptions
 	ID             string `json:"id,omitempty"`
 	Directory      string `json:"directory"`
 	Harness        string `json:"harness"`
@@ -426,8 +436,15 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor session.Actor, input
 		if _, err := tx.ExecContext(ctx, session.InsertSessionSQL, args...); err != nil {
 			return err
 		}
+		if err := network.SaveChatStartOptions(ctx, tx, info.ID, input.ChatStartOptions); err != nil {
+			return err
+		}
 		if prompt := strings.TrimSpace(input.FirstMessage); prompt != "" {
-			return appendStartingPrompt(ctx, tx, info.ID, network.QueuedPrompt{ID: token, Input: acp.PromptInput{Text: prompt, QueueID: token}})
+			message := acp.PromptInput{Text: prompt, QueueID: token}
+			if actor.Chat != "" && input.ParentID == "" {
+				message.From = &acp.PromptFrom{Session: actor.Chat, Agent: actor.Agent, Kind: "start"}
+			}
+			return appendStartingPrompt(ctx, tx, info.ID, network.QueuedPrompt{ID: token, Input: message})
 		}
 		return nil
 	})

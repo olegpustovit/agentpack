@@ -280,39 +280,69 @@ func (m *Server) postWhileStarting(ctx context.Context, node, id, path string, b
 }
 
 func (m *Server) startSession(ctx context.Context, _ *mcp.CallToolRequest, in mcpStartInput) (*mcp.CallToolResult, mcpSession, error) {
-	if actor, _ := session.ActorFrom(ctx); actor.Chat != "" && (in.Terminal || in.Node != "") {
+	actor, _ := session.ActorFrom(ctx)
+	if actor.Chat != "" && (in.Terminal || in.Node != "") {
 		return nil, mcpSession{}, errAgentScope
 	}
 	if in.Terminal && in.Prompt != "" {
 		return nil, mcpSession{}, errors.New("a terminal session takes no prompt")
 	}
+	if in.TopLevel && (in.ParentID != "" || in.Terminal) {
+		return nil, mcpSession{}, errors.New("top_level requires a chat without parent_id")
+	}
+	if in.ChatStartOptions != (network.ChatStartOptions{}) && (in.Terminal || !in.ChatStartOptions.Valid()) {
+		return nil, mcpSession{}, errors.New("model and effort must be valid ACP choice IDs for a chat")
+	}
 	body := struct {
-		Directory string `json:"directory"`
-		Harness   string `json:"harness"`
-		Mode      string `json:"mode"`
-		Transport string `json:"transport,omitempty"`
-		ParentID  string `json:"parent_id,omitempty"`
-	}{in.Directory, string(in.Agent), in.Mode, "acp", in.ParentID}
+		network.ChatStartOptions
+		ID           string `json:"id,omitempty"`
+		Directory    string `json:"directory"`
+		Harness      string `json:"harness"`
+		Mode         string `json:"mode"`
+		Transport    string `json:"transport,omitempty"`
+		ParentID     string `json:"parent_id,omitempty"`
+		FirstMessage string `json:"first_message,omitempty"`
+	}{
+		ChatStartOptions: in.ChatStartOptions, Directory: in.Directory, Harness: string(in.Agent),
+		Mode: in.Mode, Transport: "acp", ParentID: in.ParentID,
+	}
 	if in.Terminal {
 		body.Transport = ""
+	} else if actor.Chat == "" || in.TopLevel {
+		body.ID = "session-" + network.RandomToken()[:32]
+		body.FirstMessage = in.Prompt
 	}
-	info, err := m.startHelper(ctx, &body.ParentID, func() (session.SessionInfo, error) {
+	start := func() (session.SessionInfo, error) {
 		return callAPI[session.SessionInfo](ctx, m, in.Node, "POST", "/api/sessions", body)
-	})
+	}
+	var info session.SessionInfo
+	var err error
+	if in.TopLevel && actor.Chat != "" {
+		helperStarts.Lock()
+		defer helperStarts.Unlock()
+		var running int
+		err = m.store.Reader.QueryRowContext(ctx, `SELECT count(*) FROM sessions AS s JOIN sessions AS caller
+			ON caller.id=? AND s.node_id=caller.node_id AND s.owner_email=caller.owner_email
+			WHERE s.parent_id='' AND s.ended_at=0 AND s.archived_at=0 AND s.conversation_state<>'idle'
+			AND json_extract(s.started_by,'$.agent')<>''`, actor.Chat).Scan(&running)
+		if err == nil && running >= maxHelpers {
+			err = fmt.Errorf("this account already runs %d top-level chats started by agents", maxHelpers)
+		}
+		if err == nil {
+			info, err = start()
+		}
+	} else {
+		info, err = m.startHelper(ctx, &body.ParentID, start)
+	}
 	if err != nil {
 		return nil, mcpSession{}, err
 	}
-	if in.Prompt != "" {
+	if in.Prompt != "" && body.FirstMessage == "" {
 		background := context.WithoutCancel(ctx)
 		obs.Go("mcp.first_prompt", func() {
 			ctx, event := obs.Start(background, "mcp", "first_prompt")
 			event.Set("session_id", info.ID)
-			var err error
-			if actor, _ := session.ActorFrom(ctx); actor.Chat != "" {
-				_, err = m.ask(ctx, in.Node, info.ID, in.Prompt, "", false) // an agent's helper answers it
-			} else {
-				_, err = m.sendPrompt(ctx, in.Node, info.ID, in.Prompt, false, 2*time.Minute)
-			}
+			_, err := m.ask(ctx, in.Node, info.ID, in.Prompt, "", false) // an agent's helper answers it
 			event.Fail(err)
 			event.End()
 		})
@@ -711,6 +741,7 @@ func (m *Server) chatTools(server *mcp.Server) {
 		return nil, sessionView(info), nil
 	})
 	addTool(server, "run_helper", "Delegate a task to a new helper chat. Use this instead of a built-in subagent tool whose work this chat cannot show, such as Antigravity's invoke_subagent. The person can watch, open and stop the helper. It uses the gateway's chat permission defaults and runs in this chat's folder and mode. It returns at once; the helper's answer arrives in this chat as a reply that wakes it, so you may start several helpers and end your turn.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		network.ChatStartOptions
 		Prompt string   `json:"prompt" jsonschema:"The whole task; the helper sees nothing else of this chat."`
 		Agent  mcpAgent `json:"agent,omitempty" jsonschema:"Agent for the helper; defaults to this chat's agent."`
 	}) (*mcp.CallToolResult, mcpHelperResult, error) {
@@ -726,7 +757,7 @@ func (m *Server) chatTools(server *mcp.Server) {
 		if err != nil {
 			return nil, out, err
 		}
-		if _, out.Session, err = m.startSession(ctx, nil, mcpStartInput{Directory: self.Directory, Agent: mcpAgent(network.CmpOr(string(in.Agent), self.Harness)), Mode: self.Mode}); err != nil {
+		if _, out.Session, err = m.startSession(ctx, nil, mcpStartInput{ChatStartOptions: in.ChatStartOptions, Directory: self.Directory, Agent: mcpAgent(network.CmpOr(string(in.Agent), self.Harness)), Mode: self.Mode}); err != nil {
 			return nil, out, err
 		}
 		asked, err := m.ask(ctx, "", out.Session.ID, in.Prompt, "", false)

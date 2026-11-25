@@ -21,6 +21,7 @@ export function ComposerHintsMenu({
   activeIndex,
   query = "",
   agentName,
+  placement = "above",
 }: {
   id: string
   activeIndex: number
@@ -29,12 +30,13 @@ export function ComposerHintsMenu({
   onPick: (hint: ComposerHint) => void
   query?: string
   agentName?: string
+  placement?: "above" | "below"
 }) {
   if (hints.length === 0) return null
   return (
     <div
       data-slot="composer-hints"
-      className="menu-enter absolute bottom-full left-0 z-20 mb-(--s2) max-h-80 w-full max-w-md overflow-y-auto rounded-(--r-pop) border-[0.5px] border-(--sep) bg-(--chrome) py-(--s2) shadow-(--shadow-pop)"
+      className={`menu-enter absolute left-0 z-20 w-full max-w-md overflow-y-auto rounded-(--r-pop) border-[0.5px] border-(--sep) bg-(--chrome) py-(--s2) shadow-(--shadow-pop) ${placement === "below" ? "top-full mt-(--s2) max-h-64" : "bottom-full mb-(--s2) max-h-80"}`}
       id={id}
       role="listbox"
       aria-label={title}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { agentCommands, applyHint, commandSpans, filterAtHints, filterSlashHints, moveHint } from "./composer-hints"
+import { agentCommands, applyHint, atQuery, commandSpans, filterAtHints, filterSlashHints, moveHint } from "./composer-hints"
 
 describe("composer hints", () => {
   it("lists the agent's own commands with the gateway's", () => {
@@ -32,6 +32,20 @@ describe("composer hints", () => {
     expect(filterSlashHints("/go").map((item) => item.value)).toEqual(["/goal"])
   })
 
+  it("omits active-chat gateway commands when includeGateway is false", () => {
+    const commands = [
+      { name: "goal" },
+      { name: "fork" },
+      { name: "terminal" },
+      { name: "compact" },
+      { name: "review", description: "Review code" },
+    ]
+    expect(filterSlashHints("/", commands, { includeGateway: false }).map((item) => item.value)).toEqual(["/review"])
+    expect(filterSlashHints("/go", commands, { includeGateway: false })).toEqual([])
+    const spans = commandSpans("/goal ship /review /fork /terminal /compact", commands, { includeGateway: false })
+    expect(spans.filter((span) => span.command).map((span) => span.text)).toEqual(["/review"])
+  })
+
   it("filters @ file hints", () => {
     const hits = filterAtHints("see @term", ["internal/network/terminal_client.go"])
     expect(hits[0]?.value).toBe("@internal/network/terminal_client.go")
@@ -43,6 +57,10 @@ describe("composer hints", () => {
 
   it("triggers @ only at the start or after whitespace", () => {
     const paths = ["a/term.go"]
+    expect(atQuery("me@term")).toBeUndefined()
+    expect(atQuery("see @term ")).toBeUndefined()
+    expect(atQuery("@")).toBe("")
+    expect(atQuery("see\n@Term")).toBe("term")
     expect(filterAtHints("me@term", paths)).toEqual([])
     expect(filterAtHints("@term", paths)).toHaveLength(1)
     expect(filterAtHints("see\n@term", paths)).toHaveLength(1)

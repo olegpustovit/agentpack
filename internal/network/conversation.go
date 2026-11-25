@@ -410,15 +410,17 @@ func (cs *ConversationSession) Prompt(ctx context.Context, input acp.PromptInput
 	if exited {
 		return errors.New("ACP adapter has exited")
 	}
-	cs.mu.Lock()
-	cs.delivering++
-	cs.mu.Unlock()
+	cs.beginDeliver()
 	return cs.deliver(ctx, broker, input)
 }
 
-// deliver sends input to the agent, counted by the caller in delivering until the agent answers.
-func (cs *ConversationSession) deliver(ctx context.Context, broker *acp.Broker, input acp.PromptInput) error {
-	err := broker.Prompt(ctx, input)
+func (cs *ConversationSession) beginDeliver() {
+	cs.mu.Lock()
+	cs.delivering++
+	cs.mu.Unlock()
+}
+
+func (cs *ConversationSession) endDeliver() {
 	cs.mu.Lock()
 	cs.delivering--
 	if cs.delivering == 0 && cs.delivered != nil {
@@ -426,6 +428,12 @@ func (cs *ConversationSession) deliver(ctx context.Context, broker *acp.Broker, 
 		cs.delivered = nil
 	}
 	cs.mu.Unlock()
+}
+
+// deliver sends input to the agent, counted by the caller in delivering until the agent answers.
+func (cs *ConversationSession) deliver(ctx context.Context, broker *acp.Broker, input acp.PromptInput) error {
+	err := broker.Prompt(ctx, input)
+	cs.endDeliver()
 	return err
 }
 
@@ -458,6 +466,9 @@ func (cs *ConversationSession) observeEntry(entry acp.LogEntry) bool {
 	}
 	if entrySubagent(entry.Payload) != "" {
 		return false
+	}
+	if entry.SteeredPrompt() {
+		return true
 	}
 	cs.observeGoalEntry(entry)
 	cs.applyConfigUpdate(entry)
@@ -504,7 +515,12 @@ func (cs *ConversationSession) observeEntry(entry acp.LogEntry) bool {
 func (cs *ConversationSession) Cancel(ctx context.Context) error {
 	cs.mu.Lock()
 	broker := cs.broker
-	if cs.running || cs.goal != nil && cs.goal.Engine == "native" && cs.goal.State == "active" {
+	activeNativeGoal := cs.goal != nil && cs.goal.Engine == "native" && cs.goal.State == "active"
+	var pause func(context.Context) error
+	if activeNativeGoal {
+		pause = cs.nativeGoalPauseRPC
+	}
+	if cs.running || activeNativeGoal {
 		cs.userCancelled = true
 	}
 	var settleDelay time.Duration
@@ -516,9 +532,20 @@ func (cs *ConversationSession) Cancel(ctx context.Context) error {
 		settleDelay, settleGen, settleAfter = cs.unpromptedUsageSettle, cs.settleGen, cs.after
 	}
 	cs.mu.Unlock()
+	var pauseErr error
+	if pause != nil {
+		// Pause future cycles first, so cancellation cannot immediately start another one.
+		pauseErr = cs.requestNativeGoalPause(ctx, pause)
+		if pauseErr == nil {
+			cs.goalNotice(goalInterruptedNotice)
+		}
+	}
 	err := broker.Cancel(ctx)
 	if err == nil && settleDelay > 0 {
 		cs.scheduleUnpromptedSettle(settleDelay, settleGen, "cancelled", settleAfter)
+	}
+	if pauseErr != nil {
+		return errors.Join(pauseErr, err)
 	}
 	return err
 }

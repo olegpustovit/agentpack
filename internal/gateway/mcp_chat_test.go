@@ -328,6 +328,82 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 	}
 }
 
+func TestChatAgentStartsStandaloneChatWithChosenOptions(t *testing.T) {
+	h := newOAuthHarness(t)
+	token := chatFixture(t, h, "session-caller", "")
+	client := mcpClient(t, h, token)
+	directory := seedFolder(t, h.gateway.options.Home)
+	h.gateway.options.Start = func(_ context.Context, info session.SessionInfo, _ string) (string, error) { return info.ID, nil }
+	args := map[string]any{"directory": directory, "agent": "codex", "top_level": true,
+		"model": "codex-selected", "effort": "high", "prompt": "Proceed with the handoff"}
+	result, message := callTool(t, client, "start_session", args)
+	if result.IsError {
+		t.Fatal(message)
+	}
+	var started struct{ ID string }
+	if err := json.Unmarshal([]byte(message), &started); err != nil || started.ID == "" {
+		t.Fatalf("start response %q, %v", message, err)
+	}
+	h.gateway.starting.Wait()
+	info, err := session.StoredSession(t.Context(), h.gateway.store.Reader, started.ID)
+	if err != nil || info.ParentID != "" || info.StartedBy == nil || info.StartedBy.User != testBrowserEmail || info.StartedBy.Agent != "claude" {
+		t.Fatalf("standalone chat: %+v, %v", info, err)
+	}
+	var model, effort, queued string
+	err = h.gateway.store.Reader.QueryRow(`SELECT json_extract(wanted_config,'$."$start".model'),
+		json_extract(wanted_config,'$."$start".effort'), body FROM sessions
+		JOIN conversation_events ON session_id=id WHERE id=? AND conversation_events.kind='queued_prompt'`, started.ID).Scan(&model, &effort, &queued)
+	if err != nil || model != "codex-selected" || effort != "high" || !strings.Contains(queued, "Proceed with the handoff") || !strings.Contains(queued, `"from":{"session":"session-caller"`) {
+		t.Fatalf("initial config and prompt: model=%q effort=%q event=%s, %v", model, effort, queued, err)
+	}
+	if result, text := callTool(t, client, "stop_session", map[string]any{"session_id": started.ID}); !result.IsError || text != agentScopeRefusal {
+		t.Fatalf("standalone chat was treated as a helper: %s", text)
+	}
+	args["directory"] = t.TempDir()
+	if result, text := callTool(t, client, "start_session", args); !result.IsError || !strings.Contains(text, "recent folder") {
+		t.Fatalf("agent started a chat in an unknown folder: %s", text)
+	}
+	args["directory"], args["parent_id"] = directory, "session-caller"
+	if result, text := callTool(t, client, "start_session", args); !result.IsError || !strings.Contains(text, "without parent_id") {
+		t.Fatalf("conflicting parent accepted: %s", text)
+	}
+}
+
+func TestAgentSnapshotSharesModelOptionsWithoutBorrowingCommands(t *testing.T) {
+	h := newOAuthHarness(t)
+	node, err := h.gateway.store.NodeID(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const snapshot = `{"config":{"configOptions":[{"id":"model","type":"select","currentValue":"codex-selected",
+		"options":[{"value":"codex-selected","name":"Codex Selected"}]}]},"commands":{"availableCommands":[{"name":"project-review"}]}}`
+	if _, err := h.gateway.store.DB.Exec(`INSERT INTO agent_snapshots(node_id,harness,definition_root,mode,agent_version,snapshot)
+		VALUES (?,'codex','/example/known','default','1',?)`, node, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct {
+		path     string
+		model    bool
+		commands bool
+	}{
+		{"/example/known&model_fallback=1", true, true},
+		{"/example/other&model_fallback=1", true, false},
+		{"/example/other", false, false},
+		{"/example/other&model_fallback=1&owner=another-node", false, false},
+	} {
+		res, data := h.request(t, "GET", "/api/agent-snapshot?harness=codex&definition_root="+check.path, "", "", h.cookie, false)
+		body := string(data)
+		if res.StatusCode != 200 || strings.Contains(body, "codex-selected") != check.model || strings.Contains(body, "project-review") != check.commands {
+			t.Fatalf("%s: %d %s", check.path, res.StatusCode, body)
+		}
+	}
+	client := mcpClient(t, h, chatFixture(t, h, "session-model-options", ""))
+	result, text := callTool(t, client, "list_chat_options", map[string]any{"directory": "/example/other", "agent": "codex"})
+	if result.IsError || !strings.Contains(text, "codex-selected") || strings.Contains(text, "project-review") {
+		t.Fatalf("chat options: %s", text)
+	}
+}
+
 func TestChatToolsRelayFollowsTheGatewayAcrossRestarts(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, "network", "sessions", "session-relay"), 0700); err != nil {

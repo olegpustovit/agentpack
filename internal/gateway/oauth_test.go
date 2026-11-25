@@ -313,7 +313,7 @@ func TestMCPAuthenticatedSDKToolsReuseGatewayPolicy(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	slices.Sort(names)
-	want := []string{"answer_question", "ask", "cancel", "cancel_task", "fork_session", "get_attention", "get_issue", "get_limits", "get_trace", "get_usage", "install_package", "list_issues", "list_nodes", "list_packages", "list_recent_folders", "list_sessions", "read_conversation", "read_terminal", "reply", "resolve_issue", "respond_permission", "restart_session", "run_helper", "send_prompt", "show", "start_session", "stop_session", "tasks", "wait", "write_terminal"}
+	want := []string{"answer_question", "ask", "cancel", "cancel_task", "fork_session", "get_attention", "get_issue", "get_limits", "get_trace", "get_usage", "install_package", "list_chat_options", "list_issues", "list_nodes", "list_packages", "list_recent_folders", "list_sessions", "read_conversation", "read_terminal", "reply", "resolve_issue", "respond_permission", "restart_session", "run_helper", "send_prompt", "show", "start_session", "stop_session", "tasks", "wait", "write_terminal"}
 	if !slices.Equal(names, want) {
 		t.Fatal("tool inventory", names)
 	}

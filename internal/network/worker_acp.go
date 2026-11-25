@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -143,6 +144,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 	client := acp.NewHarnessClient(workspace, log, broker)
 	client.AutoApprove = conv.BypassingPermissions
 	client.StoreImage = conv.storeImage
+	client.SuppressUserEcho = prompter.suppressUserEcho
 	agent := acptest.NewReplayAgent(entries)
 	c2aR, c2aW := io.Pipe()
 	a2cR, a2cW := io.Pipe()
@@ -172,7 +174,7 @@ func startACPReplayAgent(ctx context.Context, launch WorkerLaunch, sessionDir st
 	}
 	prompter.ready(setup)
 	launch.Session.AgentSessionID = setup.AgentSessionID
-	conv.agentVersion = setup.AgentVersion
+	conv.agentVersion = setup.InitInfo.AgentVersion
 	conv.agentSessionID = setup.AgentSessionID
 	conv.SetConfigOptions(setup.ConfigOptions)
 	conv.SetModes(setup.Modes)
@@ -214,6 +216,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	client := acp.NewHarnessClient(workspace, log, broker)
 	client.AutoApprove = conv.BypassingPermissions
 	client.StoreImage = conv.storeImage
+	client.SuppressUserEcho = prompter.suppressUserEcho
 	process, err := connectACP(ctx, launch, workspace, &acpLaunch, client, io.MultiWriter(os.Stderr, stderr))
 	if err != nil {
 		closeACPEventLog(log)
@@ -288,7 +291,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		close(agentDone)
 	})
 
-	beforeSession := func(initCtx context.Context) error {
+	beforeSession := func(initCtx context.Context, initialize sdkacp.InitializeResponse) error {
 		if stageDone != nil {
 			select {
 			case err := <-stageDone:
@@ -308,6 +311,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 			acpLaunch.Rewrite = rewrite
 			rewriter.mu.Unlock()
 		}
+		conv.configureACPGoal(initialize.Meta, prompter.pauseGoal)
 		return nil
 	}
 	done := startStep(ctx, "acp_handshake")
@@ -322,7 +326,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 	launch.Session.AgentSessionID = setup.AgentSessionID
 	conv.stderr = stderr
 	conv.agentExitCode = exitCode
-	conv.agentVersion = setup.AgentVersion
+	conv.agentVersion = setup.InitInfo.AgentVersion
 	conv.agentSessionID = setup.AgentSessionID
 	conv.SetConfigOptions(setup.ConfigOptions)
 	conv.SetModes(setup.Modes)
@@ -332,16 +336,7 @@ func startACPAgentProcess(ctx context.Context, launch WorkerLaunch, launchCtx ba
 		conv.clientMode = "default"
 		conv.mu.Unlock()
 	}
-	conv.mu.Lock()
-	conv.queuesPrompts = acpLaunch.QueuesPrompts
-	if acpLaunch.Steers {
-		conv.steer = prompter.steer
-		if conv.agentCapabilities == nil {
-			conv.agentCapabilities = &session.AgentCapabilities{}
-		}
-		conv.agentCapabilities.Steering = true
-	}
-	conv.mu.Unlock()
+	configureACPSteering(conv, prompter, acpLaunch, setup)
 	if acpLaunch.UnpromptedUsageSettle > 0 {
 		conv.SetUnpromptedUsageSettle(acpLaunch.UnpromptedUsageSettle)
 	}
@@ -415,11 +410,11 @@ func startStep(ctx context.Context, name string) func(error) {
 }
 
 type acpSessionSetup struct {
-	AgentVersion      string
 	AgentSessionID    string
 	ConfigOptions     json.RawMessage
 	Modes             json.RawMessage
 	AgentCapabilities *session.AgentCapabilities
+	InitInfo          base.ACPInitializeInfo
 }
 
 func agentCapabilitiesView(capabilities sdkacp.AgentCapabilities) *session.AgentCapabilities {
@@ -470,7 +465,7 @@ func initializeACPClient(ctx context.Context, conn *sdkacp.ClientSideConnection,
 	return initialize, nil
 }
 
-func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection, workspace, loadID, forkSessionID, authenticateMethodID string, tools chatTools, replaceMissing bool, beforeSession func(context.Context) error) (acpSessionSetup, error) {
+func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection, workspace, loadID, forkSessionID, authenticateMethodID string, tools chatTools, replaceMissing bool, beforeSession func(context.Context, sdkacp.InitializeResponse) error) (acpSessionSetup, error) {
 	initCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if loadID != "" && forkSessionID != "" {
@@ -481,13 +476,17 @@ func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection
 		return acpSessionSetup{}, err
 	}
 	if beforeSession != nil {
-		if err := beforeSession(initCtx); err != nil {
+		if err := beforeSession(initCtx, initialize); err != nil {
 			return acpSessionSetup{}, err
 		}
 	}
-	setup := acpSessionSetup{AgentCapabilities: agentCapabilitiesView(initialize.AgentCapabilities)}
+	setup := acpSessionSetup{
+		AgentCapabilities: agentCapabilitiesView(initialize.AgentCapabilities),
+		InitInfo:          base.ACPInitializeInfo{CapabilitiesMeta: initialize.AgentCapabilities.Meta},
+	}
 	if initialize.AgentInfo != nil {
-		setup.AgentVersion = initialize.AgentInfo.Version
+		setup.InitInfo.AgentName = initialize.AgentInfo.Name
+		setup.InitInfo.AgentVersion = initialize.AgentInfo.Version
 	}
 	servers := tools.servers(initialize.AgentCapabilities.McpCapabilities)
 	if forkSessionID != "" {
@@ -971,12 +970,21 @@ type acpPrompter struct {
 	sessionDir string
 	harness    string
 
-	mu      sync.Mutex
-	conn    *sdkacp.ClientSideConnection
-	sessID  sdkacp.SessionId
-	images  bool
-	handoff string        // earlier transcript for an agent taking the chat over, sent once
-	sent    []*sentPrompt // prompts the agent has not answered, oldest first
+	mu           sync.Mutex
+	conn         *sdkacp.ClientSideConnection
+	sessID       sdkacp.SessionId
+	images       bool
+	promptSteers bool          // native mid-turn steering via concurrent session/prompt
+	handoff      string        // earlier transcript for an agent taking the chat over, sent once
+	sent         []*sentPrompt // prompts the agent has not answered, oldest first
+	echoes       []pendingEcho // prompt blocks already logged; matching user_message_chunk echoes are dropped
+}
+
+type pendingEcho struct {
+	text        string
+	imageMime   string
+	imageDigest [32]byte
+	resourceURI string
 }
 
 // sentPrompt is a prompt on its way to the agent. One sent behind another stays a delivered
@@ -986,6 +994,33 @@ type sentPrompt struct {
 	payload  json.RawMessage
 	queueID  string
 	inserted bool
+}
+
+func configureACPSteering(conv *ConversationSession, prompter *acpPrompter, acpLaunch base.ACPLaunch, setup acpSessionSetup) {
+	conv.mu.Lock()
+	defer conv.mu.Unlock()
+	conv.queuesPrompts = acpLaunch.QueuesPrompts
+	switch {
+	case acpLaunch.Steers:
+		conv.steer = prompter.steer
+	case acpLaunch.PromptSteers != nil && acpLaunch.PromptSteers(setup.InitInfo):
+		prompter.enablePromptSteering()
+		conv.steer = func(ctx context.Context, input acp.PromptInput) (bool, error) {
+			return prompter.steerPrompt(ctx, conv, input)
+		}
+	default:
+		return
+	}
+	if conv.agentCapabilities == nil {
+		conv.agentCapabilities = &session.AgentCapabilities{}
+	}
+	conv.agentCapabilities.Steering = true
+}
+
+func (p *acpPrompter) enablePromptSteering() {
+	p.mu.Lock()
+	p.promptSteers = true
+	p.mu.Unlock()
 }
 
 func (p *acpPrompter) broker() *acp.Broker {
@@ -1028,8 +1063,14 @@ func (p *acpPrompter) prompt(ctx context.Context, input acp.PromptInput) (result
 	own := &sentPrompt{payload: PromptLogPayload(loggedInput), queueID: input.QueueID}
 	p.mu.Lock()
 	own.inserted = len(p.sent) == 0 || own.queueID == ""
+	if len(p.sent) == 0 {
+		p.echoes = nil
+	}
 	p.sent = append(p.sent, own)
 	if own.inserted {
+		if p.promptSteers {
+			p.recordEchoLocked(blocks)
+		}
 		log.Append("prompt", time.Now().UnixMilli(), own.payload)
 	} else {
 		log.Append("queued_prompt", time.Now().UnixMilli(), delivered(own.payload))
@@ -1079,6 +1120,113 @@ func delivered(payload json.RawMessage) json.RawMessage {
 	return MustRawJSON(body)
 }
 
+func (p *acpPrompter) recordEchoLocked(blocks []sdkacp.ContentBlock) {
+	for _, block := range blocks {
+		switch {
+		case block.Text != nil && block.Text.Text != "":
+			p.echoes = append(p.echoes, pendingEcho{text: block.Text.Text})
+		case block.Image != nil:
+			p.echoes = append(p.echoes, pendingEcho{
+				imageMime:   block.Image.MimeType,
+				imageDigest: sha256.Sum256([]byte(block.Image.Data)),
+			})
+		case block.ResourceLink != nil:
+			p.echoes = append(p.echoes, pendingEcho{resourceURI: block.ResourceLink.Uri})
+		}
+	}
+}
+
+// suppressUserEcho drops a parent-session user_message_chunk that echoes a prompt already logged
+// on this turn (including delayed echoes emitted after mid-turn tool updates).
+func (p *acpPrompter) suppressUserEcho(block sdkacp.ContentBlock) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.echoes) == 0 {
+		return false
+	}
+	switch {
+	case block.Text != nil:
+		text := block.Text.Text
+		if text == "" {
+			return true
+		}
+		for i := range p.echoes {
+			if p.echoes[i].text != "" && strings.HasPrefix(p.echoes[i].text, text) {
+				p.echoes[i].text = p.echoes[i].text[len(text):]
+				if p.echoes[i].text == "" {
+					p.echoes = slices.Delete(p.echoes, i, i+1)
+				}
+				return true
+			}
+		}
+	case block.Image != nil:
+		digest := sha256.Sum256([]byte(block.Image.Data))
+		for i := range p.echoes {
+			if p.echoes[i].imageMime == block.Image.MimeType && p.echoes[i].imageDigest == digest {
+				p.echoes = slices.Delete(p.echoes, i, i+1)
+				return true
+			}
+		}
+	case block.ResourceLink != nil:
+		for i := range p.echoes {
+			if p.echoes[i].resourceURI == block.ResourceLink.Uri {
+				p.echoes = slices.Delete(p.echoes, i, i+1)
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// steerPrompt joins a running turn by sending a second concurrent session/prompt without
+// session/cancel, for agents that steer natively on concurrent prompts (Antigravity >= 1.5.0).
+// It reports false when no prompt is in flight so the caller starts a normal turn instead.
+func (p *acpPrompter) steerPrompt(ctx context.Context, conv *ConversationSession, input acp.PromptInput) (bool, error) {
+	p.mu.Lock()
+	c, sid, images := p.conn, p.sessID, p.images
+	active := len(p.sent) > 0
+	p.mu.Unlock()
+	if c == nil {
+		return false, errors.New("acp session not ready")
+	}
+	if !active {
+		return false, nil
+	}
+	blocks, loggedInput, err := promptContentBlocks(p.sessionDir, input, images)
+	if err != nil {
+		return false, err
+	}
+	conv.beginDeliver()
+	payload := promptLogFields(loggedInput)
+	payload["steered"] = true
+	own := &sentPrompt{payload: MustRawJSON(payload), queueID: input.QueueID, inserted: true}
+	p.mu.Lock()
+	if p.conn == nil || len(p.sent) == 0 {
+		p.mu.Unlock()
+		conv.endDeliver()
+		return false, nil
+	}
+	p.sent = append(p.sent, own)
+	p.recordEchoLocked(blocks)
+	p.log.Append("prompt", time.Now().UnixMilli(), own.payload)
+	p.mu.Unlock()
+	obs.Go("acp.steer_prompt", func() {
+		defer conv.endDeliver()
+		promptCtx, event := obs.Start(context.WithoutCancel(ctx), "acp.turn", "steer_prompt")
+		defer event.End()
+		event.Set("session_id", conv.sessionID)
+		response, err := c.Prompt(promptCtx, sdkacp.PromptRequest{SessionId: sid, Prompt: blocks})
+		if err != nil {
+			event.Fail(errors.New("agent did not complete the steer prompt"))
+		}
+		conv.writes.RLock()
+		defer conv.writes.RUnlock()
+		p.answered(own, err, response)
+		_ = p.log.Flush()
+	})
+	return true, nil
+}
+
 // steer hands input to the agent's running turn with _session/steering, without session/cancel.
 // It reports false when no turn can take it, and the caller sends it as a normal prompt.
 func (p *acpPrompter) steer(ctx context.Context, input acp.PromptInput) (bool, error) {
@@ -1106,7 +1254,9 @@ func (p *acpPrompter) steer(ctx context.Context, input acp.PromptInput) (bool, e
 	}
 	switch result.Outcome {
 	case "injected":
-		p.log.Append("prompt", time.Now().UnixMilli(), PromptLogPayload(loggedInput))
+		payload := promptLogFields(loggedInput)
+		payload["steered"] = true
+		p.log.Append("prompt", time.Now().UnixMilli(), MustRawJSON(payload))
 		return true, nil
 	case "promptRequired":
 		return false, nil

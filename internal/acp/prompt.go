@@ -41,13 +41,13 @@ type PromptInput struct {
 	From         *PromptFrom
 }
 
-// PromptFrom names the chat whose agent sent a prompt with ask or reply; nil when a person sent it.
+// PromptFrom names the chat whose agent sent a prompt. A person's prompt has no sender chat.
 type PromptFrom struct {
 	Session string `json:"session"`
 	Node    string `json:"node,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Agent   string `json:"agent,omitempty"`
-	Task    string `json:"task"`
-	Kind    string `json:"kind"`            // ask or reply
+	Task    string `json:"task,omitempty"`
+	Kind    string `json:"kind"`            // ask, reply or start
 	State   string `json:"state,omitempty"` // a reply's task state
 }

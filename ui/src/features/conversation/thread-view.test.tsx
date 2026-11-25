@@ -194,6 +194,69 @@ describe("conversation message actions", () => {
     expect(posted).toEqual([{ elicitation_id: "e1", value: "decline" }])
     vi.unstubAllGlobals()
   })
+
+  it("submits question forms and multi-choice cards on Cmd/Ctrl+Enter", async () => {
+    const posted: { elicitation_id: string; value: string }[] = []
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
+      posted.push(JSON.parse(init.body as string) as { elicitation_id: string; value: string })
+      return Response.json({ accepted: true })
+    }))
+    const formItem: ThreadItem = {
+      kind: "elicitation",
+      seq: 1,
+      data: {
+        elicitationId: "e-form",
+        prompt: "Free the display?",
+        fields: [
+          { key: "choice", title: "Status", options: [{ value: "free", label: "Free now" }, { value: "busy", label: "Busy" }] },
+          { key: "note", title: "Additional answer or note" },
+        ],
+      },
+    }
+    act(() => root.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(ThreadView, { items: [formItem], machine: "local", sessionId: "s" }))))
+    const freeButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Free now")!
+    await act(async () => freeButton.click())
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Additional answer or note"]')!
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!
+    await act(async () => {
+      setter.call(input, "should be free")
+      input.dispatchEvent(new Event("input", { bubbles: true }))
+    })
+    // IME composition must not trigger submit.
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, isComposing: true, bubbles: true, cancelable: true }))
+    })
+    expect(posted).toEqual([])
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true }))
+    })
+    expect(posted).toEqual([{ elicitation_id: "e-form", value: JSON.stringify({ choice: "free", note: "should be free" }) }])
+
+    const multiItem: ThreadItem = {
+      kind: "elicitation",
+      seq: 2,
+      data: {
+        elicitationId: "e-multi",
+        prompt: "Pick targets",
+        choices: ["Local", "Remote"],
+        optionIds: ["local-id", "remote-id"],
+        allowMultiple: true,
+      },
+    }
+    act(() => root.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(ThreadView, { items: [multiItem], machine: "local", sessionId: "s" }))))
+    const localButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Local")!
+    // Nothing selected yet: Ctrl+Enter does not submit.
+    await act(async () => {
+      localButton.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true }))
+    })
+    expect(posted).toHaveLength(1)
+    await act(async () => localButton.click())
+    await act(async () => {
+      localButton.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true }))
+    })
+    expect(posted[1]).toEqual({ elicitation_id: "e-multi", value: JSON.stringify(["local-id"]) })
+    vi.unstubAllGlobals()
+  })
 })
 
 describe("tool row titles (P1.34)", () => {

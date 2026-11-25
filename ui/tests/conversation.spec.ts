@@ -201,9 +201,10 @@ test("AskUserQuestion form answers every question and leaves the composer usable
   await expect(card).toContainText("Commit the work?")
   await expect(page.getByRole("button", { name: "Attach image" })).toBeEnabled()
   await card.getByRole("button", { name: "Commit everything" }).click()
-  await card.getByRole("textbox", { name: "Other" }).fill("and push")
+  const other = card.getByRole("textbox", { name: "Other" })
+  await other.fill("and push")
   await card.getByRole("button", { name: "Linear" }).click()
-  await card.getByRole("button", { name: "Submit" }).click()
+  await other.press("ControlOrMeta+Enter")
   await expect.poll(() => posted).toBeDefined()
   expect(JSON.parse(posted!.value as string)).toEqual({ question_0: "Commit everything", question_0_custom: "and push", question_1: ["Linear"] })
 })
@@ -747,10 +748,11 @@ test("Enter queues while the agent works and ⌘Enter steers", async ({ page }) 
   await expect.poll(() => posts.length).toBe(1)
   expect(posts[0]).toMatchObject({ text: "queue me" })
   expect(posts[0]!.steer).toBeUndefined()
-  await message.fill("steer me")
+  await message.fill("/comp")
+  await expect(page.getByRole("option", { name: /\/compact/ })).toBeVisible()
   await message.press("ControlOrMeta+Enter")
   await expect.poll(() => posts.length).toBe(2)
-  expect(posts[1]).toMatchObject({ text: "steer me", steer: true })
+  expect(posts[1]).toMatchObject({ text: "/comp", steer: true })
   let steered = ""
   let release!: () => void
   const response = new Promise<void>((resolve) => { release = resolve })
@@ -769,6 +771,24 @@ test("Enter queues while the agent works and ⌘Enter steers", async ({ page }) 
   release()
   await expect(page.getByRole("button", { name: "Send now" })).toBeEnabled()
   expect(posts).toHaveLength(2)
+})
+
+test("⌘Enter submits the composer even while slash hints are open", async ({ page }) => {
+  const posts: Record<string, unknown>[] = []
+  const commands = '{"seq":1,"ts":1000,"kind":"available_commands_update","payload":{"availableCommands":[{"name":"ponytail","description":"Minimal change"}]}}\n'
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: commands, contentType: "application/x-ndjson" }))
+  await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+  await page.route("**/api/sessions/*/conversation/prompt", (route) => {
+    posts.push(route.request().postDataJSON() as Record<string, unknown>)
+    return route.fulfill({ json: { accepted: true } })
+  })
+  await page.goto("/sessions/local/chat-one")
+  const message = page.getByRole("textbox", { name: "Message" })
+  await message.fill("fix this /pony")
+  await expect(page.locator('[data-slot="composer-hints"]')).toBeVisible()
+  await message.press("ControlOrMeta+Enter")
+  await expect.poll(() => posts.length).toBe(1)
+  expect(posts[0]).toMatchObject({ text: "fix this /pony" })
 })
 
 test("the composer continues a chat with another agent", async ({ page }) => {

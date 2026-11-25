@@ -99,6 +99,7 @@ export async function mockAPI(page: Page, { authenticated = true, unclaimed = fa
       const list = fleet ? (machine === "local" ? ["local", ...fleetNodes.map((node) => node.id)].flatMap(fleetSessions) : fleetSessions(machine)) : [session, second]
       data = req.method() === "POST" ? { ...session, ...body, id: "created" } : list
     } else if (url.pathname === "/api/projects") data = fleet ? fleetProjects(machine) : [projectRow("/work/previous", [{ harness: "codex" }])]
+    else if (url.pathname === "/api/projects/files") data = { files: [], truncated: false }
     else if (url.pathname === "/api/folders/found") data = []
     else if (url.pathname === "/api/folders") {
       const path = url.searchParams.get("path")

@@ -78,6 +78,18 @@ describe("startSessionBody", () => {
     expect(startSessionBody({ ...resumed, sendOnResume: true }).first_message).toBe("Fix it\nThen review")
     expect(startSessionBody({ ...resumed, view: "terminal", sendOnResume: true })).not.toHaveProperty("first_message")
   })
+
+  it("forwards model and effort choice IDs only for chat sessions", () => {
+    const base = { directory: "/work/x", harness: "codex", mode: "default", model: " gpt-5.4 ", effort: " high " }
+    expect(startSessionBody({ ...base, view: "chat" })).toMatchObject({ transport: "acp", model: "gpt-5.4", effort: "high" })
+    const blank = startSessionBody({ ...base, view: "chat", model: "  ", effort: "" })
+    expect(blank).not.toHaveProperty("model")
+    expect(blank).not.toHaveProperty("effort")
+    const terminal = startSessionBody({ ...base, view: "terminal" })
+    expect(terminal).toMatchObject({ transport: "terminal" })
+    expect(terminal).not.toHaveProperty("model")
+    expect(terminal).not.toHaveProperty("effort")
+  })
 })
 
 describe("reusesOperationId", () => {

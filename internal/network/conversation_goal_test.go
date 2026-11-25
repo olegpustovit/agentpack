@@ -183,9 +183,9 @@ func TestSubagentSummaryTracksBackgroundAgents(t *testing.T) {
 	}
 }
 
-// Codex reports no goal status to a plain ACP client: after the /goal turn it keeps working with no
-// prompt and only its thread status says when it stops.
-func TestNativeGoalFollowsUnpromptedWork(t *testing.T) {
+// An adapter without goal status can continue unprompted work. Its thread status drives the
+// legacy goal inference.
+func TestLegacyNativeGoalFollowsUnpromptedWork(t *testing.T) {
 	session, agent := newFakeAgentSession(t, entry("available_commands_update", map[string]any{
 		"sessionUpdate": "available_commands_update", "availableCommands": []map[string]string{{"name": "goal", "description": "goal"}},
 	}))
@@ -384,7 +384,7 @@ func TestUserMessagePausesNativeGoal(t *testing.T) {
 	}
 }
 
-func TestSteeringKeepsCodexGoalActive(t *testing.T) {
+func TestUserMessagesKeepCodexGoalActive(t *testing.T) {
 	conv, agent := newFakeAgentSession(t, codexGoalCommand)
 	var steered []string
 	conv.steer = func(_ context.Context, input acp.PromptInput) (bool, error) {
@@ -396,8 +396,14 @@ func TestSteeringKeepsCodexGoalActive(t *testing.T) {
 		t.Fatal(err)
 	}
 	agent.nextPrompt(t)
-	defer func() { agent.turns <- fakeTurn{} }()
+	t.Cleanup(func() {
+		agent.turns <- fakeTurn{}
+		agent.turns <- fakeTurn{}
+	})
 
+	if _, err := startPrompt(t.Context(), conv, acp.PromptInput{Text: "eta?"}, false); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := startPrompt(t.Context(), conv, acp.PromptInput{Text: "check the logs first"}, true); err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +414,41 @@ func TestSteeringKeepsCodexGoalActive(t *testing.T) {
 		t.Fatalf("goal = %+v", goal)
 	}
 	if titles := goalNotices(agent.log); len(titles) != 0 || len(agent.cancels) != 0 {
-		t.Fatalf("steering produced notices %q and %d cancels", titles, len(agent.cancels))
+		t.Fatalf("messages produced notices %q and %d cancels", titles, len(agent.cancels))
+	}
+	agent.turns <- fakeTurn{}
+	if got := agent.nextPrompt(t).Text; got != "eta?" {
+		t.Fatalf("queued prompt = %q", got)
+	}
+}
+
+func TestExplicitCodexGoalPauseUsesPrompt(t *testing.T) {
+	conv, agent := newFakeAgentSession(t, codexGoalCommand)
+	steered := make(chan acp.PromptInput, 1)
+	conv.steer = func(_ context.Context, input acp.PromptInput) (bool, error) {
+		steered <- input
+		return true, nil
+	}
+	if err := conv.SetGoal(t.Context(), "ship it", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		agent.turns <- fakeTurn{}
+		agent.turns <- fakeTurn{}
+	})
+	agent.nextPrompt(t)
+	if err := conv.UpdateGoal(t.Context(), GoalChange{Action: "pause"}); err != nil {
+		t.Fatal(err)
+	}
+	agent.goalUntil(t, goalIn("paused"))
+	select {
+	case got := <-steered:
+		t.Fatalf("sent goal control as steering input: %q", got.Text)
+	default:
+	}
+	agent.turns <- fakeTurn{}
+	if got := agent.nextPrompt(t).Text; got != "/goal pause" {
+		t.Fatalf("goal pause sent %q", got)
 	}
 }
 

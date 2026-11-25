@@ -62,6 +62,13 @@ describe("parseConfigOptions", () => {
     ])
     expect(options.map(configRole)).toEqual(["permissions", "model", "effort"])
   })
+
+  it("reads model choices grouped by the agent", () => {
+    expect(parseConfigOptions([{
+      id: "model", type: "select", currentValue: "sol",
+      options: [{ group: "openai", name: "OpenAI", options: [{ value: "sol", name: "Sol" }] }],
+    }])).toMatchObject([{ items: [{ value: "sol", label: "Sol", group: "OpenAI" }] }])
+  })
 })
 
 describe("dangerousMode", () => {

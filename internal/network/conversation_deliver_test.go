@@ -200,3 +200,60 @@ func TestSteerHandsThePromptToTheRunningTurn(t *testing.T) {
 	close(release)
 	waitConversationState(t, session, "idle")
 }
+
+func TestSteeringDoesNotWaitForHistorySave(t *testing.T) {
+	conv, agent := newFakeAgentSession(t)
+	steered := make(chan string, 1)
+	conv.steer = func(_ context.Context, input acp.PromptInput) (bool, error) {
+		agent.log.Append("prompt", 1, PromptLogPayload(input))
+		steered <- input.Text
+		return true, nil
+	}
+	if _, _, err := conv.Submit(t.Context(), acp.PromptInput{Text: "running"}, false); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { agent.turns <- fakeTurn{} })
+	agent.nextPrompt(t)
+
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	var firstWrite sync.Once
+	if err := agent.log.EnableSink(func(changes acp.LogChanges) error {
+		for _, entry := range changes.Entries {
+			if entry.Kind == "queued_prompt" {
+				firstWrite.Do(func() { close(blocked) })
+				<-release
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		unblock()
+		_ = agent.log.Close()
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := conv.Submit(t.Context(), acp.PromptInput{QueueID: "steer-save", Text: "look here"}, true)
+		done <- err
+	}()
+	select {
+	case <-blocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("history write did not start")
+	}
+	select {
+	case got := <-steered:
+		if got != "look here" {
+			t.Fatalf("steered %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("steering waited for the blocked history write")
+	}
+	unblock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}

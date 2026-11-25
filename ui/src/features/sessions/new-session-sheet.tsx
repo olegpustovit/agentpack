@@ -8,12 +8,16 @@ import { Kbd, Spinner } from "@/components/kit/feedback"
 import { FilterButton, FilterChip, FilterFacet, FilterToken } from "@/components/kit/filters"
 import { GroupHeader, SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@/components/kit/list"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { ChevronRight, FolderSearch, History } from "lucide-react"
+import { ChevronRight, FolderSearch, History, Slash } from "lucide-react"
 import { isFolderPath } from "./folder-path"
 import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { useMachineQueries, useMachines, useReplicatedQueries } from "@/features/machines/queries"
 import { agentsQuery, type AgentAccount } from "@/features/agents/queries"
+import { applyHint, atQuery, commandSpans, filterAtHints, filterSlashHints, moveHint, slashQuery, type ComposerHint } from "@/features/conversation/composer-hints"
+import { ComposerHintsMenu } from "@/features/conversation/composer-hints-menu"
+import { configRole, parseConfigOptions, type ConfigOption } from "@/features/conversation/config-options"
+import { agentSnapshotQuery } from "@/features/conversation/queries"
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { api, ApiError, errorText, LOCAL, routeMissing } from "@/lib/api"
 import type { AgentSession, ProjectRow } from "@/lib/api-types"
@@ -26,7 +30,7 @@ import { LoginGlyph } from "@/features/library/mcp-inspector"
 import { connectionsQuery, loginsFor, type Connection } from "@/features/settings/connections-model"
 import { hud } from "@/lib/hud"
 import { branchSlug, projectDirectory, worktreeFolderInProject, worktreesQuery } from "./git"
-import { foundQuery, projectsQuery, selectedProjectQuery, sessionsQuery } from "./queries"
+import { foundQuery, projectFilesQuery, projectsQuery, selectedProjectQuery, sessionsQuery } from "./queries"
 import { FolderBrowser, useFolderBrowser } from "./folder-browser"
 import { ProjectHistory } from "./project-history"
 import { ProjectSignInStatus, useProjectSignIn } from "./project-sign-in"
@@ -34,6 +38,15 @@ import { RowSheet, type SheetState } from "./session-sheets"
 
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
 const AgentSignIn = lazy(() => import("@/features/agents/sign-in").then((module) => ({ default: module.SignIn })))
+const automaticChoice = "\0"
+
+function launchChoices(option: Extract<ConfigOption, { type: "select" }>, label: string) {
+  const last = option.items.find((item) => item.value === option.value)?.label
+  return [
+    { value: automaticChoice, label: `${label}: automatic`, detail: last ? `Last used: ${last}` : undefined },
+    ...option.items.map((item) => ({ ...item, disabled: Boolean(item.disabledReason), detail: item.disabledReason })),
+  ]
+}
 
 function chatUnavailableReason(error: unknown, machine: string): string | undefined {
   if (routeMissing(error)) {
@@ -118,8 +131,16 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
   const [history, setHistory] = useState(false)
   const [renameSheet, setRenameSheet] = useState<SheetState | null>(null)
   const [signInTarget, setSignInTarget] = useState<{ machine: string; name: string; account: AgentAccount }>()
+  const [modelPicks, setModelPicks] = useState<Record<string, string>>({})
+  const [effortPicks, setEffortPicks] = useState<Record<string, string>>({})
+  const [hintIndex, setHintIndex] = useState(0)
+  const [hintsClosed, setHintsClosed] = useState(false)
+  const [caret, setCaret] = useState<{ draft: string; at: number }>()
   const worktreeControl = useRef<HTMLDivElement>(null)
+  const promptRef = useRef<HTMLTextAreaElement>(null)
+  const backdropRef = useRef<HTMLDivElement>(null)
   const worktreeErrorId = useId()
+  const hintsId = useId()
   const check = useMutation({ mutationFn: start.check })
 
   const now = Date.now()
@@ -234,6 +255,42 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
   const showProjectPicker = isPhone && !history && (chooseProjectOnPhone || !row)
   const unavailable = account?.installed === false
   const mutable = !start.isPending && !start.outcomeUnknown
+  const chatUnavailableHint = chatUnavailableReason(pastSessions.error, machineName)
+  const snapshotEnabled = !history && view === "chat" && startable && !unavailable && !chatUnavailableHint && Boolean(place?.machine && row?.directory && harnessId)
+  const snapshotQuery = useQuery({
+    ...agentSnapshotQuery(
+      place?.machine ?? "",
+      row ? { directory: row.directory, harness: harnessId, mode: modeValue } : undefined,
+      { modelFallback: true },
+    ),
+    enabled: snapshotEnabled,
+  })
+  const activeSnapshot = snapshotEnabled ? snapshotQuery.data : undefined
+  const configOptions = parseConfigOptions(activeSnapshot?.config).filter((option) => option.type === "select")
+  const modelOption = configOptions.find((option) => configRole(option) === "model")
+  const effortOption = configOptions.find((option) => configRole(option) === "effort")
+  const optionScope = place && row ? `${place.machine}\0${row.directory}\0${harnessId}\0${modeValue}` : ""
+  const pickedModel = optionScope ? modelPicks[optionScope] : undefined
+  const pickedEffort = optionScope ? effortPicks[optionScope] : undefined
+  const chosenModel = pickedModel && modelOption?.items.some((item) => item.value === pickedModel && !item.disabledReason) ? pickedModel : undefined
+  const chosenEffort = pickedEffort && effortOption?.items.some((item) => item.value === pickedEffort && !item.disabledReason) ? pickedEffort : undefined
+  const rawCommands = activeSnapshot?.commands?.availableCommands ?? []
+  const hasAgentCommands = filterSlashHints("/", rawCommands, { includeGateway: false }).length > 0
+  const caretAt = caret?.draft === prompt ? caret.at : prompt.length
+  const beforeCaret = prompt.slice(0, caretAt)
+  const slashHints = view === "chat" ? filterSlashHints(beforeCaret, rawCommands, { includeGateway: false }) : []
+  const fileDirectory = resumeConversation?.cwd || continued?.path || row?.directory || ""
+  const atActive = view === "chat" && atQuery(beforeCaret) !== undefined && slashHints.length === 0
+  const projectFiles = useQuery({
+    ...projectFilesQuery(place?.machine ?? "", fileDirectory),
+    enabled: !history && startable && atActive && !hintsClosed && Boolean(place?.machine && fileDirectory),
+  })
+  const atHints = atActive ? filterAtHints(beforeCaret, projectFiles.data?.files ?? []) : []
+  const composerHints = hintsClosed ? [] : slashHints.length > 0 ? slashHints : atHints
+  const hintTitle = slashHints.length > 0 ? "Commands" : "Project files"
+  const activeHint = Math.min(hintIndex, Math.max(composerHints.length - 1, 0))
+  const spans = view === "chat" && prompt.includes("/") ? commandSpans(prompt, rawCommands, { includeGateway: false }) : []
+  const showModelAbsenceCue = snapshotEnabled && !snapshotQuery.isPending && !modelOption
 
   function chooseProject(next: MergedProject) {
     setPicked(undefined)
@@ -286,6 +343,31 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
     start.reset()
   }
 
+  function pickHint(hint: ComposerHint) {
+    setHintIndex(0)
+    const head = applyHint(beforeCaret, hint)
+    const tail = prompt.slice(caretAt)
+    const next = head + (tail.startsWith(" ") ? tail.slice(1) : tail)
+    setPrompt(next)
+    setCaret({ draft: next, at: head.length })
+    requestAnimationFrame(() => {
+      promptRef.current?.focus()
+      promptRef.current?.setSelectionRange(head.length, head.length)
+    })
+  }
+
+  function openSlashHints() {
+    const next = `${prompt}${prompt && !/\s$/.test(prompt) ? " " : ""}/`
+    setPrompt(next)
+    setCaret({ draft: next, at: next.length })
+    setHintIndex(0)
+    setHintsClosed(false)
+    requestAnimationFrame(() => {
+      promptRef.current?.focus()
+      promptRef.current?.setSelectionRange(next.length, next.length)
+    })
+  }
+
   function launch(sendOnResume = false) {
     if (!history && place && row && !blocked && (!sendOnResume || (resumeConversation && prompt.trim()))) {
       start.mutate({
@@ -297,6 +379,8 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
         agentSessionId: resumeConversation?.id,
         prompt: view === "chat" ? prompt : undefined,
         sendOnResume,
+        model: view === "chat" ? chosenModel : undefined,
+        effort: view === "chat" ? chosenEffort : undefined,
         worktree: !canWorktree ? undefined : workspace === "folder" ? "" : workspace,
         carry: workspace === "new" && dirty > 0 && carry,
       })
@@ -310,6 +394,7 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
   }
 
   function submitShortcut(event: KeyboardEvent<HTMLFormElement>) {
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return
     if (!history && event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault()
       event.currentTarget.requestSubmit()
@@ -317,7 +402,6 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
   }
 
   // One reason at a time, most blocking first.
-  const chatUnavailableHint = chatUnavailableReason(pastSessions.error, machineName)
   const placeError = placeQuery?.error
   let hint: string | undefined
   if (online.length === 0) hint = "No machine is online."
@@ -520,7 +604,7 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
               </header>
 
               <div className="flex min-w-0 flex-col gap-(--s3)">
-                <div className="flex min-w-0 flex-col rounded-(--r-pop) bg-(--field) shadow-[inset_0_0_0_.5px_var(--control-edge)] transition-shadow duration-(--dur-1) ease-(--ease) has-[textarea:focus]:shadow-[inset_0_0_0_1px_var(--accent),0_0_0_3px_var(--accent-tint)]">
+                <div className="relative flex min-w-0 flex-col rounded-(--r-pop) bg-(--field) shadow-[inset_0_0_0_.5px_var(--control-edge)] transition-shadow duration-(--dur-1) ease-(--ease) has-[textarea:focus]:shadow-[inset_0_0_0_1px_var(--accent),0_0_0_3px_var(--accent-tint)]">
                   {resuming && (
                     <div className="flex min-w-0 items-center gap-(--s3) border-b-[0.5px] border-(--sep-soft) px-(--s5) py-(--s3) text-(length:--fs-sm)">
                       <History aria-hidden className="size-3.5 shrink-0 text-(--fg2)" />
@@ -529,14 +613,54 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
                     </div>
                   )}
                   {view === "chat" ? (
-                    <textarea
-                      aria-label={resuming ? "Message to send after resuming" : "First message"}
-                      rows={3}
-                      value={prompt}
-                      onChange={(event) => setPrompt(event.currentTarget.value)}
-                      placeholder={resuming ? "Message to send after resuming (optional)" : `Describe the task for ${harnessName(harnessId)} (optional)`}
-                      className="field-sizing-content max-h-[30dvh] min-h-20 resize-none bg-transparent px-(--s5) pt-(--s4) text-(length:--fs) outline-none placeholder:text-(--fg3)"
-                    />
+                    <div className="relative">
+                      {spans.some((span) => span.command) && (
+                        <div ref={backdropRef} aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden px-(--s5) pt-(--s4) text-(length:--fs) wrap-break-word whitespace-pre-wrap text-transparent">
+                          {spans.map((span, index) => span.command ? <mark key={index} data-command className="rounded-[3px] bg-(--accent-soft) text-transparent">{span.text}</mark> : span.text)}{" "}
+                        </div>
+                      )}
+                      <textarea
+                        ref={promptRef}
+                        aria-label={resuming ? "Message to send after resuming" : "First message"}
+                        rows={3}
+                        value={prompt}
+                        aria-controls={composerHints.length > 0 ? hintsId : undefined}
+                        aria-activedescendant={composerHints.length > 0 ? `${hintsId}-${activeHint}` : undefined}
+                        onScroll={(event) => { if (backdropRef.current) backdropRef.current.scrollTop = event.currentTarget.scrollTop }}
+                        onSelect={(event) => setCaret({ draft: event.currentTarget.value, at: event.currentTarget.selectionStart })}
+                        onBlur={() => setHintsClosed(true)}
+                        onChange={(event) => {
+                          setPrompt(event.currentTarget.value)
+                          setCaret({ draft: event.currentTarget.value, at: event.currentTarget.selectionStart })
+                          setHintIndex(0)
+                          setHintsClosed(false)
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.nativeEvent.isComposing || event.keyCode === 229) return
+                          if (composerHints.length === 0) return
+                          if (!event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+                            const move = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0
+                            if (move) {
+                              event.preventDefault()
+                              setHintIndex(moveHint(activeHint, move, composerHints.length))
+                              return
+                            }
+                            if (event.key === "Tab" || event.key === "Enter") {
+                              event.preventDefault()
+                              pickHint(composerHints[activeHint]!)
+                              return
+                            }
+                          }
+                          if (event.key === "Escape") {
+                            event.preventDefault()
+                            event.stopPropagation()
+                            setHintsClosed(true)
+                          }
+                        }}
+                        placeholder={resuming ? "Message to send after resuming (optional)" : `Describe the task for ${harnessName(harnessId)} (optional)`}
+                        className="relative block field-sizing-content max-h-[30dvh] min-h-20 w-full resize-none bg-transparent px-(--s5) pt-(--s4) text-(length:--fs) outline-none placeholder:text-(--fg3)"
+                      />
+                    </div>
                   ) : (
                     <p className="px-(--s5) pt-(--s4) pb-(--s2) text-(length:--fs-sm) text-(--fg2)">{`Opens ${harnessName(harnessId)} in an interactive terminal. Nothing is sent.`}</p>
                   )}
@@ -548,6 +672,30 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
                         const missing = accounts.data?.some((entry) => entry.harness === id && !entry.installed)
                         return { value: id, label: harnessName(id), disabled: missing, detail: missing ? "not installed" : used ? shortAge(new Date(used.last_used), now) : undefined }
                       })} />
+                    {view === "chat" && modelOption && (
+                      <PopupSelect
+                        label="Model"
+                        value={chosenModel ?? automaticChoice}
+                        disabled={!mutable}
+                        onValueChange={(value) => {
+                          if (optionScope) setModelPicks((current) => ({ ...current, [optionScope]: value }))
+                          start.reset()
+                        }}
+                        items={launchChoices(modelOption, "Model")}
+                      />
+                    )}
+                    {view === "chat" && effortOption && (
+                      <PopupSelect
+                        label="Reasoning"
+                        value={chosenEffort ?? automaticChoice}
+                        disabled={!mutable}
+                        onValueChange={(value) => {
+                          if (optionScope) setEffortPicks((current) => ({ ...current, [optionScope]: value }))
+                          start.reset()
+                        }}
+                        items={launchChoices(effortOption, "Reasoning")}
+                      />
+                    )}
                     {modes.length > 1 && (
                       <PopupSelect label="Mode" value={modeValue} onValueChange={(value) => { setMode(value); setResumeId("") }}
                         items={modes.map((name) => ({ value: name, label: name === "default" ? "Default mode" : name }))} />
@@ -562,11 +710,34 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
                           ]} />
                       </div>
                     )}
+                    {view === "chat" && hasAgentCommands && (
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        aria-label="Commands"
+                        title="Insert a command (/)"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={openSlashHints}
+                      >
+                        <Slash aria-hidden />
+                      </Button>
+                    )}
                     <SegmentedControl value={[view]} onValueChange={chooseView} aria-label="Open as" className="ms-auto">
                       <SegmentedControlItem value="chat" disabled={Boolean(chatUnavailableHint)} title={chatUnavailableHint}>Chat</SegmentedControlItem>
                       <SegmentedControlItem value="terminal">Terminal</SegmentedControlItem>
                     </SegmentedControl>
                   </div>
+                  <ComposerHintsMenu
+                    id={hintsId}
+                    placement="below"
+                    activeIndex={activeHint}
+                    title={hintTitle}
+                    hints={composerHints}
+                    onPick={pickHint}
+                    query={slashQuery(beforeCaret)?.query ?? ""}
+                    agentName={harnessName(harnessId)}
+                  />
                 </div>
 
                 {/* One quiet line per thing worth knowing, each with its own action. */}
@@ -576,6 +747,9 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
                       <History aria-hidden className="size-3.5" />
                       {`Resume a past ${harnessName(harnessId)} conversation (${pastSessions.data!.length})`}
                     </button>
+                  )}
+                  {showModelAbsenceCue && (
+                    <p>{`Model options aren't saved for ${harnessName(harnessId)} on ${machineName} yet. You can choose a model in chat before sending.`}</p>
                   )}
                   {workspace === "new" && (
                     <p className="flex flex-wrap items-center gap-x-(--s3) gap-y-(--s1)">
