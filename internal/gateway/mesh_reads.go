@@ -53,17 +53,23 @@ func (g *Gateway) listSessions(ctx context.Context, node, directory string, rece
 		where += " AND node_id=?"
 		args = append(args, node)
 	}
-	query := "SELECT " + session.SessionColumns + " FROM sessions WHERE " + where + " AND (ended_at=0 OR transport='acp')"
+	query := "SELECT " + session.SessionColumns + " FROM sessions"
+	if recentOnly {
+		// Pick narrow index keys before loading session bodies, and keep all live
+		// sessions plus the 100 newest ended chats in the same read snapshot.
+		query += " WHERE id IN (SELECT id FROM sessions WHERE " + where + " AND ended_at=0 UNION ALL " +
+			"SELECT id FROM (SELECT id FROM sessions WHERE hidden=0 AND ended_at>0 AND transport='acp'"
+		if node != "" {
+			query += " AND node_id=?"
+			args = append(args, node)
+		}
+		query += " ORDER BY last_used DESC,id DESC LIMIT 100))"
+	} else {
+		query += " WHERE " + where + " AND (ended_at=0 OR transport='acp')"
+	}
 	if directory != "" {
 		query += " AND (directory=? OR worktree_of=? OR (worktree_of='' AND definition_root=?))"
 		args = append(args, directory, directory, directory)
-	}
-	if recentOnly {
-		query += " AND (ended_at=0 OR id IN (SELECT id FROM sessions WHERE " + where +
-			" AND ended_at>0 AND transport='acp' ORDER BY last_used DESC,id DESC LIMIT 100))"
-		if node != "" {
-			args = append(args, node)
-		}
 	}
 	entries, err := session.QuerySessions(ctx, g.store.Reader, query+" ORDER BY last_used DESC,id DESC", args...)
 	if err != nil {

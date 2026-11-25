@@ -13,6 +13,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func TestMeshReadsSurviveOwnerShutdownAndRefuseWrites(t *testing.T) {
@@ -215,6 +216,19 @@ func TestMeshRecentSessionListKeepsOlderBookmarks(t *testing.T) {
 		if row.ID == "session-old-000" {
 			t.Fatal("oldest stopped chat remained in the recent list")
 		}
+	}
+	// A mesh-wide cap must not push an older chat out of its own node's list.
+	if _, err := store.Exec(`UPDATE sessions SET node_id='other-node' WHERE id='session-old-000';
+		INSERT INTO sessions(id,node_id,transport,hidden,ended_at) VALUES ('session-hidden','other-node','acp',1,1);
+		INSERT INTO sessions(id,node_id,transport,parent_id) VALUES ('session-child-shell','other-node','shell','session-old-000')`); err != nil {
+		t.Fatal(err)
+	}
+	nodeRows, err := g.Sessions(t.Context(), "other-node", true)
+	if err != nil || len(nodeRows) != 1 || nodeRows[0].ID != "session-old-000" {
+		t.Fatalf("node list returned %d rows, err=%v", len(nodeRows), err)
+	}
+	if _, err := store.Exec("UPDATE sessions SET node_id=" + state.LocalNodeSQL + " WHERE id='session-old-000'"); err != nil {
+		t.Fatal(err)
 	}
 	old := request("/api/sessions/session-old-000")
 	var row session.SessionInfo
