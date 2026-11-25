@@ -55,6 +55,11 @@ Components live in `ui/src/components/kit/` (shell pieces in `ui/src/features/sh
 | `SourceList`, `SourceRow`, `GroupHeader` | plain + roving tabindex | Row is `<Link>` or button. Selected row rises to `--page` with `--e-ctl` when unfocused and `--accent-fill` when the list is focused. Trailing `⋯` visible on hover or selection. Finder-style marking (⌘/Ctrl-click, Shift-click, Esc clears). `NotifyOffer` sits on the Needs-you header |
 | `TabBar` | `<nav>` | Phone only (`≤ 760 px`), 5 tabs, height `calc(--tab-h + --safe-b)`. Sessions tab carries an amber Needs-you badge. Session details use the full height below the toolbar |
 | `SegmentedControl` | `ToggleGroup` | `--ctl-h` track (`--sunken`), `--ctl-h-sm` thumb (`--control-fill` + `--e-ctl`) |
+| Sliding thumb | CSS `::before` | Fills the selected segment or toolbar view link using its measured offset and width |
+| `FilterButton` | `Button` | Opens view options and uses `--accent-tint` and `--accent` while filters are active |
+| `FilterFacet` | named group | Groups filter options by dimension and offers Any to clear that dimension |
+| `FilterChip` | toggle button | Shows an option and its count, dims unpressed zero counts, and tints pressed options |
+| `FilterToken` | two buttons | Shows the active value, labels its dimension, and offers separate edit and remove actions |
 | `SearchField` | `Input` | `--sunken` fill, inset icon, `⌘F` focuses it |
 | `Field`, `FieldGrid` | `Input`, `Select` | 120 px right-aligned labels, 12 px row gap (16 px stacked on phone) |
 | `FormGroup` | `<section>` | Inset rows inside a 0.5 px outline with `--r-pop` radius. Optional heading and action above, footer below. |
@@ -74,14 +79,17 @@ Components live in `ui/src/components/kit/` (shell pieces in `ui/src/features/sh
 
 ## Motion
 
-Three durations (`--dur-1` 120 ms, `--dur-2` 200 ms, `--dur-3` 320 ms) and one easing curve (`--ease: cubic-bezier(.2, .8, .2, 1)`). At most 8 px of travel, no bounce, no loops except progress spinners. `prefers-reduced-motion: reduce` disables all animation and transitions.
+Three durations (`--dur-1` 120 ms, `--dur-2` 200 ms, `--dur-3` 320 ms) and one easing curve (`--ease: cubic-bezier(.2, .8, .2, 1)`). Popup entry starts at `--enter-scale` (0.98) and `--enter-shift` (4 px). Progress spinners can loop. `prefers-reduced-motion: reduce` disables all animation and transitions.
 
 | Surface | Motion |
 |---|---|
 | Activity viewer | Fades in 3 px (`--dur-2`); text folds into history icon (`--dur-3`) |
 | Sheets | Drop 8 px from toolbar (`--dur-2`); slide from bottom edge on phone |
 | Usage charts & heatmap | Bars grow from baseline once per range change (`--dur-3`); heatmap cells fade in |
-| Selection & hover | Color only (`--dur-1`) |
+| Popup entry | Fade, scale and shift (`--dur-1`). Anchored popups shift away from their anchor as they enter |
+| Segments and toolbar views | The thumb starts under the selected item. Position and width slide on later selections (`--dur-2`) |
+| Toolbar view changes | The new pane fades in and settles from `--enter-shift` (`--dur-2`) |
+| Rows | Selection is instant |
 
 ## State vocabulary
 

@@ -36,7 +36,7 @@ function PopoverContent({
         <PopoverPrimitive.Popup
           data-slot="popover-content"
           className={cn(
-            "z-50 flex w-72 origin-(--transform-origin) flex-col gap-2.5 rounded-lg bg-popover p-2.5 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-(--dur-1) ease-(--ease) data-[side=bottom]:slide-in-from-top-[var(--enter-shift)] data-[side=inline-end]:slide-in-from-left-[var(--enter-shift)] data-[side=inline-start]:slide-in-from-right-[var(--enter-shift)] data-[side=left]:slide-in-from-right-[var(--enter-shift)] data-[side=right]:slide-in-from-left-[var(--enter-shift)] data-[side=top]:slide-in-from-bottom-[var(--enter-shift)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[var(--enter-scale)] data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-[var(--enter-scale)]",
+            "z-50 flex w-72 origin-(--transform-origin) flex-col gap-2.5 rounded-lg bg-popover p-2.5 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-(--dur-1) ease-(--ease) data-[side=bottom]:[--tw-enter-translate-y:calc(-1*var(--enter-shift))] data-[side=inline-end]:[--tw-enter-translate-x:calc(-1*var(--enter-shift))] data-[side=inline-start]:[--tw-enter-translate-x:var(--enter-shift)] data-[side=left]:[--tw-enter-translate-x:var(--enter-shift)] data-[side=right]:[--tw-enter-translate-x:calc(-1*var(--enter-shift))] data-[side=top]:[--tw-enter-translate-y:var(--enter-shift)] data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[var(--enter-scale)] data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-[var(--enter-scale)]",
             className
           )}
           {...props}

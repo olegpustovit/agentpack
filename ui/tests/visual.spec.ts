@@ -121,9 +121,20 @@ test.describe("kit styling", () => {
   test("segmented controls show which segment is on", async ({ page }) => {
     await desktop(page)
     await page.goto("/sessions?group=machine")
-    const on = page.getByRole("button", { name: "Machine", exact: true })
+    await page.getByRole("button", { name: "View options", exact: true }).click()
+    const track = page.locator('[data-slot="segmented-control"]').filter({ has: page.getByRole("button", { name: "Machine", exact: true }) })
+    const on = track.getByRole("button", { name: "Machine", exact: true })
     await expect(on).toHaveAttribute("aria-pressed", "true")
-    expect(await style(on, "background-color")).not.toBe(await style(page.getByRole("button", { name: "Project", exact: true }), "background-color"))
+    const item = await on.evaluate((element) => {
+      const button = element as HTMLButtonElement
+      return { x: button.offsetLeft, width: button.offsetWidth }
+    })
+    expect(await style(track, "translate", "::before")).toBe(`${item.x}px`)
+    expect(await style(track, "width", "::before")).toBe(`${item.width}px`)
+    expect(await style(track, "background-color", "::before")).not.toBe(transparent)
+    expect(await style(on, "background-color")).toBe(transparent)
+    expect(await style(on, "color")).toBe(await style(page.locator("body"), "color"))
+    expect(await style(track.getByRole("button", { name: "Project", exact: true }), "color")).not.toBe(await style(on, "color"))
   })
 
   test("popup selects show the label, not the raw value", async ({ page }) => {
@@ -751,4 +762,33 @@ test("a stop in progress shows on its row until it finishes", async ({ page, isM
   await expect(wrapper).toContainText("Stopping…")
   finish()
   await expect(wrapper).not.toContainText("Stopping…")
+})
+
+test.describe("kit styling for filters", () => {
+  test("active triggers, pressed chips and removable tokens use the accent tint", async ({ page }) => {
+    await desktop(page)
+    await page.goto("/sessions?status=stopped")
+    const trigger = page.getByRole("button", { name: "View options, 1 filter on", exact: true })
+    const token = page.getByRole("button", { name: "Status: Stopped. Edit filters", exact: true })
+    const tint = await trigger.evaluate((element) => {
+      const sample = document.createElement("span")
+      sample.style.backgroundColor = "var(--accent-tint)"
+      element.append(sample)
+      const color = getComputedStyle(sample).backgroundColor
+      sample.remove()
+      return color
+    })
+    expect(tint).not.toBe(transparent)
+    await expect(trigger).toHaveCSS("background-color", tint)
+    await expect(token.locator("..")).toHaveCSS("background-color", tint)
+    await expect(page.getByRole("button", { name: "Remove status filter" })).toBeVisible()
+    await trigger.click()
+    const status = page.getByRole("group", { name: "Status", exact: true })
+    const pressed = status.getByRole("button", { pressed: true, name: /^Stopped/ })
+    const zero = status.getByRole("button", { pressed: false, name: "Needs you 0" })
+    await expect(pressed).toHaveCSS("background-color", tint)
+    expect(await style(pressed, "box-shadow")).not.toBe("none")
+    expect(await style(zero, "color")).toBe(await style(zero.getByText("0", { exact: true }), "color"))
+    await expect(status.getByRole("button", { name: "Any status" })).toBeVisible()
+  })
 })
