@@ -33,6 +33,8 @@ export type ThreadState = {
   last_turn?: { ms: number; tokens?: number; cost?: number }
   /** ts of the prompt that started the running turn. */
   turn_started?: number
+  /** The worker cannot save the chat right now; it keeps it in memory and retries. */
+  unsaved?: boolean
   queue?: QueuedPrompt[]
   goal?: GoalState
   subagents?: Record<string, Subagent>

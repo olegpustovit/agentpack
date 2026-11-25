@@ -36,6 +36,12 @@ describe("reduceLog", () => {
     ])
     expect(state.items.map((item) => item.kind)).toEqual(["user_message_chunk", "agent_message_chunk"])
   })
+  it("tracks failing saves as state, not as a transcript item", () => {
+    const failing: LogEntry = { seq: 2, ts: 2, kind: "persistence", payload: { failing: true } }
+    const legacy: LogEntry = { seq: 1, ts: 1, kind: "notice", payload: { title: "Chat history is not being saved" } }
+    expect(reduceLog([legacy, failing])).toMatchObject({ items: [], unsaved: true })
+    expect(reduceLog([failing, { seq: 3, ts: 3, kind: "persistence", payload: { failing: false } }]).unsaved).toBe(false)
+  })
   it("folds the full fixture into a rich thread with usage, notices, compaction, and permission", () => {
     const state = reduceLog(loadFixture())
     expect(state.items.length).toBeGreaterThanOrEqual(8)

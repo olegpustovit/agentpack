@@ -246,7 +246,12 @@ class ThreadReducer {
         resolveRequest(state, "elicitation", "elicitationId", entry.payload)
         break
       case "notice":
+        // Before persistence entries, a save failure was a permanent notice that never cleared.
+        if ((entry.payload as { title?: unknown })?.title === "Chat history is not being saved") break
         state.items.push({ kind: "divider", data: entry.payload })
+        break
+      case "persistence":
+        state.unsaved = (entry.payload as { failing?: unknown })?.failing === true
         break
       case "rich_block":
         state.items.push({ kind: "rich_block", data: entry.payload })

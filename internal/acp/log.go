@@ -355,7 +355,8 @@ var persistFlushDelay = 250 * time.Millisecond
 var persistRetry, persistRetryMax = time.Second, 30 * time.Second
 
 // persistLoop sleeps until an append, then flushes after persistFlushDelay; an idle log never wakes it.
-// A failed write is retried with backoff, and each run of failures leaves one notice in the chat.
+// A failed write is retried with backoff; a run of failures is bracketed by persistence entries
+// (failing true, then false) that viewers show as an ongoing banner.
 func (log *EventLog) persistLoop(persistence *eventLogPersistence) {
 	defer close(persistence.done)
 	delay := time.NewTimer(persistFlushDelay)
@@ -377,13 +378,17 @@ func (log *EventLog) persistLoop(persistence *eventLogPersistence) {
 		if err := log.flushChanges(persistence, false); err != nil {
 			if !failing {
 				failing = true
-				log.Append("notice", time.Now().UnixMilli(), json.RawMessage(`{"sessionUpdate":"notice","severity":"warning","title":"Chat history is not being saved","description":"agentpack keeps the conversation in memory and retries."}`))
+				log.Append("persistence", time.Now().UnixMilli(), json.RawMessage(`{"failing":true}`))
 			}
 			if !wait(retry) {
 				return
 			}
 			retry = min(retry*2, persistRetryMax)
 			continue
+		}
+		if failing {
+			// Stored with the failure it ends, so saved history shows nothing and viewers drop the banner.
+			log.Append("persistence", time.Now().UnixMilli(), json.RawMessage(`{"failing":false}`))
 		}
 		retry, failing = persistRetry, false
 		select {

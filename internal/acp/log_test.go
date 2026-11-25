@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -419,12 +420,12 @@ func TestEventLogClosesWhileTheStoreKeepsFailing(t *testing.T) {
 		t.Fatal(err)
 	}
 	log.Append("prompt", 1, chunk("go"))
-	// The writer fails, appends its notice and retries; Close must not wait on it forever.
+	// The writer fails, marks the log as failing and retries; Close must not wait on it forever.
 	deadline := time.After(2 * time.Second)
-	for !slices.ContainsFunc(log.Snapshot(), func(entry LogEntry) bool { return entry.Kind == "notice" }) {
+	for !slices.ContainsFunc(log.Snapshot(), func(entry LogEntry) bool { return entry.Kind == "persistence" }) {
 		select {
 		case <-deadline:
-			t.Fatal("no notice about the failing store")
+			t.Fatal("no persistence entry about the failing store")
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
@@ -439,6 +440,53 @@ func TestEventLogClosesWhileTheStoreKeepsFailing(t *testing.T) {
 	}
 	if !errors.Is(log.Close(), failure) {
 		t.Fatal("close hid the failure")
+	}
+}
+
+func TestEventLogMarksRecoveryAfterFailedWrites(t *testing.T) {
+	delay, retry := persistFlushDelay, persistRetry
+	persistFlushDelay, persistRetry = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { persistFlushDelay, persistRetry = delay, retry })
+	log := NewEventLog(0)
+	var fail atomic.Bool
+	var stored sync.Mutex
+	var kinds []string
+	if err := log.EnableSink(func(changes LogChanges) error {
+		if fail.Load() {
+			return errors.New("database is locked")
+		}
+		stored.Lock()
+		defer stored.Unlock()
+		for _, entry := range changes.Entries {
+			kinds = append(kinds, entry.Kind+string(entry.Payload))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fail.Store(true)
+	log.Append("prompt", 1, chunk("go"))
+	for deadline := time.Now().Add(2 * time.Second); !slices.ContainsFunc(log.Snapshot(), func(entry LogEntry) bool { return entry.Kind == "persistence" }); {
+		if time.Now().After(deadline) {
+			t.Fatal("no failing mark")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	fail.Store(false)
+	want := []string{`persistence{"failing":true}`, `persistence{"failing":false}`}
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(time.Millisecond) {
+		stored.Lock()
+		got := slices.DeleteFunc(slices.Clone(kinds), func(kind string) bool { return !strings.HasPrefix(kind, "persistence") })
+		stored.Unlock()
+		if slices.Equal(got, want) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stored persistence marks = %v, want %v", got, want)
+		}
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

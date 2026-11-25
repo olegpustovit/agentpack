@@ -437,6 +437,7 @@ export default function ConversationPane({
         </Banner>
       )}
       {archiveUnavailable && <Banner>{archiveUnavailable}</Banner>}
+      {live && parent.unsaved && <Banner tone="warn">Not saving chat history · retrying</Banner>}
       <div className="flex min-h-0 min-w-0 flex-1">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
