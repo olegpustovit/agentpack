@@ -201,7 +201,7 @@ func (s *Store) IngestSpool(ctx context.Context) (SpoolStats, error) {
 		return stats, err
 	}
 	lock := flock.New(filepath.Join(directory, ".lock"), flock.SetPermissions(0600))
-	if err := lock.Lock(); err != nil {
+	if ok, err := lock.TryLockContext(ctx, 50*time.Millisecond); !ok || err != nil {
 		return stats, err
 	}
 	stats, files, err = trimSpool(directory, MaxSpoolBytes)

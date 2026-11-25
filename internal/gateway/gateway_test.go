@@ -356,3 +356,78 @@ func TestGatewayLockPrecedesStateOpen(t *testing.T) {
 		t.Fatalf("locked-out gateway touched state: %v", err)
 	}
 }
+
+func TestGatewayServesSessionsAndStopsDuringWorkerWrite(t *testing.T) {
+	home := t.TempDir()
+	worker, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	if err := worker.BindNode(t.Context(), "test-worker-node"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worker.DB.Exec("INSERT INTO sessions(id,name,transport,node_id) VALUES ('committed','committed','acp'," + state.LocalNodeSQL + ")"); err != nil {
+		t.Fatal(err)
+	}
+	library, err := registry.NewWithStore(worker, filepath.Join(home, "registry"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer library.Close()
+	tx, err := worker.DB.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("INSERT INTO sessions(id,name,transport,node_id) VALUES ('pending','pending','acp'," + state.LocalNodeSQL + ")"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, stop := context.WithCancel(t.Context())
+	defer stop()
+	done := make(chan error, 1)
+	go func() {
+		done <- ServeGateway(ctx, GatewayOptions{Home: home, Address: "127.0.0.1:0", Library: LibraryOptions{Store: library}})
+	}()
+
+	start, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		body, err := NodeRequest(start, home, http.MethodGet, "/api/sessions")
+		if err == nil {
+			var rows []session.SessionInfo
+			if err := json.Unmarshal(body, &rows); err != nil || len(rows) != 1 || rows[0].ID != "committed" {
+				t.Fatalf("session response = %s, %v", body, err)
+			}
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("gateway exited during a worker write: %v", err)
+		case <-start.Done():
+			t.Fatalf("session read timed out during a worker write: %v", err)
+		case <-ticker.C:
+		}
+	}
+
+	stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("gateway did not exit while the worker held the database writer lock")
+	}
+	lock := flock.New(filepath.Join(home, "network", "gateway.lock"))
+	if ok, err := lock.TryLock(); !ok || err != nil {
+		t.Fatalf("gateway retained its process lock: %v", err)
+	}
+	defer lock.Unlock()
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("worker transaction could not commit after gateway exit: %v", err)
+	}
+}

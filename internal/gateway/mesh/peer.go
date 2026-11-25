@@ -290,7 +290,7 @@ func (c *Cache) Serve(ctx context.Context, store *state.Store, host Host) {
 					report(err)
 					if err == nil {
 						tracking = &peerConnections{connections: make(map[net.Conn]bool)}
-						server = &http.Server{Handler: c.PeerHandler(store, host, status.Self, address), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
+						server = &http.Server{Handler: c.PeerHandler(store, host, status.Self, address), BaseContext: func(net.Listener) context.Context { return ctx }, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
 						bound = address
 						policy = signature
 						serving, peer := server, peerListener{listener, tracking}

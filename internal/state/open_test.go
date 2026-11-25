@@ -301,3 +301,40 @@ func TestReopeningACurrentStoreTakesNoWriteLock(t *testing.T) {
 		t.Fatalf("reopen waited %s for another writer", elapsed)
 	}
 }
+
+func TestOpenCurrentDatabaseDuringWorkerWrite(t *testing.T) {
+	home := t.TempDir()
+	worker, err := Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	if _, err := worker.DB.Exec("INSERT INTO sessions(id,name) VALUES ('committed','committed')"); err != nil {
+		t.Fatal(err)
+	}
+	version, err := worker.DBVersion(t.Context())
+	if err != nil || version <= 0 {
+		t.Fatalf("committed version = %d, %v", version, err)
+	}
+	if err := worker.Replicator().NoteServed(version); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := worker.DB.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("INSERT INTO sessions(id,name) VALUES ('pending','pending')"); err != nil {
+		t.Fatal(err)
+	}
+
+	gateway, err := Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gateway.Close()
+	var count int
+	if err := gateway.Reader.QueryRow("SELECT count(*) FROM sessions").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("sessions in committed snapshot = %d, %v", count, err)
+	}
+}
