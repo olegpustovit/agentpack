@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -97,44 +96,20 @@ func usageToken() (string, error) {
 	if os.Getenv("AGENT_CLI_CREDENTIAL_STORE") == "memory" {
 		return "", nil
 	}
-	// Another program reading Cursor's keychain item makes macOS ask for the login password, again
-	// after every agentpack update, so a keychain login has no limits here.
-	if runtime.GOOS == "darwin" && os.Getenv("AGENT_CLI_CREDENTIAL_STORE") != "file" {
+	path := CredentialFile()
+	if path == "" {
 		return "", nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("locate Cursor login: %w", err)
-	}
-	var path string
-	switch runtime.GOOS {
-	case "darwin":
-		path = filepath.Join(home, ".cursor", "auth.json")
-	case "windows":
-		root := os.Getenv("APPDATA")
-		if root == "" {
-			root = filepath.Join(home, "AppData", "Roaming")
-		}
-		path = filepath.Join(root, "Cursor", "auth.json")
-	default:
-		root := os.Getenv("XDG_CONFIG_HOME")
-		if root == "" {
-			root = filepath.Join(home, ".config")
-		}
-		path = filepath.Join(root, "cursor", "auth.json")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", errors.New("could not read Cursor CLI credentials")
 	}
 	if err == nil {
-		var auth struct {
-			AccessToken string `json:"accessToken"`
-		}
+		var auth fileLogin
 		if json.Unmarshal(data, &auth) != nil {
 			return "", errors.New("invalid Cursor CLI credentials")
 		}
-		if auth.AccessToken != "" {
+		if auth.usable() {
 			return auth.AccessToken, nil
 		}
 	}

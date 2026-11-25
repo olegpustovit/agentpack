@@ -21,6 +21,10 @@ On Linux, agentpack also links both Cursor's uppercase Electron profile (`$XDG_C
 
 agentpack does not install pack content into your real `~/.cursor`. It may create the durable Cursor profile directories and staged symlinks needed for first-time login/session files to persist; Cursor manages the actual auth, workspace trust, and MCP approval contents.
 
+## Shared sign-in
+
+Sign in once through Agentpack on any enrolled machine. Agentpack shares Cursor’s native credential file with the other gateways. On macOS, Agentpack sign-in uses Cursor’s file store so the login can travel across machines. An existing keychain-only login needs one sign-in through Agentpack before it can be shared. Expired access tokens and incomplete credential files are skipped.
+
 ## Workspace and the agents symlink
 
 `--workspace` defaults to the **current working directory** where you invoked agentpack — not the pack root. In a monorepo where `agentpack.toml` lives in a parent directory, that distinction matters; pass `--workspace <path>` to override.

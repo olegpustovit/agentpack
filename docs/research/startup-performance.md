@@ -1,5 +1,17 @@
 # Home-workspace startup performance
 
+## Shared Cursor sign-in and chat setup (2026-11-25)
+
+On Linux ARM64 (`oracle-vm`), five interleaved runs with the 32 MiB history
+fixture measured the setup medians below. Use the same commands and iteration
+counts as in Chat permission defaults. The baseline build includes that change.
+
+| Benchmark | Before | After | Budget |
+| --- | ---: | ---: | ---: |
+| `BenchmarkMaterializationHome` | 1.017 ms | 0.932 ms | <1 ms |
+| `BenchmarkCodexSetup/cold` | 18.565 ms | 19.453 ms | <20 ms |
+| `BenchmarkCodexSetup/warm` | 0.400 ms | 0.396 ms | <1 ms |
+
 ## Chat permission defaults (2026-11-25)
 
 ACP workers read the shared permission defaults from the open state store

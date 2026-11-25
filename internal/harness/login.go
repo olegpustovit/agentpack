@@ -109,8 +109,10 @@ type LoginSpec struct {
 	Login   func(method string) (LoginFlow, error)
 	Logout  func(context.Context) error // nil when the agent has no way to sign out without a terminal
 	// Credential is the file holding the agent's sign-in, shared with every node; nil when its
-	// sign-in is not a file another machine can use (Cursor's keychain, OMP's database).
+	// sign-in is not a file another machine can use (for example, OMP's database).
 	Credential func() string
+	// ValidCredential excludes incomplete or expired native credentials from sharing.
+	ValidCredential func([]byte) bool
 	// Refresh renews a rotating sign-in ahead of the agent, returning nil when it is not due; only
 	// the machine that published the shared sign-in calls it.
 	Refresh func(context.Context, []byte) ([]byte, error)

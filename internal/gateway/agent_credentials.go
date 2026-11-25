@@ -102,6 +102,11 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 	if err != nil {
 		return false, err
 	}
+	localUsable, sharedUsable := local != nil, shared.Data != nil
+	if valid := agent.Login.ValidCredential; valid != nil {
+		localUsable = localUsable && valid(local)
+		sharedUsable = sharedUsable && valid(shared.Data)
+	}
 	localDigest, sharedDigest := sha256.Sum256(local), sha256.Sum256(shared.Data)
 	// The row moved since this machine last touched it: a higher rev, or a concurrent publish of the same rev that won.
 	localChanged, sharedNewer := !bytes.Equal(localDigest[:], record.Hash), shared.Rev != record.Rev || !bytes.Equal(sharedDigest[:], record.Hash)
@@ -109,14 +114,14 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 	if !known {
 		// First sight of this key here: a shared sign-in wins (file times from different clocks cannot
 		// order the copies), and the local file is published only when nothing is shared.
-		localChanged, sharedNewer = shared.Data == nil && !signedOut, shared.Data != nil
+		localChanged, sharedNewer = !sharedUsable && !signedOut, sharedUsable
 	}
 	localChanged = localChanged || signedIn
 	same := bytes.Equal(local, shared.Data)
 	switch {
-	case local != nil && localChanged && !same && (!signedOut || signedIn):
+	case localUsable && localChanged && !same && (!signedOut || signedIn):
 		return false, g.publishAgentCredential(ctx, key, sharedAgentCredential{Data: local, Rev: shared.Rev + 1, Modified: time.Now().UnixMilli(), Node: node})
-	case shared.Data != nil && (local == nil || sharedNewer && !localChanged) && !same:
+	case sharedUsable && (!localUsable || sharedNewer && !localChanged) && !same:
 		if !known && local != nil {
 			if err := os.WriteFile(path+".bak", local, 0o600); err != nil {
 				return false, err
@@ -126,14 +131,14 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 			return false, err
 		}
 		return true, g.recordAgentCredential(ctx, key, shared)
-	case shared.Node == "" && local != nil && same:
+	case shared.Node == "" && localUsable && same:
 		// A row published before rows named their publisher: a holder adopts it, hours before
 		// any renewal is due, so the replicated choice settles on one machine first.
 		shared.Node = node
 		return false, g.publishAgentCredential(ctx, key, shared)
-	case local != nil && same && (!known || localChanged || sharedNewer):
+	case localUsable && same && (!known || localChanged || sharedNewer):
 		return false, g.recordAgentCredential(ctx, key, shared)
-	case agent.Login.Refresh != nil && shared.Node == node && local != nil && same:
+	case agent.Login.Refresh != nil && shared.Node == node && localUsable && same:
 		renewed, err := agent.Login.Refresh(ctx, local)
 		if renewed == nil || err != nil {
 			return false, err

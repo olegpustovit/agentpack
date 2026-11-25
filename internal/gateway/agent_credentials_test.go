@@ -193,3 +193,37 @@ func TestAgentCredentialsShareTheNewestSignIn(t *testing.T) {
 		t.Fatalf("the agent's newer token was not shared: %+v", got)
 	}
 }
+
+func TestCursorSharingSkipsAnExpiredLoginAndInstallsAReplacement(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	ctx := t.Context()
+	agent, err := registry.ByTarget(harness.Cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.Login.Credential == nil || agent.Login.ValidCredential == nil {
+		t.Fatal("Cursor credential sharing is not registered")
+	}
+	path := filepath.Join(t.TempDir(), "auth.json")
+	expired := []byte(`{"accessToken":"header.eyJleHAiOjF9.signature","refreshToken":"fixture"}`)
+	if err := os.WriteFile(path, expired, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if installed, err := g.syncAgentCredential(ctx, agent, path, "local", false); installed || err != nil {
+		t.Fatalf("expired local login: installed=%v err=%v", installed, err)
+	}
+	const key = "cursor/auth.json"
+	if shared, err := g.sharedAgentCredential(ctx, key); err != nil || shared.Data != nil {
+		t.Fatalf("expired login was shared: rev=%d err=%v", shared.Rev, err)
+	}
+	valid := []byte(`{"accessToken":"fixture","refreshToken":"fixture"}`)
+	if err := g.publishAgentCredential(ctx, key, sharedAgentCredential{Data: valid, Rev: 1, Node: "another-machine"}); err != nil {
+		t.Fatal(err)
+	}
+	if installed, err := g.syncAgentCredential(ctx, agent, path, "local", false); !installed || err != nil {
+		t.Fatalf("usable shared login: installed=%v err=%v", installed, err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != string(valid) {
+		t.Fatalf("shared credential mismatch: %v", err)
+	}
+}

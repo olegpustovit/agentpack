@@ -51,7 +51,12 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 	command := exec.Command(binary, arguments...)
 	environment := append(os.Environ(), "HOME="+home, "CURSOR_CONFIG_DIR="+filepath.Join(home, ".cursor"))
 	if runtime.GOOS == "windows" {
-		environment = append(environment, "USERPROFILE="+home, "APPDATA="+filepath.Join(home, "AppData", "Roaming"), "LOCALAPPDATA="+filepath.Join(home, "AppData", "Local"))
+		appData := filepath.Join(home, "AppData", "Roaming")
+		if hasFileLogin() {
+			// Cursor rewrites auth.json atomically, so use the real profile even if staging copied it.
+			appData = filepath.Dir(filepath.Dir(CredentialFile()))
+		}
+		environment = append(environment, "USERPROFILE="+home, "APPDATA="+appData, "LOCALAPPDATA="+filepath.Join(home, "AppData", "Local"))
 	} else if runtime.GOOS == "linux" {
 		environment = append(environment, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"), "XDG_DATA_HOME="+filepath.Join(home, ".local", "share"))
 	}
@@ -68,6 +73,15 @@ func launch(ctx base.LaunchContext) (*exec.Cmd, func() error, error) {
 			if _, exists := os.LookupEnv(entry.key); !exists {
 				environment = append(environment, entry.key+"="+entry.value)
 			}
+		}
+	}
+	if runtime.GOOS == "darwin" {
+		fileLogin, err := useMacFileLogin(home)
+		if err != nil {
+			return nil, nil, err
+		}
+		if fileLogin {
+			environment = append(environment, fileCredentialStore)
 		}
 	}
 	command.Env = environment
