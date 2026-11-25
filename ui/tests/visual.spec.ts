@@ -620,8 +620,8 @@ test("a machine with no projects says so in New session", async ({ page, isMobil
   await page.route("**/api/projects**", (route) => route.fulfill({ json: [] }))
   await page.goto("/sessions?new=1")
   await expect(page.getByText("No projects yet")).toBeVisible()
-  await expect(page.getByRole("navigation", { name: "Projects" }).getByRole("button")).toHaveCount(0)
-  await expect(page.getByRole("button", { name: "Start session" })).toBeDisabled()
+  await expect(page.getByRole("navigation", { name: "Projects" }).getByRole("button").filter({ hasNotText: "Browse folders on" })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Start chat" })).toBeDisabled()
 })
 
 test("a grid column can be dragged wider", async ({ page, isMobile, browserName }) => {
@@ -728,8 +728,8 @@ test("a long project path stays inside the New session sheet", async ({ page, is
     return Math.max(start.getBoundingClientRect().right, project.getBoundingClientRect().right) - sheet.getBoundingClientRect().right
   })
   expect(overflow).toBeLessThanOrEqual(0)
-  // A CLI launch records an empty mode; the control still names the real one.
-  await expect(page.getByRole("group", { name: "Mode" }).getByRole("button", { name: "default" })).toHaveAttribute("aria-pressed", "true")
+  // With only the default mode, there is no choice to show.
+  await expect(page.getByRole("combobox", { name: "Mode" })).toHaveCount(0)
 })
 
 test("a stop in progress shows on its row until it finishes", async ({ page, isMobile }) => {

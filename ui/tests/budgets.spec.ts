@@ -153,7 +153,7 @@ test("New Session merges each machine's 4 folders into 4 projects", async ({ pag
   await page.goto("/sessions?new=1")
   const machine = page.getByRole("combobox", { name: "Machine", exact: true })
   // Same-named folders merge across machines; each project offers all three machines.
-  await expect(page.getByRole("navigation", { name: "Projects" }).getByRole("button")).toHaveCount(4)
+  await expect(page.getByRole("navigation", { name: "Projects" }).getByRole("button").filter({ hasNotText: "Browse folders on" })).toHaveCount(4)
   await machine.click()
   await expect(page.getByRole("option")).toHaveCount(3)
   for (const name of ["Gateway machine", "Build server", "oracle-vm"]) await expect(page.getByRole("option", { name, exact: true })).toBeVisible()

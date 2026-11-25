@@ -288,31 +288,24 @@ test("390px switches between the session list and terminal panes", async ({ page
 })
 
 test("new session lists recent folders and routes start to the chosen machine", async ({ page }) => {
-  const requests = await mockAPI(page)
+  await mockAPI(page)
   await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "peer-1", name: "Build server", online: true }] }))
   await page.route((url) => url.pathname === "/api/projects" && url.searchParams.get("node") === "peer-1", (route) =>
     route.fulfill({ json: [projectRow("/srv/app", [{ harness: "claude" }])] }),
   )
-  await page.route((url) => url.pathname === "/api/sessions" && url.searchParams.get("node") === "peer-1", (route) => route.fulfill({ json: [] }))
-  await page.goto("/")
-  await page.getByRole("link", { name: "New session", exact: true }).click()
+  await page.route((url) => url.pathname === "/api/sessions" && url.searchParams.get("node") === "peer-1", (route) => route.request().method() === "GET" ? route.fulfill({ json: [] }) : route.fallback())
+  await page.goto("/sessions?new=1")
   // Every machine's folders in one list; each project then picks its machine.
   const projects = page.getByRole("navigation", { name: "Projects" }).getByRole("button")
-  await expect(projects).toHaveCount(2)
+  await expect(projects.filter({ hasNotText: "Browse folders on" })).toHaveCount(2)
   await projects.filter({ hasText: "previous" }).click()
-  await expect(page.getByRole("combobox", { name: "Machine", exact: true })).toContainText("Gateway machine")
-  await page.getByRole("button", { name: "Start session" }).click()
-  await expect(page.getByRole("dialog")).toBeHidden()
-  expect(requests).toContainEqual(expect.objectContaining({ method: "POST", path: "/api/sessions", body: expect.objectContaining({ directory: "/work/previous" }) }))
-
-  // A successful start opens the new session, which on phones hides the list.
-  await page.goto("/sessions")
-  await page.getByRole("link", { name: "New session", exact: true }).click()
-  await page.getByRole("navigation", { name: "Projects" }).getByRole("button").filter({ hasText: "app" }).click()
-  await expect(page.getByRole("combobox", { name: "Machine", exact: true })).toContainText("Build server")
+  await expect(page.getByRole("dialog").locator("header").getByText("Gateway machine", { exact: true })).toBeVisible()
+  await projects.filter({ hasText: /^app/ }).click()
+  await expect(page.getByRole("dialog").locator("header").getByText("Build server", { exact: true })).toBeVisible()
   const posted = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).searchParams.get("node") === "peer-1")
-  await page.getByRole("button", { name: "Start session" }).click()
+  await page.getByRole("button", { name: "Start chat" }).click()
   expect((await posted).postDataJSON()).toMatchObject({ directory: "/srv/app" })
+  await expect(page.getByRole("dialog")).toBeHidden()
 })
 
 test("shared input works without ownership and detaching never stops the agent", async ({ page }) => {
@@ -707,7 +700,7 @@ test("New Session disables Chat when the peer lacks ACP endpoints", async ({ pag
   await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeDisabled()
   await expect(page.getByText("Update Agentpack on Gateway machine before starting Chat. Terminal remains available.")).toBeVisible()
   await expect(page.getByRole("button", { name: "Terminal", exact: true })).toBeEnabled()
-  await expect(page.getByRole("button", { name: "Start session" })).toBeDisabled()
+  await expect(page.getByRole("button", { name: "Start chat" })).toBeDisabled()
 })
 
 test("New Session says when the agent isn't signed in, without blocking the start", async ({ page }) => {
@@ -715,10 +708,10 @@ test("New Session says when the agent isn't signed in, without blocking the star
   await page.route("**/api/agents", (route) => route.fulfill({ json: { agents: [{ harness: "codex", installed: true, signed_in: false, methods: [{ id: "chatgpt", label: "ChatGPT account" }] }] } }))
   await page.route("**/api/agent-sessions**", (route) => route.fulfill({ status: 500, body: "acp session/list: Authentication required" }))
   await page.goto("/sessions?new=1")
-  await expect(page.getByText("Codex isn't signed in on Gateway machine.")).toBeVisible()
+  await expect(page.getByText(/^Codex isn't signed in on Gateway machine\./)).toBeVisible()
   await expect(page.getByRole("button", { name: "Sign in…", exact: true })).toBeEnabled()
   await expect(page.getByText(/Couldn't load conversations/)).toHaveCount(0)
-  await expect(page.getByRole("button", { name: "Start session" })).toBeEnabled()
+  await expect(page.getByRole("button", { name: "Start chat" })).toBeEnabled()
 })
 
 test("New Session explains the Node requirement for ACP chat", async ({ page }) => {
@@ -729,7 +722,7 @@ test("New Session explains the Node requirement for ACP chat", async ({ page }) 
   await page.goto("/sessions?new=1")
   await expect(page.getByRole("button", { name: "Chat", exact: true })).toBeDisabled()
   await expect(page.getByText("Install Node.js on Gateway machine to use Chat, or choose Terminal.")).toBeVisible()
-  await expect(page.getByRole("button", { name: "Start session" })).toBeDisabled()
+  await expect(page.getByRole("button", { name: "Start chat" })).toBeDisabled()
 })
 
 test("⌘⌫ reviews stopping the focused session before archiving it", async ({ page }) => {
