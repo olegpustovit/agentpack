@@ -104,7 +104,7 @@ export function SessionsHome({ draft, setDraft, onReview, rememberPosition, take
         </form>
 
         {needsYou.length > 0 && (
-          <Section title="Needs you" count={needsYou.length} tone="warn" limit={5} aside={<span className="text-(--fg3)">{`${isMac ? "⌘⇧J" : "Ctrl+Shift+J"} next`}</span>}>
+          <Section title="Needs you" count={needsYou.length} tone="warn" aside={<span className="text-(--fg3)">{`${isMac ? "⌘⇧J" : "Ctrl+Shift+J"} next`}</span>}>
             {needsYou.map((session) => <WaitingItem key={rowKey(session)} session={session} now={now} />)}
           </Section>
         )}
