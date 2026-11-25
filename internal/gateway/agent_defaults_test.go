@@ -10,6 +10,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/session"
+	"github.com/olegpustovit/agentpack/internal/state"
 )
 
 func TestAgentDefaultsRoutes(t *testing.T) {
@@ -17,18 +18,21 @@ func TestAgentDefaultsRoutes(t *testing.T) {
 	testBrowserSession(t, g.auth, testBrowserEmail, "owner")
 	testBrowserSession(t, g.auth, "member@example.com", "member")
 	handler := g.Handler()
+	original := state.AgentDefaults{AgentpackTools: true, ReplaceSubagents: true}
+	unattended := state.AgentDefaults{AgentpackTools: true, ReplaceSubagents: true, BypassPermissions: true, AutoApproveHelpers: true}
 	for _, tc := range []struct {
 		method, token, body string
 		status              int
-		want                agentDefaults
+		want                state.AgentDefaults
 	}{
-		{"GET", "member", "", 200, agentDefaults{true, true}},
-		{"PUT", "member", `{"agentpack_tools":false}`, 403, agentDefaults{}},
-		{"PUT", "owner", `{"unknown":false}`, 400, agentDefaults{}},
-		{"PUT", "owner", `{"replace_subagents":null}`, 400, agentDefaults{}},
-		{"PUT", "owner", `{"agentpack_tools":false}`, 200, agentDefaults{false, true}},
-		{"PUT", "owner", `{"replace_subagents":false}`, 200, agentDefaults{false, false}},
-		{"GET", "member", "", 200, agentDefaults{false, false}},
+		{"GET", "member", "", 200, original},
+		{"PUT", "member", `{"bypass_permissions":true}`, 403, state.AgentDefaults{}},
+		{"PUT", "owner", `{"unknown":false}`, 400, state.AgentDefaults{}},
+		{"PUT", "owner", `{"auto_approve_helpers":null}`, 400, state.AgentDefaults{}},
+		{"PUT", "owner", `{"bypass_permissions":true,"auto_approve_helpers":true}`, 200, unattended},
+		{"PUT", "owner", `{"agentpack_tools":false}`, 200, state.AgentDefaults{ReplaceSubagents: true, BypassPermissions: true, AutoApproveHelpers: true}},
+		{"PUT", "owner", `{"replace_subagents":false,"bypass_permissions":false}`, 200, state.AgentDefaults{AutoApproveHelpers: true}},
+		{"GET", "member", "", 200, state.AgentDefaults{AutoApproveHelpers: true}},
 	} {
 		r := httptest.NewRequest(tc.method, origin.String()+"/api/agents/defaults", strings.NewReader(tc.body))
 		r.Header.Set("Origin", origin.String())
@@ -39,7 +43,7 @@ func TestAgentDefaultsRoutes(t *testing.T) {
 			t.Fatalf("%s %s as %s: got %d %s, want %d", tc.method, tc.body, tc.token, w.Code, w.Body, tc.status)
 		}
 		if tc.status == http.StatusOK {
-			var got agentDefaults
+			var got state.AgentDefaults
 			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got != tc.want {
 				t.Fatalf("%s %s: got %s (%v), want %+v", tc.method, tc.body, w.Body, err, tc.want)
 			}

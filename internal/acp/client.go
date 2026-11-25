@@ -88,16 +88,15 @@ func (c *HarnessClient) DrainSessionUpdates(ctx context.Context) error {
 }
 
 func (c *HarnessClient) RequestPermission(ctx context.Context, p sdkacp.RequestPermissionRequest) (sdkacp.RequestPermissionResponse, error) {
-	if c.AutoApprove != nil && c.AutoApprove() {
-		if choice, ok := allowOnce(p.Options); ok {
-			return sdkacp.RequestPermissionResponse{
-				Outcome: sdkacp.RequestPermissionOutcome{Selected: &sdkacp.RequestPermissionOutcomeSelected{OptionId: choice}},
-			}, nil
-		}
-	}
 	id, err := c.permissionRequestID(p.ToolCall.ToolCallId)
 	if err != nil {
 		return sdkacp.RequestPermissionResponse{}, err
+	}
+	allow, canAllow := allowOnce(p.Options)
+	if canAllow && c.AutoApprove != nil && c.AutoApprove() {
+		return sdkacp.RequestPermissionResponse{
+			Outcome: sdkacp.RequestPermissionOutcome{Selected: &sdkacp.RequestPermissionOutcomeSelected{OptionId: allow}},
+		}, nil
 	}
 	if err := c.Broker.Begin(id); err != nil {
 		return sdkacp.RequestPermissionResponse{}, err
@@ -105,6 +104,13 @@ func (c *HarnessClient) RequestPermission(ctx context.Context, p sdkacp.RequestP
 	defer c.Broker.End(id)
 	subagent := subagentID(c.Log.subagentSession(string(p.SessionId)), p.ToolCall.Meta)
 	c.Log.Append("permission_request", time.Now().UnixMilli(), stampSubagent(permissionRequestPayload(id, p), subagent))
+	if canAllow {
+		c.Broker.markPermissionReady(id, string(allow))
+		// The mode may have changed while the request was being published.
+		if c.AutoApprove != nil && c.AutoApprove() {
+			_ = c.Broker.ResolvePermission(ctx, c.Log, id, string(allow))
+		}
+	}
 	opt, err := c.waitAnswer(ctx, "permission", "requestId", id)
 	if err != nil {
 		return sdkacp.RequestPermissionResponse{}, err

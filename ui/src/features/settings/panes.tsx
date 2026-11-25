@@ -234,11 +234,21 @@ export function AgentsPane() {
   }
   if (settings.error) return <LoadError what="gateway settings" error={settings.error} retry={() => void settings.refetch()} />
   if (!defaults.data || !settings.data) return <RowSkeleton lines={2} />
-  const { agentpack_tools: tools, replace_subagents: replace } = defaults.data
+  const { agentpack_tools: tools, replace_subagents: replace, bypass_permissions: bypass, auto_approve_helpers: helpers } = defaults.data
   const readOnly = settings.data.can_manage === false
   const disabled = save.isPending || readOnly
   return (
     <Pane title="Agents">
+      <FormGroup title="Permissions" footer={
+        bypass === undefined ? "Update this gateway to change permission defaults." : "Applies when chats start or resume. Use the Permissions menu to change a running chat."
+      }>
+        <FormRow label="Bypass permissions by default" htmlFor="bypass-permissions" description="Let chats run tools, including commands and file edits, without asking.">
+          <Switch id="bypass-permissions" checked={bypass ?? false} disabled={disabled || bypass === undefined} onCheckedChange={(on) => save.mutate({ bypass_permissions: on })} />
+        </FormRow>
+        <FormRow label="Auto-approve helper chats" htmlFor="auto-approve-helpers" description="Let helper chats run tools automatically even when the general bypass default is off.">
+          <Switch id="auto-approve-helpers" checked={helpers ?? false} disabled={disabled || helpers === undefined} onCheckedChange={(on) => save.mutate({ auto_approve_helpers: on })} />
+        </FormRow>
+      </FormGroup>
       <FormGroup title="New chats" footer={<>
         <p>Running chats keep what they started with. Turn agentpack tools on or off for one chat in its inspector.</p>
         {readOnly && <p>Only the gateway owner can change agent defaults.</p>}
@@ -249,7 +259,7 @@ export function AgentsPane() {
         <FormRow
           label="Replace built-in subagents"
           htmlFor="replace-subagents"
-          description={tools ? "Helpers run as agentpack chats you can watch, stop and approve, instead of hidden subagents." : "Needs agentpack tools: without them an agent keeps its own subagents."}
+          description={tools ? "Helpers run as agentpack chats you can watch and stop." : "Needs agentpack tools: without them an agent keeps its own subagents."}
         >
           <Switch id="replace-subagents" checked={tools && replace} disabled={disabled || !tools} onCheckedChange={(on) => save.mutate({ replace_subagents: on })} />
         </FormRow>

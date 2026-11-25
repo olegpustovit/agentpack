@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 // Broker forwards conversation control and coordinates per-request answers.
@@ -22,6 +23,7 @@ type Broker struct {
 type pendingAnswer struct {
 	done      chan struct{}
 	optionID  string
+	allow     string
 	answered  bool
 	answering bool
 }
@@ -148,6 +150,42 @@ func (b *Broker) AnswerPermission(ctx context.Context, requestID, optionID strin
 	pending.answered = true
 	close(pending.done)
 	return nil
+}
+
+// ResolvePermission records a successful answer in the same log as the request.
+func (b *Broker) ResolvePermission(ctx context.Context, log *EventLog, requestID, optionID string) error {
+	if err := b.AnswerPermission(ctx, requestID, optionID); err != nil {
+		return err
+	}
+	log.Append("permission_result", time.Now().UnixMilli(), mustJSON(map[string]string{"requestId": requestID, "optionId": optionID}))
+	return nil
+}
+
+func (b *Broker) markPermissionReady(requestID, allow string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if pending := b.pending[requestID]; pending != nil {
+		pending.allow = allow
+	}
+}
+
+// ApprovePendingPermissions answers tool requests already on screen when the user switches modes.
+func (b *Broker) ApprovePendingPermissions(ctx context.Context, log *EventLog) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	choices := make(map[string]string)
+	for id, pending := range b.pending {
+		if pending.allow != "" && !pending.answered && !pending.answering {
+			choices[id] = pending.allow
+		}
+	}
+	b.mu.Unlock()
+	for id, allow := range choices {
+		// An answer or cancellation can win the race after the snapshot.
+		_ = b.ResolvePermission(ctx, log, id, allow)
+	}
 }
 
 // Answer records the first option ID for an active request.

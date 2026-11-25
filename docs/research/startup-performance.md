@@ -1,5 +1,26 @@
 # Home-workspace startup performance
 
+## Chat permission defaults (2026-11-25)
+
+ACP workers read the shared permission defaults from the open state store
+before delivering the first turn. The staging and fingerprint paths are unchanged.
+Medians from five interleaved runs on Linux ARM64 (`oracle-vm`), with the
+32 MiB history fixture and both temporary roots on the same filesystem:
+
+| Benchmark | Before (`5551583e`) | After | Budget |
+| --- | ---: | ---: | ---: |
+| `BenchmarkMaterializationHome` | 0.989 ms | 0.980 ms | <1 ms |
+| `BenchmarkCodexSetup/cold` | 19.595 ms | 19.000 ms | <20 ms |
+| `BenchmarkCodexSetup/warm` | 0.470 ms | 0.451 ms | <1 ms |
+
+An initial ten-iteration sample measured materialization at 1.049 ms after
+the change. The longer runs below brought both medians under budget.
+
+```sh
+GOMAXPROCS=2 "$bench_binary" -test.run '^$' -test.bench '^BenchmarkMaterializationHome$' -test.benchtime=50x
+GOMAXPROCS=2 "$bench_binary" -test.run '^$' -test.bench '^BenchmarkCodexSetup$/^(cold|warm)$' -test.benchtime=20x
+```
+
 ## Agent defaults launch review (2026-11-25)
 
 A new ACP chat reads its defaults once at creation. The worker uses the

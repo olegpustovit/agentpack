@@ -32,7 +32,7 @@ const sections: SettingsSection[] = [
     about: "Enrolled machines share accounts, chat history, limits and Library data, and every member is fully trusted. Enroll on both machines to start syncing." },
   { id: "connections", label: "Connections", scope: "mesh", icon: KeyRound, view: ConnectionsPane, keywords: "mcp oauth login sign in credentials token header variable linear notion",
     about: "Sign in to a remote MCP server once and every machine can use it. With more than one login, projects use the default unless you pick another in New session." },
-  { id: "agents", label: "Agents", scope: "mesh", icon: Sparkles, view: AgentsPane, keywords: "mcp agentpack tools subagents task helpers defaults new chats" },
+  { id: "agents", label: "Agents", scope: "mesh", icon: Sparkles, view: AgentsPane, keywords: "mcp agentpack tools subagents task helpers defaults new chats permissions bypass auto approve" },
   // Role tables need more than the form width.
   { id: "omp", label: "Oh My Pi", scope: "mesh", icon: Bot, view: OmpPane, keywords: "omp models roles thinking agent", wide: true,
     about: "One configuration for every Oh My Pi session. Changes apply to new chats. A setting you never change keeps each machine’s own value." },

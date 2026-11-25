@@ -87,7 +87,7 @@ func SaveWantedConfig(ctx context.Context, db *sql.DB, id string, choice ConfigS
 	return err
 }
 
-func savedConfig(ctx context.Context, store *state.Store, info session.SessionInfo) (map[string]json.RawMessage, error) {
+func savedConfig(ctx context.Context, store *state.Store, info session.SessionInfo, excludeInheritedKey string) (map[string]json.RawMessage, error) {
 	var body string
 	if err := store.Reader.QueryRowContext(ctx, "SELECT wanted_config FROM sessions WHERE id=?", info.ID).Scan(&body); err != nil {
 		return nil, err
@@ -103,9 +103,13 @@ func savedConfig(ctx context.Context, store *state.Store, info session.SessionIn
 		if err != nil {
 			return nil, err
 		}
-		// Any choices made during startup win over the remembered defaults.
-		if err := store.DB.QueryRowContext(ctx, "UPDATE sessions SET wanted_config=json_patch(?,wanted_config) WHERE id=? RETURNING wanted_config",
-			body, info.ID).Scan(&body); err != nil {
+		// Keep this chat's own choices, including choices made while it starts.
+		exclude := "{}"
+		if excludeInheritedKey != "" {
+			exclude = string(MustRawJSON(map[string]any{excludeInheritedKey: nil}))
+		}
+		if err := store.DB.QueryRowContext(ctx, "UPDATE sessions SET wanted_config=json_patch(json_patch(?,?),wanted_config) WHERE id=? RETURNING wanted_config",
+			body, exclude, info.ID).Scan(&body); err != nil {
 			return nil, err
 		}
 	}

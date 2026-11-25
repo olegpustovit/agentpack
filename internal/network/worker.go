@@ -445,14 +445,28 @@ func PublishWorkerEndpoint(directory string, record WorkerRecord) error {
 	return nil
 }
 
-// wireWorkerConversation connects a started conversation to its worker: its persistence adapter,
-// the goal saved on its row, and the permission mode last chosen for this agent on any chat and
-// machine of the network.
+// wireWorkerConversation applies saved options and mesh defaults before resuming turns.
 func wireWorkerConversation(ctx context.Context, store *state.Store, record WorkerRecord, directory string, goal *session.Goal, current *ConversationSession) {
 	current.wireStore(ctx, store, record.Session, directory)
 	current.restoreGoal(goal)
-	current.applyRememberedPermissions(ctx, store, record.Session.Harness)
-	wanted, err := savedConfig(ctx, store, record.Session)
+	defaults, err := state.ReadAgentDefaults(ctx, store.Reader)
+	if err != nil {
+		_, event := obs.Start(ctx, "worker", "load_agent_defaults")
+		event.Fail(err)
+		event.End()
+	}
+	var permissionKey, mode string
+	if err == nil && (defaults.BypassPermissions || defaults.AutoApproveHelpers && record.Session.ParentID != "") {
+		permissionKey, mode = current.defaultBypassMode()
+	} else {
+		current.applyRememberedPermissions(ctx, store, record.Session.Harness)
+	}
+	wanted, err := savedConfig(ctx, store, record.Session, permissionKey)
+	if mode != "" {
+		if selected, _ := current.wantedChoice(permissionKey, wanted[permissionKey]); !selected {
+			current.applyPermissionMode(ctx, mode)
+		}
+	}
 	if err != nil {
 		_, event := obs.Start(ctx, "worker", "load_saved_config")
 		event.Set("session_id", record.ID)

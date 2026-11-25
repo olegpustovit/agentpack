@@ -529,13 +529,28 @@ test("turning agentpack tools off writes only that default and disables replacem
   expect(calls).toEqual([{ request: "PUT /api/agents/defaults", body: { agentpack_tools: false } }])
 })
 
-test("non-owners can read agent defaults with both switches disabled", async ({ page }) => {
+test("an owner can turn on automatic tool approvals for helper chats", async ({ page }) => {
+  await mockGateway(page)
+  let defaults = { agentpack_tools: true, replace_subagents: true, bypass_permissions: false, auto_approve_helpers: false }
+  await page.route("**/api/agents/defaults", (route) => {
+    if (route.request().method() === "PUT") defaults = { ...defaults, ...route.request().postDataJSON() }
+    return answer(route, defaults)
+  })
+  await page.goto("/settings/agents")
+  const helpers = page.getByRole("switch", { name: "Auto-approve helper chats" })
+  await helpers.click()
+  await expect(helpers).toBeChecked()
+  await expect(page.getByRole("switch", { name: "Bypass permissions by default" })).not.toBeChecked()
+  expect(calls).toEqual([{ request: "PUT /api/agents/defaults", body: { auto_approve_helpers: true } }])
+})
+
+test("non-owners can read agent defaults with switches disabled", async ({ page }) => {
   await mockGateway(page)
   await page.route("**/api/settings", (route) => answer(route, { can_manage: false }))
-  await page.route("**/api/agents/defaults", (route) => answer(route, { agentpack_tools: true, replace_subagents: true }))
+  await page.route("**/api/agents/defaults", (route) => answer(route, { agentpack_tools: true, replace_subagents: true, bypass_permissions: true, auto_approve_helpers: true }))
   await page.goto("/settings/agents")
   await expect(page.getByText("Only the gateway owner can change agent defaults.")).toBeVisible()
-  for (const name of ["agentpack tools", "Replace built-in subagents"]) {
+  for (const name of ["agentpack tools", "Replace built-in subagents", "Bypass permissions by default", "Auto-approve helper chats"]) {
     await expect(page.getByRole("switch", { name })).toBeDisabled()
   }
 })

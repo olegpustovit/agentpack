@@ -39,7 +39,7 @@ func TestWantedModelAppliesBeforeQueuedPrompt(t *testing.T) {
 		{"id":"model","type":"select","currentValue":"sonnet","options":[{"value":"sonnet"},{"value":"opus"}]},
 		{"id":"effort","type":"select","currentValue":"low","options":[{"value":"low"}]}
 	]`))
-	wanted, err := savedConfig(ctx, store, info)
+	wanted, err := savedConfig(ctx, store, info, "")
 	if err != nil {
 		t.Fatal(err)
 	}

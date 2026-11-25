@@ -710,7 +710,7 @@ func (m *Server) chatTools(server *mcp.Server) {
 		}
 		return nil, sessionView(info), nil
 	})
-	addTool(server, "run_helper", "Delegate a task to a new helper chat. Use this instead of a built-in subagent tool whose work this chat cannot show, such as Antigravity's invoke_subagent: the person watches the helper live, can open and stop it, and approves its permissions. It runs in this chat's folder and mode. It returns at once; the helper's answer arrives in this chat as a reply that wakes it, so you may start several helpers and end your turn.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	addTool(server, "run_helper", "Delegate a task to a new helper chat. Use this instead of a built-in subagent tool whose work this chat cannot show, such as Antigravity's invoke_subagent. The person can watch, open and stop the helper. It uses the gateway's chat permission defaults and runs in this chat's folder and mode. It returns at once; the helper's answer arrives in this chat as a reply that wakes it, so you may start several helpers and end your turn.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		Prompt string   `json:"prompt" jsonschema:"The whole task; the helper sees nothing else of this chat."`
 		Agent  mcpAgent `json:"agent,omitempty" jsonschema:"Agent for the helper; defaults to this chat's agent."`
 	}) (*mcp.CallToolResult, mcpHelperResult, error) {

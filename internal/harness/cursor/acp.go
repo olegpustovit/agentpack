@@ -21,7 +21,7 @@ func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 	if err != nil {
 		return base.ACPLaunch{}, err
 	}
-	return base.ACPLaunch{Cmd: command, Finish: finish, AdaptAgent: adaptAgentLine}, nil
+	return base.ACPLaunch{Cmd: command, Finish: finish, AdaptAgent: adaptAgentLine, ClientPermissionBypass: true}, nil
 }
 
 func adaptAgentLine(line []byte) base.AgentAdaptResult {

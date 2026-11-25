@@ -139,7 +139,13 @@ func (cs *ConversationSession) applyLogEntry(entry acp.LogEntry) {
 	}
 	if parent {
 		switch entry.Kind {
-		case "agent_configuration", "config_option_update", "current_mode_update", "available_commands_update":
+		case "config_option_update", "current_mode_update":
+			if cs.clientMode != "" {
+				cs.later(cs.logConfiguration)
+				break
+			}
+			fallthrough
+		case "agent_configuration", "available_commands_update":
 			cs.later(cs.saveSnapshot)
 		}
 	}
@@ -247,6 +253,27 @@ func (cs *ConversationSession) applyRememberedPermissions(ctx context.Context, s
 	if err != nil || mode == "" {
 		return
 	}
+	cs.applyPermissionMode(ctx, mode)
+}
+
+// defaultBypassMode prefers an advertised native bypass mode to client-side approvals.
+func (cs *ConversationSession) defaultBypassMode() (key, mode string) {
+	key, current := cs.permissionMode()
+	if bypassModes[current] {
+		return key, current
+	}
+	for _, mode := range []string{"agent-full-access", "bypassPermissions"} {
+		if allowed, _ := cs.wantedChoice(key, MustRawJSON(mode)); allowed {
+			return key, mode
+		}
+	}
+	cs.mu.Lock()
+	cs.clientMode = "default"
+	cs.mu.Unlock()
+	return CmpOr(key, "mode"), "bypassPermissions"
+}
+
+func (cs *ConversationSession) applyPermissionMode(ctx context.Context, mode string) {
 	key, current := cs.permissionMode()
 	if key == "" || current == mode {
 		return
@@ -580,12 +607,7 @@ func (cs *ConversationSession) AnswerPermission(ctx context.Context, requestID, 
 	if exited {
 		return ErrSessionEnded
 	}
-	if err := broker.AnswerPermission(ctx, requestID, optionID); err != nil {
-		return err
-	}
-	payload, _ := json.Marshal(map[string]string{"requestId": requestID, "optionId": optionID})
-	log.Append("permission_result", time.Now().UnixMilli(), payload)
-	return nil
+	return broker.ResolvePermission(ctx, log, requestID, optionID)
 }
 
 func (cs *ConversationSession) AnswerElicitation(ctx context.Context, elicitationID, value string) error {
@@ -628,6 +650,12 @@ func (cs *ConversationSession) SetConfigOption(ctx context.Context, key string, 
 	if mode, ok := configValue.(string); ok {
 		if permissions, _ := cs.permissionMode(); key == permissions {
 			cs.rememberPermissions(mode)
+			if bypassModes[mode] {
+				cs.mu.Lock()
+				broker, log := cs.broker, cs.Log
+				cs.mu.Unlock()
+				broker.ApprovePendingPermissions(ctx, log)
+			}
 		}
 	}
 	return nil
