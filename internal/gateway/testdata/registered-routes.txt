@@ -49,6 +49,7 @@ GET /api/omp/models
 GET /api/omp/settings
 GET /api/packages
 GET /api/projects
+GET /api/projects/files
 GET /api/push/key
 GET /api/recent
 GET /api/sessions

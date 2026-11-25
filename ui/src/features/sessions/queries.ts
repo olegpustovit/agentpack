@@ -1,6 +1,6 @@
 import { queryOptions } from "@tanstack/react-query"
 import { array, boolean, object, optional, string } from "@/lib/validate"
-import { api, LOCAL } from "@/lib/api"
+import { api, LOCAL, routeMissing } from "@/lib/api"
 import type { ProjectRow, SessionInfo } from "@/lib/api-types"
 import { useMachines, useReplicatedQueries } from "@/features/machines/queries"
 import type { ListedSession } from "./group"
@@ -135,5 +135,29 @@ export const foldersQuery = (machine: string, dir: string) =>
       }
     },
     staleTime: 10 * 1000,
+    retry: false,
+  })
+
+export const projectFilesQuery = (machine: string, directory: string) =>
+  queryOptions({
+    queryKey: ["m", machine, "project-files", directory] as const,
+    queryFn: async ({ signal }): Promise<{ files: string[]; truncated: boolean }> => {
+      try {
+        const raw = object(
+          await api<unknown>("/api/projects/files", { machine, query: { directory }, signal }),
+          "project files",
+        )
+        return {
+          files: array(raw.files, "project files.files").map((item, index) => string(item, `project files.files[${index}]`)),
+          truncated: boolean(raw.truncated, "project files.truncated"),
+        }
+      } catch (error) {
+        if (routeMissing(error)) return { files: [], truncated: false }
+        throw error
+      }
+    },
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     retry: false,
   })

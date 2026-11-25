@@ -1,3 +1,5 @@
+type ConfigChoice = { value: string; label: string; disabledReason?: string; group?: string }
+
 export type ConfigOption =
   | {
       type: "select"
@@ -5,7 +7,7 @@ export type ConfigOption =
       name: string
       category?: string
       value: string
-      items: { value: string; label: string; disabledReason?: string }[]
+      items: ConfigChoice[]
     }
   | {
       type: "boolean"
@@ -21,7 +23,7 @@ export function configRole(option: ConfigOption): ConfigRole {
   const category = (option.category ?? option.id).toLowerCase().replace(/[-_ ]/g, "")
   if (category === "mode") return "permissions"
   if (category === "model") return "model"
-  if (category === "thoughtlevel" || category === "effort") return "effort"
+  if (category === "thoughtlevel" || category === "reasoningeffort" || category === "effort") return "effort"
   return "other"
 }
 
@@ -32,6 +34,23 @@ export function dangerousMode(item: { value: string; label: string }): boolean {
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? value as Record<string, unknown> : undefined
+}
+
+function choices(raw: unknown, group?: string): ConfigChoice[] {
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((entry) => {
+    const option = record(entry)
+    if (!option) return []
+    if (group === undefined && Array.isArray(option.options)) return choices(option.options, typeof option.name === "string" ? option.name : "")
+    const value = String(option.value ?? option.id ?? "")
+    if (!value) return []
+    const disabledReason = typeof option.disabledReason === "string" && option.disabledReason
+      ? option.disabledReason
+      : option.disabled === true || option.available === false
+        ? typeof option.description === "string" ? option.description : "Unavailable for this agent"
+        : undefined
+    return [{ value, label: String(option.name ?? option.label ?? value), ...(disabledReason && { disabledReason }), ...(group && { group }) }]
+  })
 }
 
 function parseOptions(raw: unknown): ConfigOption[] {
@@ -49,20 +68,7 @@ function parseOptions(raw: unknown): ConfigOption[] {
       continue
     }
     if (row.type !== "select") continue
-    const items: Extract<ConfigOption, { type: "select" }>["items"] = []
-    if (Array.isArray(row.options)) {
-      for (const choice of row.options) {
-        const option = record(choice)
-        if (!option) continue
-        const value = String(option.value ?? option.id ?? "")
-        const disabledReason = typeof option.disabledReason === "string" && option.disabledReason
-          ? option.disabledReason
-          : option.disabled === true || option.available === false
-            ? typeof option.description === "string" ? option.description : "Unavailable for this agent"
-            : undefined
-        if (value) items.push({ value, label: String(option.name ?? option.label ?? value), ...(disabledReason && { disabledReason }) })
-      }
-    }
+    const items = choices(row.options)
     if (items.length > 0) {
       const current = String(row.currentValue ?? "")
       out.push({ type: "select", id, name, ...(category ? { category } : {}), value: current || items[0]!.value, items })

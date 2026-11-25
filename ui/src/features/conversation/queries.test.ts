@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ApiError, LOCAL } from "@/lib/api"
-import { archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, mergeConversationPages, olderConversationPage } from "./queries"
+import { agentSnapshotQuery, archiveUnavailableMessage, conversationEventsQuery, conversationErrorMessage, conversationNeedsUpdate, joinHistory, mergeConversationPages, olderConversationPage } from "./queries"
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -50,5 +50,28 @@ describe("earlier history", () => {
   it("keeps older pages below the tail and drops overlap", () => {
     expect(joinHistory([entry(1), entry(2), entry(3)], [entry(3), entry(4)]).map((item) => item.seq)).toEqual([1, 2, 3, 4])
     expect(joinHistory([], [entry(4)]).map((item) => item.seq)).toEqual([4])
+  })
+})
+
+describe("agentSnapshotQuery", () => {
+  it("requests exact project snapshots by default and adds model_fallback=1 when opted in", async () => {
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response("null", { headers: { "Content-Type": "application/json" } })))
+    vi.stubGlobal("fetch", fetch)
+    const info = { directory: "/work/app", harness: "codex", mode: "review" }
+    const exact = agentSnapshotQuery("peer-1", info)
+    const fallback = agentSnapshotQuery("peer-1", info, { modelFallback: true })
+    expect(exact.queryKey).toEqual(["agent-snapshot", "peer-1", "codex", "/work/app", "review"])
+    expect(fallback.queryKey).toEqual(["agent-snapshot", "peer-1", "codex", "/work/app", "review", "model-fallback"])
+    await exact.queryFn!({} as never)
+    await fallback.queryFn!({} as never)
+    const exactURL = new URL(fetch.mock.calls[0]![0] as URL)
+    const fallbackURL = new URL(fetch.mock.calls[1]![0] as URL)
+    expect(exactURL.pathname).toBe("/api/agent-snapshot")
+    expect(exactURL.searchParams.get("model_fallback")).toBeNull()
+    expect(fallbackURL.searchParams.get("owner")).toBe("peer-1")
+    expect(fallbackURL.searchParams.get("harness")).toBe("codex")
+    expect(fallbackURL.searchParams.get("definition_root")).toBe("/work/app")
+    expect(fallbackURL.searchParams.get("mode")).toBe("review")
+    expect(fallbackURL.searchParams.get("model_fallback")).toBe("1")
   })
 })

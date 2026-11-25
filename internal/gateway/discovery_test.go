@@ -41,6 +41,7 @@ func TestPeerRoutesAreBounded(t *testing.T) {
 		{"DELETE", "/api/sessions/x/conversation/goal"},
 		{"GET", "/api/folders"},
 		{"GET", "/api/folders/found"},
+		{"GET", "/api/projects/files"},
 		{"GET", "/api/sessions/x/blobs/" + strings.Repeat("a", 64)},
 	}
 	for _, route := range routes {

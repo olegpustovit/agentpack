@@ -10,3 +10,14 @@ type LogEntry struct {
 	Kind    string          `json:"kind"`
 	Payload json.RawMessage `json:"payload"`
 }
+
+// SteeredPrompt reports whether the prompt joined an existing turn.
+func (entry LogEntry) SteeredPrompt() bool {
+	if entry.Kind != "prompt" {
+		return false
+	}
+	var payload struct {
+		Steered bool `json:"steered"`
+	}
+	return json.Unmarshal(entry.Payload, &payload) == nil && payload.Steered
+}

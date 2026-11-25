@@ -108,11 +108,13 @@ type mcpRestartInput struct {
 }
 type mcpStartInput struct {
 	mcpNodeInput
+	network.ChatStartOptions
 	Directory string   `json:"directory" jsonschema:"Exact absolute folder from list_recent_folders on the selected node."`
 	Agent     mcpAgent `json:"agent" jsonschema:"Agent to start."`
 	Mode      string   `json:"mode,omitempty" jsonschema:"Project mode; omit for default."`
 	Prompt    string   `json:"prompt,omitempty" jsonschema:"Optional first message, sent once the chat is ready."`
-	ParentID  string   `json:"parent_id,omitempty" jsonschema:"Optional session this one helps; an agent's own chat is always the parent of what it starts."`
+	ParentID  string   `json:"parent_id,omitempty" jsonschema:"Optional parent for a person's client. An agent's starts are its own helpers unless top_level is true."`
+	TopLevel  bool     `json:"top_level,omitempty" jsonschema:"Start a standalone chat without a parent. Use when the person asks for a new top-level chat."`
 	Terminal  bool     `json:"terminal,omitempty" jsonschema:"Start a terminal session instead of a chat; it takes no prompt."`
 }
 type mcpReadInput struct {
@@ -405,7 +407,21 @@ func (m *Server) tools(server *mcp.Server) {
 		}
 		return nil, out, err
 	})
-	addTool(server, "start_session", "Start a chat (or a terminal session) in a previously used folder. Returns as soon as the gateway answers, possibly in state starting; an optional first prompt is sent once the chat is ready.", mutating, m.startSession)
+	addTool(server, "list_chat_options", "Read the last known ACP model and reasoning options for an agent, machine and folder. Use the advertised choice IDs in start_session or run_helper.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+		mcpNodeInput
+		Directory string   `json:"directory" jsonschema:"Exact absolute folder from list_recent_folders on the selected node."`
+		Agent     mcpAgent `json:"agent" jsonschema:"Agent to inspect."`
+		Mode      string   `json:"mode,omitempty" jsonschema:"Project mode; omit for default."`
+	}) (*mcp.CallToolResult, struct {
+		Config json.RawMessage `json:"config,omitempty" jsonschema:"The last advertised ACP configuration, if available."`
+	}, error) {
+		query := url.Values{"owner": {in.Node}, "definition_root": {in.Directory}, "harness": {string(in.Agent)}, "mode": {in.Mode}, "model_fallback": {"1"}}
+		out, err := callAPI[struct {
+			Config json.RawMessage `json:"config,omitempty" jsonschema:"The last advertised ACP configuration, if available."`
+		}](ctx, m, "", "GET", "/api/agent-snapshot?"+query.Encode(), nil)
+		return nil, out, err
+	})
+	addTool(server, "start_session", "Start a chat (or a terminal session) in a previously used folder. Set top_level for a standalone chat. Use list_chat_options for model and effort IDs. Returns while the chat starts; the first prompt waits for the agent and any selected options.", mutating, m.startSession)
 	addTool(server, "stop_session", "Terminate an agent session. Native-stdio sessions stop only their directly owned process. Unsaved conversation state may be lost.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpSessionInput) (*mcp.CallToolResult, struct {
 		Stopped bool `json:"stopped"`
 	}, error) {

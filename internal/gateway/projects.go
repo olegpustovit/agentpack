@@ -25,6 +25,7 @@ func (g *Gateway) registerProjects(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/packages", g.servePackages)
 	mux.HandleFunc("PUT /api/projects/settings", g.saveProjectSettings)
 	mux.HandleFunc("GET /api/projects", g.serveProjects)
+	mux.HandleFunc("GET /api/projects/files", g.serveProjectFiles)
 	mux.HandleFunc("GET /api/folders", g.serveFolders)
 	mux.HandleFunc("POST /api/folders", serveCreateFolder)
 	mux.HandleFunc("GET /api/folders/found", g.serveFoundFolders)

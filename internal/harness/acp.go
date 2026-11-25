@@ -28,8 +28,18 @@ type ACPLaunch struct {
 	// Steers: the adapter serves _session/steering, which hands a prompt to the running turn
 	// without session/cancel, so a steer keeps the agent's background work alive.
 	Steers bool
+	// PromptSteers reports whether an initialized agent steers a running turn when sent a second
+	// concurrent session/prompt without session/cancel (Antigravity >= 1.5.0).
+	PromptSteers func(ACPInitializeInfo) bool
 	// Finish runs once the adapter has started or failed to start; nil when there is nothing to do.
 	Finish func() error
+}
+
+// ACPInitializeInfo holds agent identity and capability metadata from ACP initialize.
+type ACPInitializeInfo struct {
+	AgentName        string
+	AgentVersion     string
+	CapabilitiesMeta map[string]any
 }
 
 // Finished runs Finish when the harness set one.

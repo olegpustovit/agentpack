@@ -13,7 +13,7 @@ import { search } from "@/lib/search"
 // `prompt` is the new chat's first queued message.
 // `worktree` is "new", an existing worktree of directory, or "" for the folder itself (remembered as the
 // choice); a new worktree's branch is named from the prompt.
-export type StartInput = { machine: string; directory: string; harness: string; mode: string; view: SessionView; agentSessionId?: string; prompt?: string; sendOnResume?: boolean; worktree?: string; carry?: boolean; forkFrom?: string; switchFrom?: string }
+export type StartInput = { machine: string; directory: string; harness: string; mode: string; view: SessionView; agentSessionId?: string; prompt?: string; sendOnResume?: boolean; model?: string; effort?: string; worktree?: string; carry?: boolean; forkFrom?: string; switchFrom?: string }
 
 const chatClaims = new Map<string, Promise<SessionInfo>>()
 const sessionSearch = search({ q: "text", group: "text", tab: "text" })

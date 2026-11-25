@@ -36,6 +36,18 @@ describe("reduceLog", () => {
     ])
     expect(state.items.map((item) => item.kind)).toEqual(["user_message_chunk", "agent_message_chunk"])
   })
+  it("shows a delivered steer and keeps the original turn clock", () => {
+    const entries: LogEntry[] = [
+      { seq: 1, ts: 10, kind: "prompt", payload: { text: { text: "Go" } } },
+      { seq: 2, ts: 20, kind: "queued_prompt", payload: { queueId: "steer", steer: true, text: { text: "ETA?" } } },
+      { seq: 3, ts: 30, kind: "prompt", payload: { queueId: "steer", steered: true, text: { text: "ETA?" } } },
+    ]
+    const running = reduceLog(entries)
+    expect(running).toMatchObject({ working: true, turn_started: 10 })
+    expect(running.queue).toBeUndefined()
+    expect(running.items.map((item) => item.kind)).toEqual(["user_message_chunk", "user_message_chunk"])
+    expect(reduceLog([...entries, { seq: 4, ts: 40, kind: "turn_end", payload: { stopReason: "end_turn" } }]).working).toBe(false)
+  })
   it("tracks failing saves as state, not as a transcript item", () => {
     const failing: LogEntry = { seq: 2, ts: 2, kind: "persistence", payload: { failing: true } }
     const legacy: LogEntry = { seq: 1, ts: 1, kind: "notice", payload: { title: "Chat history is not being saved" } }

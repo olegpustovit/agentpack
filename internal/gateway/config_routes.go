@@ -42,10 +42,17 @@ func (g *Gateway) serveAgentSnapshot(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	harness := query.Get("harness")
 	var body string
 	err := g.store.Reader.QueryRowContext(ctx, `SELECT snapshot FROM agent_snapshots
 		WHERE node_id=? AND harness=? AND definition_root=? AND mode=? ORDER BY updated_at DESC,agent_version DESC LIMIT 1`,
-		owner, query.Get("harness"), query.Get("definition_root"), network.CmpOr(query.Get("mode"), "default")).Scan(&body)
+		owner, harness, query.Get("definition_root"), network.CmpOr(query.Get("mode"), "default")).Scan(&body)
+	if errors.Is(err, sql.ErrNoRows) && query.Get("model_fallback") == "1" {
+		// Commands can come from project-local skills, so only exact snapshots supply them.
+		err = g.store.Reader.QueryRowContext(ctx, `SELECT json_object('config',json_extract(snapshot,'$.config'))
+			FROM agent_snapshots WHERE node_id=? AND harness=? AND json_array_length(snapshot,'$.config.configOptions')>0
+			ORDER BY updated_at DESC,agent_version DESC LIMIT 1`, owner, harness).Scan(&body)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		network.WriteJSON(w, nil)
 		return

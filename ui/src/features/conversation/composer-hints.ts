@@ -30,28 +30,32 @@ export function slashQuery(before: string): { query: string; lineStart: boolean 
   return { query: match[2]!.toLowerCase(), lineStart: match[1] === "" || match[1] === "\n" }
 }
 
-export function filterSlashHints(before: string, commands: AgentCommand[] = []): ComposerHint[] {
+export function filterSlashHints(before: string, commands: AgentCommand[] = [], options?: { includeGateway?: boolean }): ComposerHint[] {
   const slash = slashQuery(before)
   if (!slash) return []
+  const includeGateway = options?.includeGateway ?? true
   const fromAgent = commands.flatMap((command) =>
     command.name && !gatewayOwned.has(command.name) && !(command.name === "compact")
       ? [{ value: `/${command.name}`, description: command.description ?? "", hint: command.input?.hint ?? undefined, source: "agent" as const }]
       : [],
   )
-  return [...(slash.lineStart ? gatewayCommands : []), ...fromAgent].filter((item) => item.value.slice(1).toLowerCase().includes(slash.query)).slice(0, 50)
+  return [...(includeGateway && slash.lineStart ? gatewayCommands : []), ...fromAgent].filter((item) => item.value.slice(1).toLowerCase().includes(slash.query)).slice(0, 50)
 }
 
 const gatewayNames = new Set(gatewayCommands.map((command) => command.value.slice(1)))
 
 // Splits the draft so the composer can mark every command it would run, by the same rules as the hints.
-export function commandSpans(draft: string, commands: AgentCommand[]): { text: string; command: boolean }[] {
-  const agent = new Set(commands.flatMap((command) => (command.name ? [command.name] : [])))
+export function commandSpans(draft: string, commands: AgentCommand[], options?: { includeGateway?: boolean }): { text: string; command: boolean }[] {
+  const includeGateway = options?.includeGateway ?? true
+  const agent = new Set(commands.flatMap((command) => (
+    command.name && (includeGateway || (!gatewayOwned.has(command.name) && command.name !== "compact")) ? [command.name] : []
+  )))
   const spans: { text: string; command: boolean }[] = []
   let last = 0
   for (const match of draft.matchAll(/(^|\s)\/(\S+)/g)) {
     const name = match[2]!
     const lineStart = match[1] === "" || match[1] === "\n"
-    if (!agent.has(name) && !(lineStart && gatewayNames.has(name))) continue
+    if (!agent.has(name) && !(includeGateway && lineStart && gatewayNames.has(name))) continue
     const start = match.index + match[1]!.length
     if (start > last) spans.push({ text: draft.slice(last, start), command: false })
     spans.push({ text: `/${name}`, command: true })
@@ -61,12 +65,18 @@ export function commandSpans(draft: string, commands: AgentCommand[]): { text: s
   return spans
 }
 
+// The @fragment ending at the caret (`before` is the draft up to it), only at start or after whitespace.
+export function atQuery(before: string): string | undefined {
+  const at = before.lastIndexOf("@")
+  if (at < 0 || (at > 0 && !/\s/.test(before[at - 1]!))) return undefined
+  const tail = before.slice(at + 1)
+  if (/\s/.test(tail)) return undefined
+  return tail.toLowerCase()
+}
+
 export function filterAtHints(draft: string, paths: string[]): ComposerHint[] {
-  const at = draft.lastIndexOf("@")
-  if (at < 0 || (at > 0 && !/\s/.test(draft[at - 1]!))) return []
-  const tail = draft.slice(at + 1)
-  if (tail.includes(" ") || tail.includes("\n")) return []
-  const query = tail.toLowerCase()
+  const query = atQuery(draft)
+  if (query === undefined) return []
   return paths
     .filter((path) => path.toLowerCase().includes(query))
     .slice(0, 8)

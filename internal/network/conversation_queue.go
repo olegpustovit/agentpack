@@ -76,6 +76,10 @@ type turnRunner struct {
 	unpromptedUsagePending bool
 	settleGen              uint64
 	settleTimer            *time.Timer
+
+	nativeGoalReports  bool // the connection advertises authoritative goal snapshots
+	nativeGoalAbsent   bool // it reported no goal before the saved row was restored
+	nativeGoalPauseRPC func(context.Context) error
 }
 
 var (
@@ -147,8 +151,8 @@ func (cs *ConversationSession) closedErr() error {
 }
 
 // Submit sends input now, or queues it behind the running turn and returns its queue ID.
-// A steer goes to the front of the queue and interrupts the running turn. When the prompt
-// starts immediately, first receives the result of its turn.
+// A steer joins the running turn when supported, or goes next. When the prompt starts
+// immediately, first receives the result of its turn.
 func (cs *ConversationSession) Submit(ctx context.Context, input acp.PromptInput, steer bool) (queueID string, first <-chan error, err error) {
 	cs.queueMu.Lock()
 	defer cs.queueMu.Unlock()
@@ -166,7 +170,9 @@ func (cs *ConversationSession) Submit(ctx context.Context, input acp.PromptInput
 		cs.mu.Unlock()
 		return "", nil, err
 	}
-	if !idempotent && !cs.starting && !cs.running && len(cs.Queue) == 0 {
+	// An agent message must not wait out a long turn if the agent cannot take it queued.
+	steer = steer || input.From != nil && cs.steer != nil && !cs.queuesPrompts
+	if !idempotent && !cs.starting && !cs.running && len(cs.Queue) == 0 && (!steer || cs.steer == nil) {
 		cs.running, cs.userCancelled = true, false
 		cs.mu.Unlock()
 		result := make(chan error, 1)
@@ -174,8 +180,6 @@ func (cs *ConversationSession) Submit(ctx context.Context, input acp.PromptInput
 		obs.Go("acp.turns", func() { cs.runTurns(ctx, &input, result) })
 		return "", result, nil
 	}
-	// An agent message must not wait out a long turn: steer it in when the agent cannot take it queued.
-	steer = steer || input.From != nil && cs.steer != nil && !cs.queuesPrompts
 	item := QueuedPrompt{ID: input.QueueID, Input: input, Steer: steer}
 	if item.ID == "" {
 		item.ID = rand.Text()
@@ -186,6 +190,8 @@ func (cs *ConversationSession) Submit(ctx context.Context, input acp.PromptInput
 	if entry := cs.Log.Append("queued_prompt", cs.clock().UnixMilli(), QueuedPromptPayload(item)); entry.Seq == 0 {
 		return "", nil, ErrSessionEnded
 	}
+	// A slow history write can outlast the agent's tool call. Try a native steer before flushing.
+	injected := cs.trySteer(ctx, item)
 	if idempotent {
 		// Viewers already have the queue entry. Keep it runnable while the log retries a failed save.
 		if err := cs.Log.Flush(); errors.Is(err, session.ErrSessionArchived) || errors.Is(err, session.ErrSessionNotFound) {
@@ -193,18 +199,21 @@ func (cs *ConversationSession) Submit(ctx context.Context, input acp.PromptInput
 		}
 	}
 	cs.SeenPrompts[item.ID] = struct{}{}
-	cs.mu.Lock()
-	cs.Queue = placeQueued(cs.Queue, item)
-	running := cs.running
-	cs.mu.Unlock()
-	cs.afterQueued(ctx, item.Steer, running)
+	if !injected {
+		cs.mu.Lock()
+		cs.Queue = placeQueued(cs.Queue, item)
+		cs.mu.Unlock()
+		cs.afterQueued(ctx, item.Steer)
+	}
 	return item.ID, nil, nil
 }
 
-// afterQueued starts the queue, hands an agent message to a running turn, or steers the current
-// turn. An agent that serves _session/steering takes a steer into its turn; any other is
-// interrupted with session/cancel first, which the UI warns about. The caller holds queueMu.
-func (cs *ConversationSession) afterQueued(ctx context.Context, steer, running bool) {
+// afterQueued starts the queue, delivers an agent message, or falls back to cancellation on an
+// adapter without native steering. The caller holds queueMu.
+func (cs *ConversationSession) afterQueued(ctx context.Context, steer bool) {
+	cs.mu.Lock()
+	running, broker, nativeSteering := cs.running, cs.broker, cs.steer != nil
+	cs.mu.Unlock()
 	if !running {
 		cs.maybeDrain()
 		return
@@ -213,19 +222,11 @@ func (cs *ConversationSession) afterQueued(ctx context.Context, steer, running b
 		cs.deliverDuringTurnLocked(false)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
-	cs.mu.Lock()
-	broker, steerTurn := cs.broker, cs.steer
-	var item QueuedPrompt
-	if len(cs.Queue) > 0 {
-		item = cs.Queue[0]
-	}
-	cs.mu.Unlock()
-	if steerTurn != nil && item.Steer {
-		cs.steerInto(ctx, steerTurn, item)
+	if nativeSteering {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	cs.Log.Append("notice", cs.clock().UnixMilli(), MustRawJSON(map[string]string{
 		"sessionUpdate": "notice", "severity": "info", "title": "Interrupted to steer",
 	}))
@@ -237,9 +238,23 @@ func (cs *ConversationSession) afterQueued(ctx context.Context, steer, running b
 	}
 }
 
-// steerInto hands a steered prompt to the running turn. While queueMu is held no turn loop can
-// send it too; when no turn takes it, it stays first in the queue for the next turn.
-func (cs *ConversationSession) steerInto(ctx context.Context, steerTurn func(context.Context, acp.PromptInput) (bool, error), item QueuedPrompt) {
+// trySteer asks the adapter because a turn can be running without a worker prompt. With queueMu
+// held, the normal queue can only send the message after the steering outcome is known.
+func (cs *ConversationSession) trySteer(ctx context.Context, item QueuedPrompt) bool {
+	if !item.Steer {
+		return false
+	}
+	cs.mu.Lock()
+	steerTurn := cs.steer
+	ready := !cs.starting && cs.closedErr() == nil
+	// Codex interprets /goal pause in session/prompt. In a steer it becomes ordinary model input.
+	pauseCommand := (cs.nativeGoalPause || cs.nativeGoalReports) && item.Input.From == nil && item.Input.Text == "/goal pause"
+	cs.mu.Unlock()
+	if steerTurn == nil || !ready || pauseCommand {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	cs.writes.RLock()
 	injected, err := steerTurn(ctx, item.Input)
 	cs.writes.RUnlock()
@@ -251,13 +266,8 @@ func (cs *ConversationSession) steerInto(ctx context.Context, steerTurn func(con
 		cs.Log.Append("notice", cs.clock().UnixMilli(), MustRawJSON(map[string]string{
 			"sessionUpdate": "notice", "severity": "warning", "title": "The message goes in when this turn ends", "description": err.Error(),
 		}))
-		return
 	}
-	if injected {
-		cs.mu.Lock()
-		cs.Queue = slices.DeleteFunc(cs.Queue, func(queued QueuedPrompt) bool { return queued.ID == item.ID })
-		cs.mu.Unlock()
-	}
+	return injected
 }
 
 // placeQueued adds or replaces item. A newly steered prompt moves to the front; an edit keeps its place.
@@ -328,11 +338,15 @@ func (cs *ConversationSession) RemoveQueued(ctx context.Context, id string) erro
 	return nil
 }
 
-// SteerQueued moves a queued prompt to the front and interrupts the running turn so it goes next.
+// SteerQueued sends a queued prompt into the running turn or moves it to the front of the queue.
 func (cs *ConversationSession) SteerQueued(ctx context.Context, id string) error {
 	cs.queueMu.Lock()
 	defer cs.queueMu.Unlock()
 	cs.mu.Lock()
+	if err := cs.closedErr(); err != nil {
+		cs.mu.Unlock()
+		return err
+	}
 	index := slices.IndexFunc(cs.Queue, func(queued QueuedPrompt) bool { return queued.ID == id })
 	if index < 0 {
 		cs.mu.Unlock()
@@ -341,10 +355,15 @@ func (cs *ConversationSession) SteerQueued(ctx context.Context, id string) error
 	item := cs.Queue[index]
 	item.Steer = true
 	cs.Queue = placeQueued(cs.Queue, item)
-	running := cs.running
 	cs.mu.Unlock()
 	cs.Log.Append("queued_prompt", cs.clock().UnixMilli(), QueuedPromptPayload(item))
-	cs.afterQueued(ctx, item.Steer, running)
+	if cs.trySteer(ctx, item) {
+		cs.mu.Lock()
+		cs.Queue = slices.DeleteFunc(cs.Queue, func(queued QueuedPrompt) bool { return queued.ID == id })
+		cs.mu.Unlock()
+	} else {
+		cs.afterQueued(ctx, true)
+	}
 	return nil
 }
 
@@ -494,8 +513,7 @@ func (cs *ConversationSession) ResumeTurns() {
 }
 
 func QueuedPromptPayload(item QueuedPrompt) json.RawMessage {
-	var body map[string]any
-	_ = json.Unmarshal(PromptLogPayload(item.Input), &body)
+	body := promptLogFields(item.Input)
 	body["queueId"] = item.ID
 	if item.Steer {
 		body["steer"] = true

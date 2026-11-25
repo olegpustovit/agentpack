@@ -79,14 +79,23 @@ export function conversationErrorMessage(machine: string, action: string, error:
   return `Couldn't ${action}: ${detail}`
 }
 
-export function agentSnapshotQuery(machine: string, info?: Pick<SessionInfo, "directory" | "definition_root" | "harness" | "mode">) {
+export type AgentSnapshot = { config: unknown; commands?: { availableCommands?: AgentCommand[] } }
+
+export function agentSnapshotQuery(
+  machine: string,
+  info?: Pick<SessionInfo, "directory" | "definition_root" | "harness" | "mode">,
+  options?: { modelFallback?: boolean },
+) {
   const definition = info?.definition_root || info?.directory || ""
   const harness = info?.harness ?? ""
   const mode = info?.mode || "default"
+  const modelFallback = options?.modelFallback === true
   return queryOptions({
-    queryKey: ["agent-snapshot", machine, harness, definition, mode] as const,
-    queryFn: () => api<{ config: unknown; commands?: { availableCommands?: AgentCommand[] } } | null>("/api/agent-snapshot", {
-      query: { owner: machine, harness, definition_root: definition, mode },
+    queryKey: modelFallback
+      ? (["agent-snapshot", machine, harness, definition, mode, "model-fallback"] as const)
+      : (["agent-snapshot", machine, harness, definition, mode] as const),
+    queryFn: () => api<AgentSnapshot | null>("/api/agent-snapshot", {
+      query: { owner: machine, harness, definition_root: definition, mode, ...(modelFallback && { model_fallback: "1" }) },
     }),
     enabled: Boolean(harness && definition),
     staleTime: 60_000,

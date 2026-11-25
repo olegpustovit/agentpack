@@ -22,6 +22,8 @@ import (
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/acp/acptest"
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/registry"
+	"github.com/olegpustovit/agentpack/internal/mode"
 	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state/statetest"
 )
@@ -511,7 +513,7 @@ func TestInitializeACPWaitsForStagingBeforeCreatingSession(t *testing.T) {
 	conn, cleanup := authReplayConnection(agent)
 	defer cleanup()
 	stageErr := errors.New("staging rejected")
-	_, err := initializeACPSession(t.Context(), conn, t.TempDir(), "", "", "", chatTools{}, false, func(context.Context) error {
+	_, err := initializeACPSession(t.Context(), conn, t.TempDir(), "", "", "", chatTools{}, false, func(context.Context, sdkacp.InitializeResponse) error {
 		if strings.Join(agent.calls, ",") != "initialize" {
 			t.Fatalf("ACP calls before verified staging = %v", agent.calls)
 		}
@@ -957,8 +959,58 @@ func TestSteerJoinsTheTurnWithoutCancel(t *testing.T) {
 		t.Fatalf("agent received %s; a steer must never send session/cancel", methods)
 	}
 	entries := prompter.log.Snapshot()
-	if len(entries) != 1 || entries[0].Kind != "prompt" || !strings.Contains(string(entries[0].Payload), `"queueId":"q1"`) {
+	if len(entries) != 1 || !entries[0].SteeredPrompt() || !strings.Contains(string(entries[0].Payload), `"queueId":"q1"`) {
 		t.Fatalf("only the injected steer is a prompt entry: %s", logEntryKinds(prompter.log))
+	}
+}
+
+func TestSteerReachesAdapterOwnedTurn(t *testing.T) {
+	prompter, agent := newHeldPrompter(t)
+	defer close(agent.release)
+	conv := NewConversationSession(prompter.log, prompter.broker())
+	conv.steer = prompter.steer
+	thread := func(status string) {
+		prompter.log.Append("session_info_update", 1, MustRawJSON(map[string]any{
+			"_meta": map[string]any{"codex": map[string]any{"threadStatus": map[string]string{"type": status}}},
+		}))
+	}
+	thread("active")
+	if _, _, err := conv.Submit(t.Context(), acp.PromptInput{Text: "look here", QueueID: "steer-autonomous"}, true); err != nil {
+		t.Fatal(err)
+	}
+	agent.mu.Lock()
+	got := strings.Join(agent.methods, ",")
+	agent.mu.Unlock()
+	if got != "_session/steering" || len(queuedIDs(conv)) != 0 {
+		t.Fatalf("methods = %q, queue = %v", got, queuedIDs(conv))
+	}
+	thread("idle")
+	if got := conv.ConversationState(); got != "idle" {
+		t.Fatalf("adapter-owned turn could not reach idle after steering: state = %q", got)
+	}
+}
+
+func TestSteerWhenAdapterIsIdleFallsBackOnce(t *testing.T) {
+	prompter, agent := newHeldPrompter(t)
+	defer close(agent.release)
+	agent.steering = "promptRequired"
+	conv := NewConversationSession(prompter.log, prompter.broker())
+	conv.steer = prompter.steer
+	if _, _, err := conv.Submit(t.Context(), acp.PromptInput{Text: "look here", QueueID: "steer-idle"}, true); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-agent.received:
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle adapter did not receive a fallback prompt")
+	}
+	agent.release <- struct{}{}
+	waitConversationState(t, conv, "idle")
+	agent.mu.Lock()
+	got := strings.Join(agent.methods, ",")
+	agent.mu.Unlock()
+	if got != "_session/steering,session/prompt" {
+		t.Fatalf("methods = %q", got)
 	}
 }
 
@@ -1013,5 +1065,450 @@ func TestAgentStdoutIsLoggedInWireOrder(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("logged order differs from the wire (%d entries, want %d):\n%v", len(got), len(want), got)
+	}
+}
+
+// fakeAntigravityAgent speaks ACP over real SDK pipes like Antigravity CLI >= 1.5.0: it echoes
+// prompts as user_message_chunk notifications and accepts a concurrent session/prompt while a
+// command in the first prompt is still blocked.
+type fakeAntigravityAgent struct {
+	*acptest.ReplayAgent
+	conn      *sdkacp.AgentSideConnection
+	agentName string
+	version   string
+	meta      map[string]any
+
+	mu            sync.Mutex
+	methods       []string
+	promptCount   int
+	firstEntered  chan struct{}
+	releaseFirst  chan struct{}
+	steerArrived  chan string
+	releaseSteer  chan struct{}
+	thirdArrived  chan string
+	releaseThird  chan struct{}
+	cancelled     chan struct{}
+	cancelOnce    sync.Once
+	echoSteerLate bool
+	// steerAnswersImmediately models an agent that acks the steered session/prompt before the
+	// first prompt's turn ends, vs one that answers the first prompt first and the steer last.
+	steerAnswersImmediately bool
+	// wireTurnEndRace releases the first prompt immediately while the second runs a new turn.
+	wireTurnEndRace bool
+}
+
+func (a *fakeAntigravityAgent) SetConnection(conn *sdkacp.AgentSideConnection) {
+	a.conn = conn
+	a.ReplayAgent.SetConnection(conn)
+}
+
+func (a *fakeAntigravityAgent) record(method string) {
+	a.mu.Lock()
+	a.methods = append(a.methods, method)
+	a.mu.Unlock()
+}
+
+func (a *fakeAntigravityAgent) recordedMethods() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.methods)
+}
+
+func (a *fakeAntigravityAgent) Initialize(context.Context, sdkacp.InitializeRequest) (sdkacp.InitializeResponse, error) {
+	a.record("initialize")
+	return sdkacp.InitializeResponse{
+		ProtocolVersion: sdkacp.ProtocolVersionNumber,
+		AgentInfo:       &sdkacp.Implementation{Name: a.agentName, Version: a.version},
+		AgentCapabilities: sdkacp.AgentCapabilities{
+			LoadSession: true,
+			Meta:        a.meta,
+		},
+	}, nil
+}
+
+func (a *fakeAntigravityAgent) NewSession(context.Context, sdkacp.NewSessionRequest) (sdkacp.NewSessionResponse, error) {
+	a.record("session/new")
+	return sdkacp.NewSessionResponse{SessionId: "agy-sess-1"}, nil
+}
+
+func (a *fakeAntigravityAgent) Cancel(context.Context, sdkacp.CancelNotification) error {
+	a.record("session/cancel")
+	a.cancelOnce.Do(func() { close(a.cancelled) })
+	return nil
+}
+
+func (a *fakeAntigravityAgent) HandleExtensionMethod(_ context.Context, method string, _ json.RawMessage) (any, error) {
+	a.record(method)
+	return nil, sdkacp.NewMethodNotFound(method)
+}
+
+func (a *fakeAntigravityAgent) sendUpdate(ctx context.Context, sid sdkacp.SessionId, update sdkacp.SessionUpdate) {
+	_ = a.conn.SessionUpdate(ctx, sdkacp.SessionNotification{SessionId: sid, Update: update})
+}
+
+func (a *fakeAntigravityAgent) Prompt(ctx context.Context, req sdkacp.PromptRequest) (sdkacp.PromptResponse, error) {
+	a.record("session/prompt")
+	text := ""
+	for _, block := range req.Prompt {
+		if block.Text != nil {
+			text += block.Text.Text
+		}
+	}
+	a.mu.Lock()
+	a.promptCount++
+	n := a.promptCount
+	a.mu.Unlock()
+
+	switch n {
+	case 1:
+		a.sendUpdate(ctx, req.SessionId, sdkacp.UpdateUserMessageText(text))
+		a.sendUpdate(ctx, req.SessionId, sdkacp.StartToolCall("cmd-1", "Run command 1"))
+		close(a.firstEntered)
+		select {
+		case <-a.releaseFirst:
+		case <-a.cancelled:
+			return sdkacp.PromptResponse{StopReason: sdkacp.StopReasonCancelled}, nil
+		}
+		a.sendUpdate(ctx, req.SessionId, sdkacp.UpdateToolCall("cmd-1", sdkacp.WithUpdateStatus(sdkacp.ToolCallStatusCompleted)))
+		if !a.wireTurnEndRace {
+			a.sendUpdate(ctx, req.SessionId, sdkacp.UpdateAgentMessageText("steered done"))
+		}
+		return sdkacp.PromptResponse{StopReason: sdkacp.StopReasonEndTurn}, nil
+	case 2:
+		if a.steerArrived != nil {
+			a.steerArrived <- text
+		}
+		if a.steerAnswersImmediately {
+			if a.echoSteerLate {
+				// Emit delayed echo after tool updates are already in the stream.
+				<-a.releaseSteer
+				a.sendUpdate(ctx, req.SessionId, sdkacp.UpdateUserMessageText(text))
+			}
+			return sdkacp.PromptResponse{StopReason: sdkacp.StopReasonEndTurn}, nil
+		}
+		if a.releaseSteer != nil {
+			<-a.releaseSteer
+		}
+		a.sendUpdate(ctx, req.SessionId, sdkacp.UpdateUserMessageText(text))
+		a.sendUpdate(ctx, req.SessionId, sdkacp.UpdateAgentMessageText("after steer"))
+		return sdkacp.PromptResponse{StopReason: sdkacp.StopReasonEndTurn}, nil
+	default:
+		if a.thirdArrived != nil {
+			a.thirdArrived <- text
+		}
+		a.sendUpdate(ctx, req.SessionId, sdkacp.UpdateUserMessageText(text))
+		a.sendUpdate(ctx, req.SessionId, sdkacp.UpdateAgentMessageText("third reply"))
+		if a.releaseThird != nil {
+			<-a.releaseThird
+		}
+		return sdkacp.PromptResponse{StopReason: sdkacp.StopReasonEndTurn}, nil
+	}
+}
+
+func newFakeAntigravitySession(t *testing.T, agent *fakeAntigravityAgent) (*ConversationSession, *acpPrompter) {
+	t.Helper()
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "agy")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGY_PATH", stub)
+	agyHarness, err := registry.ByTarget(base.Agy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acpLaunch, err := agyHarness.LaunchACP(base.LaunchContext{
+		ProjectRoot:   dir,
+		WorkspaceRoot: dir,
+		Mode:          mode.ImplicitEffective(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := acp.NewEventLog(0)
+	prompter := &acpPrompter{log: log, harness: "agy"}
+	broker := prompter.broker()
+	conv := NewConversationSession(log, broker)
+	client := acp.NewHarnessClient(dir, log, broker)
+	client.SuppressUserEcho = prompter.suppressUserEcho
+	c2aR, c2aW := io.Pipe()
+	a2cR, a2cW := io.Pipe()
+	clientConn := client.NewClientSideConnection(c2aW, a2cR)
+	agentConn := sdkacp.NewAgentSideConnection(agent, a2cW, c2aR)
+	agent.SetConnection(agentConn)
+	prompter.mu.Lock()
+	prompter.conn = clientConn
+	prompter.mu.Unlock()
+	t.Cleanup(func() {
+		for _, pipe := range []io.Closer{c2aW, a2cW, c2aR, a2cR} {
+			_ = pipe.Close()
+		}
+	})
+	setup, err := initializeACPSession(t.Context(), clientConn, dir, "", "", "", chatTools{}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompter.ready(setup)
+	conv.agentVersion = setup.InitInfo.AgentVersion
+	conv.agentSessionID = setup.AgentSessionID
+	conv.SetAgentCapabilities(setup.AgentCapabilities)
+	configureACPSteering(conv, prompter, acpLaunch, setup)
+	return conv, prompter
+}
+
+func TestAntigravityPromptSteerReachesBlockedTurnWithoutCancel(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		steerAnswersImmediately bool
+	}{
+		{name: "steer_answers_before_first_prompt", steerAnswersImmediately: true},
+		{name: "first_prompt_answers_before_steer", steerAnswersImmediately: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &fakeAntigravityAgent{
+				ReplayAgent:             acptest.NewReplayAgent(nil),
+				agentName:               "Antigravity ACP Server",
+				version:                 "1.5.17",
+				meta:                    map[string]any{"antigravity": map[string]any{"tier": true}},
+				firstEntered:            make(chan struct{}),
+				releaseFirst:            make(chan struct{}),
+				steerArrived:            make(chan string, 1),
+				releaseSteer:            make(chan struct{}),
+				cancelled:               make(chan struct{}, 1),
+				echoSteerLate:           true,
+				steerAnswersImmediately: tc.steerAnswersImmediately,
+			}
+			conv, prompter := newFakeAntigravitySession(t, agent)
+			if caps := conv.AgentCapabilitiesView(); caps == nil || !caps.Steering {
+				t.Fatalf("Antigravity 1.5.17 capabilities = %+v, want Steering=true", caps)
+			}
+
+			if _, _, err := conv.Submit(t.Context(), acp.PromptInput{Text: "run 3 commands"}, false); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-agent.firstEntered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("first prompt never reached blocked command")
+			}
+
+			// Steer while the first command is still blocked.
+			if _, _, err := conv.Submit(t.Context(), acp.PromptInput{QueueID: "s1", Text: "stop after command 1"}, true); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case got := <-agent.steerArrived:
+				if got != "stop after command 1" {
+					t.Fatalf("steered prompt text = %q", got)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("second session/prompt did not arrive before blocked first command released")
+			}
+
+			// Release in the order under test, ensuring delayed echo arrives after tool_call_update.
+			if tc.steerAnswersImmediately {
+				close(agent.releaseSteer)
+				// Wait briefly to make sure the steer response alone does not end the turn.
+				time.Sleep(30 * time.Millisecond)
+				if state := conv.ConversationState(); state != "working" {
+					t.Fatalf("state after early steer response = %q, want working", state)
+				}
+				close(agent.releaseFirst)
+			} else {
+				close(agent.releaseFirst)
+				time.Sleep(30 * time.Millisecond)
+				if state := conv.ConversationState(); state != "working" {
+					t.Fatalf("state after first response while steer still open = %q, want working", state)
+				}
+				close(agent.releaseSteer)
+			}
+
+			waitConversationState(t, conv, "idle")
+
+			methods := agent.recordedMethods()
+			if slices.Contains(methods, "session/cancel") || slices.Contains(methods, "_session/steering") {
+				t.Fatalf("unexpected wire methods %v; live steering must not cancel or call _session/steering", methods)
+			}
+			if got := strings.Join(methods, ","); got != "initialize,session/new,session/prompt,session/prompt" {
+				t.Fatalf("wire methods = %q", got)
+			}
+
+			entries := prompter.log.Snapshot()
+			turnEnds := 0
+			for _, entry := range entries {
+				if entry.Kind == "turn_end" {
+					turnEnds++
+				}
+			}
+			if turnEnds != 1 {
+				t.Fatalf("turn_end count = %d, want 1 (%s)", turnEnds, logEntryKinds(prompter.log))
+			}
+
+			reduced := acp.ReduceLog(entries)
+			var userTexts []string
+			for _, item := range reduced.Items {
+				if item.Kind == "user_message_chunk" {
+					var body struct {
+						Text struct {
+							Text string `json:"text"`
+						} `json:"text"`
+					}
+					_ = json.Unmarshal(item.Data, &body)
+					userTexts = append(userTexts, body.Text.Text)
+				}
+			}
+			if !slices.Equal(userTexts, []string{"run 3 commands", "stop after command 1"}) {
+				t.Fatalf("visible user prompts = %v, want exactly one per prompt (entries: %s)", userTexts, logEntryKinds(prompter.log))
+			}
+		})
+	}
+}
+
+func TestAntigravityPromptSteerIdleAndTurnEndRaces(t *testing.T) {
+	t.Run("already_idle_falls_back_to_normal_prompt", func(t *testing.T) {
+		agent := &fakeAntigravityAgent{
+			ReplayAgent:  acptest.NewReplayAgent(nil),
+			agentName:    "Antigravity ACP Server",
+			version:      "1.5.17",
+			meta:         map[string]any{"antigravity": map[string]any{"tier": true}},
+			firstEntered: make(chan struct{}),
+			releaseFirst: make(chan struct{}),
+			cancelled:    make(chan struct{}, 1),
+		}
+		conv, prompter := newFakeAntigravitySession(t, agent)
+		close(agent.releaseFirst)
+
+		if _, _, err := conv.Submit(t.Context(), acp.PromptInput{QueueID: "idle-steer", Text: "start fresh"}, true); err != nil {
+			t.Fatal(err)
+		}
+		waitConversationState(t, conv, "idle")
+
+		if got := strings.Join(agent.recordedMethods(), ","); got != "initialize,session/new,session/prompt" {
+			t.Fatalf("wire methods = %q", got)
+		}
+		reduced := acp.ReduceLog(prompter.log.Snapshot())
+		userCount := 0
+		for _, item := range reduced.Items {
+			if item.Kind == "user_message_chunk" {
+				userCount++
+			}
+		}
+		if userCount != 1 {
+			t.Fatalf("visible user prompts = %d, want 1", userCount)
+		}
+	})
+
+	t.Run("wire_turn_end_race_keeps_turn_open_until_second_prompt_finishes", func(t *testing.T) {
+		agent := &fakeAntigravityAgent{
+			ReplayAgent:     acptest.NewReplayAgent(nil),
+			agentName:       "Antigravity ACP Server",
+			version:         "1.5.17",
+			meta:            map[string]any{"antigravity": map[string]any{"tier": true}},
+			firstEntered:    make(chan struct{}),
+			releaseFirst:    make(chan struct{}),
+			steerArrived:    make(chan string, 1),
+			releaseSteer:    make(chan struct{}),
+			thirdArrived:    make(chan string, 1),
+			releaseThird:    make(chan struct{}),
+			cancelled:       make(chan struct{}, 1),
+			wireTurnEndRace: true,
+		}
+		conv, prompter := newFakeAntigravitySession(t, agent)
+
+		if _, _, err := conv.Submit(t.Context(), acp.PromptInput{Text: "first"}, false); err != nil {
+			t.Fatal(err)
+		}
+		<-agent.firstEntered
+
+		// Steer just before the first prompt finishes on the server.
+		if _, _, err := conv.Submit(t.Context(), acp.PromptInput{QueueID: "race-steer", Text: "second"}, true); err != nil {
+			t.Fatal(err)
+		}
+		if got := <-agent.steerArrived; got != "second" {
+			t.Fatalf("steered prompt = %q", got)
+		}
+		// Queue a third ordinary prompt while the steered prompt is still open.
+		if _, _, err := conv.Submit(t.Context(), acp.PromptInput{QueueID: "queued-3", Text: "third"}, false); err != nil {
+			t.Fatal(err)
+		}
+
+		// First prompt ends immediately; the steered prompt is now running as its own server turn.
+		close(agent.releaseFirst)
+		select {
+		case got := <-agent.thirdArrived:
+			t.Fatalf("queued third prompt %q ran before the steered prompt finished", got)
+		case <-time.After(50 * time.Millisecond):
+		}
+		if state := conv.ConversationState(); state != "working" {
+			t.Fatalf("state after first prompt ended during wire race = %q, want working", state)
+		}
+
+		// Release the steered prompt; only now should the logical turn end and third prompt run.
+		close(agent.releaseSteer)
+		select {
+		case got := <-agent.thirdArrived:
+			if got != "third" {
+				t.Fatalf("third prompt = %q", got)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("queued third prompt never ran after steered prompt finished")
+		}
+		close(agent.releaseThird)
+		waitConversationState(t, conv, "idle")
+
+		if slices.Contains(agent.recordedMethods(), "session/cancel") {
+			t.Fatalf("unexpected session/cancel in wire race: %v", agent.recordedMethods())
+		}
+		reduced := acp.ReduceLog(prompter.log.Snapshot())
+		var userTexts []string
+		for _, item := range reduced.Items {
+			if item.Kind == "user_message_chunk" {
+				var body struct {
+					Text struct {
+						Text string `json:"text"`
+					} `json:"text"`
+				}
+				_ = json.Unmarshal(item.Data, &body)
+				userTexts = append(userTexts, body.Text.Text)
+			}
+		}
+		if !slices.Equal(userTexts, []string{"first", "second", "third"}) {
+			t.Fatalf("visible user prompts = %v, want [first second third]", userTexts)
+		}
+	})
+}
+
+func TestAntigravityPromptSteerVersionFence(t *testing.T) {
+	agent := &fakeAntigravityAgent{
+		ReplayAgent:  acptest.NewReplayAgent(nil),
+		agentName:    "Antigravity ACP Server",
+		version:      "1.4.12",
+		meta:         map[string]any{"antigravity": map[string]any{"tier": true}},
+		firstEntered: make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+		steerArrived: make(chan string, 1),
+		releaseSteer: make(chan struct{}),
+		cancelled:    make(chan struct{}, 1),
+	}
+	conv, _ := newFakeAntigravitySession(t, agent)
+	if caps := conv.AgentCapabilitiesView(); caps != nil && caps.Steering {
+		t.Fatalf("Antigravity 1.4.12 should not advertise Steering: %+v", caps)
+	}
+	if _, _, err := conv.Submit(t.Context(), acp.PromptInput{Text: "first"}, false); err != nil {
+		t.Fatal(err)
+	}
+	<-agent.firstEntered
+	if _, _, err := conv.Submit(t.Context(), acp.PromptInput{QueueID: "old-steer", Text: "redirect"}, true); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-agent.cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("pre-1.5.0 Antigravity did not fall back to session/cancel")
+	}
+	close(agent.releaseSteer)
+	waitConversationState(t, conv, "idle")
+	if got := strings.Join(agent.recordedMethods(), ","); got != "initialize,session/new,session/prompt,session/cancel,session/prompt" {
+		t.Fatalf("wire methods for pre-1.5.0 = %q", got)
 	}
 }

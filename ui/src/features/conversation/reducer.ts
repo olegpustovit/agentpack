@@ -414,12 +414,16 @@ class ThreadReducer {
         state.working = false
         break
       }
-      case "prompt":
-        queue.delete((entry.payload as { queueId?: string }).queueId ?? "")
-        state.working = true
-        this.turn = { ts: entry.ts, tokens: state.context_tokens, cost: state.cost_usd }
+      case "prompt": {
+        const prompt = entry.payload as { queueId?: string; steered?: boolean }
+        queue.delete(prompt.queueId ?? "")
+        if (!prompt.steered) {
+          state.working = true
+          this.turn = { ts: entry.ts, tokens: state.context_tokens, cost: state.cost_usd }
+        }
         state.items.push({ kind: "user_message_chunk", data: entry.payload })
         break
+      }
     }
     // Fresh and replaced items carry the entry that last changed them; a replaced one keeps its first seq.
     for (let i = state.items.length - 1; i >= 0 && state.items[i]!.seq === undefined; i--) {

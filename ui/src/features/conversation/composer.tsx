@@ -30,7 +30,7 @@ import { imageFilesFromClipboard, imageFilesFromList, promptRequest } from "./co
 type UploadedAttachment = PendingAttachment & { name: string }
 export type SendInput = {
   text: string
-  /** Interrupt the running turn and send this next. */
+  /** Send into the current turn when supported, or send this next. */
   steer?: boolean
   attachments: (Pick<PendingAttachment, "sha" | "mime" | "width" | "height"> & { name?: string })[]
   resourceLink?: { sha: string; name: string }
@@ -347,7 +347,7 @@ export function Composer({
       return
     }
     // Writing instead of answering an open question interrupts it, as in the Claude CLI.
-    send.mutate({ text, attachments, clearComposer: true, steer: (steer || parent.needs_you) && parent.working })
+    send.mutate({ text, attachments, clearComposer: true, steer: steer || (parent.needs_you && parent.working) })
   }
 
   const diffPaths = listDiffChanges(parent.items).map((change) => change.path)
@@ -497,6 +497,11 @@ export function Composer({
                 }}
                 onKeyDown={(event) => {
                   if (event.nativeEvent.isComposing || event.keyCode === 229) return
+                  if (event.key === "Enter" && !event.shiftKey && (event.metaKey || event.ctrlKey)) {
+                    event.preventDefault()
+                    if (!event.repeat) submit(true)
+                    return
+                  }
                   if (composerHints.length > 0) {
                     const move = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0
                     if (move) {
@@ -524,7 +529,7 @@ export function Composer({
                   }
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault()
-                    submit(event.metaKey || event.ctrlKey)
+                    submit()
                   }
                 }}
                 className="relative block min-h-(--ctl-h) max-h-45 w-full resize-none border-0 bg-transparent px-(--s3) py-(--s2) text-(length:--fs) text-(--fg) outline-none placeholder:text-(--fg3)"

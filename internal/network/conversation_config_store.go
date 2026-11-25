@@ -5,9 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/session"
@@ -42,8 +45,36 @@ type ConfigSelection struct {
 	Value json.RawMessage `json:"value"`
 }
 
+// ChatStartOptions are ACP choice IDs to apply before sending the first message.
+type ChatStartOptions struct {
+	Model  string `json:"model,omitempty" jsonschema:"Model choice ID from list_chat_options, for a chat."`
+	Effort string `json:"effort,omitempty" jsonschema:"Reasoning effort choice ID from list_chat_options, for a chat."`
+}
+
+func (options ChatStartOptions) Valid() bool {
+	for _, value := range []string{options.Model, options.Effort} {
+		if len(value) > 512 || strings.TrimSpace(value) != value || strings.ContainsFunc(value, unicode.IsControl) {
+			return false
+		}
+	}
+	return true
+}
+
+// Kept with the other saved choices until the first agent accepts them. The reserved key is
+// replaced with the agent's real option IDs once startup succeeds.
+const startOptionsKey = "$start"
+
+func SaveChatStartOptions(ctx context.Context, tx *sql.Tx, id string, options ChatStartOptions) error {
+	if options == (ChatStartOptions{}) {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, "UPDATE sessions SET wanted_config=json_patch(wanted_config,?) WHERE id=?",
+		string(MustRawJSON(map[string]ChatStartOptions{startOptionsKey: options})), id)
+	return err
+}
+
 func (selection ConfigSelection) Valid() bool {
-	if len(selection.Key) == 0 || len(selection.Key) > 128 || len(selection.Value) > 4096 {
+	if len(selection.Key) == 0 || len(selection.Key) > 128 || selection.Key == startOptionsKey || len(selection.Value) > 4096 {
 		return false
 	}
 	var value any
@@ -96,6 +127,7 @@ func savedConfig(ctx context.Context, store *state.Store, info session.SessionIn
 		err := store.Reader.QueryRowContext(ctx, `SELECT wanted_config FROM sessions WHERE id<>? AND harness=?
 			AND node_id=`+state.LocalNodeSQL+` AND owner_email=(SELECT owner_email FROM sessions WHERE id=?)
 			AND coalesce(nullif(definition_root,''),directory)=? AND wanted_config<>'{}'
+			AND json_type(wanted_config,'$."$start"') IS NULL
 			ORDER BY last_used DESC LIMIT 1`, info.ID, info.Harness, info.ID, CmpOr(info.DefinitionRoot, info.Directory)).Scan(&body)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -120,6 +152,26 @@ type agentConfigChoice struct {
 	Options []agentConfigChoice `json:"options"`
 }
 
+type agentConfigOption struct {
+	ID       string              `json:"id"`
+	Category string              `json:"category"`
+	Type     string              `json:"type"`
+	Current  json.RawMessage     `json:"currentValue"`
+	Options  []agentConfigChoice `json:"options"`
+}
+
+var configCategory = strings.NewReplacer("_", "", "-", "", " ", "")
+
+func (option agentConfigOption) role() string {
+	switch configCategory.Replace(strings.ToLower(CmpOr(option.Category, option.ID))) {
+	case "model":
+		return "model"
+	case "thoughtlevel", "reasoningeffort", "effort":
+		return "effort"
+	}
+	return ""
+}
+
 func hasConfigChoice(choices []agentConfigChoice, value string) bool {
 	return slices.ContainsFunc(choices, func(choice agentConfigChoice) bool {
 		return CmpOr(choice.Value, choice.ID) == value || hasConfigChoice(choice.Options, value)
@@ -128,13 +180,8 @@ func hasConfigChoice(choices []agentConfigChoice, value string) bool {
 
 func (cs *ConversationSession) wantedChoice(key string, value json.RawMessage) (allowed, unchanged bool) {
 	var config struct {
-		ConfigOptions []struct {
-			ID      string              `json:"id"`
-			Type    string              `json:"type"`
-			Current json.RawMessage     `json:"currentValue"`
-			Options []agentConfigChoice `json:"options"`
-		} `json:"configOptions"`
-		Modes struct {
+		ConfigOptions []agentConfigOption `json:"configOptions"`
+		Modes         struct {
 			Current string              `json:"currentModeId"`
 			Options []agentConfigChoice `json:"availableModes"`
 		} `json:"modes"`
@@ -162,6 +209,54 @@ func (cs *ConversationSession) wantedChoice(key string, value json.RawMessage) (
 	return false, false
 }
 
+func (cs *ConversationSession) startOptionKey(role string) string {
+	var config struct {
+		Options []agentConfigOption `json:"configOptions"`
+	}
+	if json.Unmarshal(cs.ConfigJSON(), &config) == nil {
+		for _, option := range config.Options {
+			if option.Type == "select" && option.role() == role {
+				return option.ID
+			}
+		}
+	}
+	return ""
+}
+
+func (cs *ConversationSession) applyStartOptions(ctx context.Context, db *sql.DB, id string, wanted map[string]json.RawMessage) error {
+	raw, pending := wanted[startOptionsKey]
+	if !pending {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var choices ChatStartOptions
+	if err := json.Unmarshal(raw, &choices); err != nil {
+		return errors.New("could not read the selected chat options")
+	}
+	patch := map[string]json.RawMessage{startOptionsKey: json.RawMessage("null")}
+	for _, choice := range []struct{ role, value string }{{"model", choices.Model}, {"effort", choices.Effort}} {
+		if choice.value == "" {
+			continue
+		}
+		key := cs.startOptionKey(choice.role)
+		value := wanted[key]
+		if len(value) == 0 {
+			value = MustRawJSON(choice.value)
+		}
+		allowed, unchanged := cs.wantedChoice(key, value)
+		if key == "" || !allowed || !unchanged && cs.SetConfigOption(ctx, key, value) != nil {
+			return fmt.Errorf("could not apply the selected %s. Start a new chat with an available choice", choice.role)
+		}
+		patch[key] = value
+		delete(wanted, key)
+	}
+	delete(wanted, startOptionsKey)
+	_, err := db.ExecContext(ctx, "UPDATE sessions SET wanted_config=json_patch(wanted_config,?) WHERE id=?",
+		string(MustRawJSON(patch)), id)
+	return err
+}
+
 func (cs *ConversationSession) applyWantedConfig(ctx context.Context, wanted map[string]json.RawMessage) {
 	keys := make([]string, 0, len(wanted))
 	for key := range wanted {
@@ -169,8 +264,10 @@ func (cs *ConversationSession) applyWantedConfig(ctx context.Context, wanted map
 	}
 	slices.Sort(keys)
 	// A model can change which effort levels the agent offers.
-	if model := slices.Index(keys, "model"); model > 0 {
-		keys[0], keys[model] = keys[model], keys[0]
+	if len(keys) > 1 {
+		if model := slices.Index(keys, cs.startOptionKey("model")); model > 0 {
+			keys[0], keys[model] = keys[model], keys[0]
+		}
 	}
 	for _, key := range keys {
 		value := wanted[key]

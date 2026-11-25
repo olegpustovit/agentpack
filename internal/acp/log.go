@@ -26,6 +26,7 @@ type EventLog struct {
 	bytes       int
 	truncated   bool
 	replaying   bool
+	keepAIRGoal bool
 	closed      bool
 	entries     []LogEntry
 	toolInputs  map[toolInputKey]toolInputStamp
@@ -76,7 +77,7 @@ func (log *EventLog) Append(kind string, ts int64, payload json.RawMessage) LogE
 	log.notifyMu.Lock()
 	defer log.notifyMu.Unlock()
 	log.mu.Lock()
-	if log.closed || log.replaying && kind != "agent_exit" && kind != "queued_prompt" {
+	if log.closed || log.replaying && !log.liveDuringReplay(kind, payload) {
 		log.mu.Unlock()
 		return LogEntry{}
 	}
@@ -121,6 +122,21 @@ func (log *EventLog) Append(kind string, ts int64, payload json.RawMessage) LogE
 		onAppend(entry)
 	}
 	return entry
+}
+
+// liveDuringReplay admits goal state sent by an adapter with negotiated AIR goal support.
+// Its load reports the current goal before it replays the transcript. The caller holds mu.
+func (log *EventLog) liveDuringReplay(kind string, payload json.RawMessage) bool {
+	switch kind {
+	case "agent_exit", "queued_prompt":
+		return true
+	case "goal_update":
+		return log.keepAIRGoal
+	case "session_info_update":
+		return log.keepAIRGoal && AIRGoal(payload) != nil
+	default:
+		return false
+	}
 }
 
 type toolInputKey struct{ call, child string }
@@ -600,11 +616,17 @@ func (log *EventLog) MarkTruncated() {
 	log.mu.Unlock()
 }
 
-// SetReplaying suppresses the native load response when durable history is already restored.
-// Process exits remain live events even while the adapter is loading its session.
+// SetReplaying suppresses native transcript replay when durable history is already restored.
 func (log *EventLog) SetReplaying(replaying bool) {
 	log.mu.Lock()
 	log.replaying = replaying
+	log.mu.Unlock()
+}
+
+// KeepAIRGoalDuringReplay preserves current goal updates from a negotiated AIR adapter.
+func (log *EventLog) KeepAIRGoalDuringReplay() {
+	log.mu.Lock()
+	log.keepAIRGoal = true
 	log.mu.Unlock()
 }
 

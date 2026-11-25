@@ -1,5 +1,6 @@
 import { useId, useState } from "react"
 import { ExternalLink, Lock } from "lucide-react"
+import { Kbd } from "@/components/kit/feedback"
 import { FieldError } from "@/components/kit/forms"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -7,6 +8,8 @@ import { api } from "@/lib/api"
 import { useIntent } from "@/lib/intent"
 import type { ElicitationField, ElicitationPayload, PermissionPayload, ThreadItem } from "./model"
 import { conversationErrorMessage, conversationNeedsUpdate } from "./queries"
+
+const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
 
 // Answer cards for permission and elicitation requests. The sessions home renders them too,
 // so this file must stay free of markdown, diff and highlight imports (check-size.ts enforces it).
@@ -72,7 +75,16 @@ export function ElicitationCard({ item, machine, sessionId, readOnly, onAnswer }
           <Button type="button" size="sm" disabled={!ask.elicitationId || answer.isPending} onClick={() => answer.mutate("decline")}>Decline</Button>
         </div>
       ) : (
-        <div className="mt-(--s3) flex flex-wrap gap-(--s2)">
+        <div
+          className="mt-(--s3) flex flex-wrap gap-(--s2)"
+          onKeyDown={ask.allowMultiple ? (event) => {
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && ask.elicitationId && !answer.isPending && selected.length > 0) {
+              event.preventDefault()
+              if (!event.repeat) answer.mutate(JSON.stringify(selected))
+            }
+          } : undefined}
+        >
           {(ask.choices ?? []).map((choice, index) => {
             const value = ask.optionIds?.[index] ?? choice
             return (
@@ -98,9 +110,11 @@ export function ElicitationCard({ item, machine, sessionId, readOnly, onAnswer }
               size="sm"
               variant="default"
               disabled={!ask.elicitationId || answer.isPending || selected.length === 0}
+              aria-keyshortcuts="Meta+Enter Control+Enter"
               onClick={() => answer.mutate(JSON.stringify(selected))}
             >
               Submit
+              <Kbd aria-hidden className="text-current opacity-70">{isMac ? "⌘↵" : "Ctrl+↵"}</Kbd>
             </Button>
           )}
         </div>
@@ -115,7 +129,20 @@ function ElicitationForm({ fields, disabled, onSubmit }: { fields: ElicitationFi
   // One question with options and nothing else to fill answers on click.
   const quick = fields.length === 1 && !fields[0]!.multiple && (fields[0]!.options?.length ?? 0) > 0
   return (
-    <div className="mt-(--s3) flex flex-col gap-(--s4)">
+    <form
+      className="mt-(--s3) flex flex-col gap-(--s4)"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (!quick && !disabled) onSubmit(JSON.stringify(values))
+      }}
+      onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing || event.keyCode === 229) return
+        if (!quick && event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault()
+          if (!disabled && !event.repeat) event.currentTarget.requestSubmit()
+        }
+      }}
+    >
       {fields.map((field) => {
         const current = values[field.key]
         return (
@@ -172,12 +199,13 @@ function ElicitationForm({ fields, disabled, onSubmit }: { fields: ElicitationFi
       })}
       {!quick && (
         <div>
-          <Button type="button" size="sm" variant="primary" disabled={disabled} onClick={() => onSubmit(JSON.stringify(values))}>
+          <Button type="submit" size="sm" variant="primary" disabled={disabled} aria-keyshortcuts="Meta+Enter Control+Enter">
             Submit
+            <Kbd aria-hidden className="text-current opacity-70">{isMac ? "⌘↵" : "Ctrl+↵"}</Kbd>
           </Button>
         </div>
       )}
-    </div>
+    </form>
   )
 }
 

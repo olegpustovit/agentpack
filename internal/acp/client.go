@@ -27,6 +27,10 @@ type HarnessClient struct {
 	// StoreImage saves images agents and tools send; nil shows them as a short text instead.
 	StoreImage ImageStore
 
+	// SuppressUserEcho reports whether a parent-session user_message_chunk echoes a prompt this
+	// client already logged, so delayed echoes during live steering are not recorded twice.
+	SuppressUserEcho func(sdkacp.ContentBlock) bool
+
 	requestPrefix   string
 	requestSequence atomic.Uint64
 	updates         *notificationGate
@@ -126,11 +130,15 @@ func (c *HarnessClient) RequestPermission(ctx context.Context, p sdkacp.RequestP
 }
 
 func (c *HarnessClient) SessionUpdate(ctx context.Context, n sdkacp.SessionNotification) error {
+	subagent := subagentID(c.Log.subagentSession(string(n.SessionId)), sessionUpdateMeta(n.Update))
+	if subagent == "" && n.Update.UserMessageChunk != nil && c.SuppressUserEcho != nil &&
+		c.SuppressUserEcho(n.Update.UserMessageChunk.Content) {
+		return nil
+	}
 	kind, payload := sessionUpdateLogEntry(n.Update, c.StoreImage)
 	if kind == "" {
 		return nil
 	}
-	subagent := subagentID(c.Log.subagentSession(string(n.SessionId)), sessionUpdateMeta(n.Update))
 	c.Log.Append(kind, time.Now().UnixMilli(), stampSubagent(payload, subagent))
 	return nil
 }

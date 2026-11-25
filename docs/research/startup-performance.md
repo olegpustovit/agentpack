@@ -1,5 +1,24 @@
 # Home-workspace startup performance
 
+## Chat launch options (2026-11-25)
+
+The gateway stores explicit model and effort choices with the first prompt.
+The worker applies them after the ACP handshake and before it drains the queue.
+On the Linux ARM64 reference host (`oracle-vm`), all three setup benchmarks met
+their budgets. These medians use the 32 MiB history fixture and five alternating
+runs of ten iterations against baseline `5551583e`.
+
+| Benchmark | Before (ms) | After (ms) | Budget (ms) |
+| --- | ---: | ---: | ---: |
+| `BenchmarkMaterializationHome` | 0.826 | 0.822 | <1 |
+| `BenchmarkCodexSetup/cold` | 19.484 | 18.955 | <20 |
+| `BenchmarkCodexSetup/warm` | 0.336 | 0.336 | <1 |
+
+Build `internal/sync` with the pinned Linux ARM64 static library and run each
+revision natively with `-test.run='^$' -test.benchtime=10x -test.cpu=2`. Use
+`-test.bench='^BenchmarkMaterializationHome$'` for materialization and
+`-test.bench='^BenchmarkCodexSetup$/^(cold|warm)$'` for setup.
+
 ## Agent defaults launch review (2026-11-25)
 
 A new ACP chat reads its defaults once at creation. The worker uses the

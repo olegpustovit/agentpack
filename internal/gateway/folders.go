@@ -88,6 +88,8 @@ func folderFailure(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, errFolderPath):
 		status, message = http.StatusBadRequest, errFolderPath.Error()
+	case errors.Is(err, errUnknownFolder):
+		status, message = http.StatusBadRequest, errUnknownFolder.Error()
 	case errors.Is(err, fs.ErrNotExist):
 		status, message = http.StatusNotFound, "Folder not found."
 	case errors.Is(err, fs.ErrPermission):
@@ -380,7 +382,7 @@ func (g *Gateway) startableDirectory(ctx context.Context, actor session.Actor, d
 	if g.knownDirectory(ctx, dir) {
 		return true
 	}
-	if !actor.CanStartNewFolder() || !filepath.IsAbs(dir) {
+	if actor.Chat != "" || !actor.CanStartNewFolder() || !filepath.IsAbs(dir) {
 		return false
 	}
 	info, err := os.Stat(dir)

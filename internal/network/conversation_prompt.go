@@ -22,6 +22,10 @@ import (
 const maxPromptImages = 32
 
 func PromptLogPayload(input acp.PromptInput) json.RawMessage {
+	return MustRawJSON(promptLogFields(input))
+}
+
+func promptLogFields(input acp.PromptInput) map[string]any {
 	body := map[string]any{}
 	if input.QueueID != "" {
 		body["queueId"] = input.QueueID
@@ -66,7 +70,7 @@ func PromptLogPayload(input acp.PromptInput) json.RawMessage {
 	if input.From != nil {
 		body["from"] = input.From
 	}
-	return MustRawJSON(body)
+	return body
 }
 
 func sanitizePromptImageName(name string) string {
