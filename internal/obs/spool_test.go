@@ -2,6 +2,8 @@ package obs
 
 import (
 	"context"
+	"errors"
+
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 func TestSpoolsIngestOnceAfterTwoMinutes(t *testing.T) {
@@ -289,5 +293,42 @@ func TestSpoolRotatesAtSegmentCapacity(t *testing.T) {
 		if file.size > spoolSegmentBytes {
 			t.Fatalf("segment exceeded capacity: %d", file.size)
 		}
+	}
+}
+
+func TestSpoolIngestionCancelsWhileWriterHoldsLock(t *testing.T) {
+	home := t.TempDir()
+	store, err := Open(home, StoreOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	dir := filepath.Join(home, "logs", "spool")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "worker-0.ndjson"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	lock := flock.New(filepath.Join(dir, ".lock"))
+	if err := lock.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Unlock()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.IngestSpool(ctx)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("ingestion error = %v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ingestion stayed blocked after cancellation")
 	}
 }

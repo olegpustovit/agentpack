@@ -454,3 +454,83 @@ func TestIssueCountersSurviveCrashLostDayCounterWrites(t *testing.T) {
 		t.Fatalf("count=%d err=%v", count, err)
 	}
 }
+
+func TestIssueCursorPruneRetriesAfterFailure(t *testing.T) {
+	home := t.TempDir()
+	canonical, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer canonical.Close()
+	now := time.Now()
+	var clock atomic.Int64
+	clock.Store(now.UnixMilli())
+	logs, err := Open(home, StoreOptions{State: canonical, SweepInterval: 10 * time.Second, Now: func() time.Time {
+		return time.UnixMilli(clock.Load())
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logs.Close()
+	if _, err := canonical.DB.Exec(`
+INSERT INTO issue_log_cursors(day,fingerprint,node_id,version,count) VALUES ('2000-01-01','test','test-node','v1',1);
+CREATE TRIGGER reject_cursor_prune BEFORE DELETE ON issue_log_cursors BEGIN SELECT RAISE(ABORT,'busy'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	clock.Add(int64(time.Minute / time.Millisecond))
+	if err := logs.Flush(t.Context()); err == nil {
+		t.Fatal("expected failed cursor pruning")
+	}
+	if _, err := canonical.DB.Exec("DROP TRIGGER reject_cursor_prune"); err != nil {
+		t.Fatal(err)
+	}
+	// Retry without advancing the clock to another sweep interval.
+	flushStore(t, logs)
+	var count int
+	if err := canonical.Reader.QueryRow("SELECT count(*) FROM issue_log_cursors").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("expired cursors after retry = %d, %v", count, err)
+	}
+}
+
+func TestShutdownLeavesUnpublishedIssuesForRecovery(t *testing.T) {
+	home := t.TempDir()
+	canonical, err := state.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer canonical.Close()
+
+	ctx, stop := context.WithCancel(t.Context())
+	defer stop()
+	options := StoreOptions{State: canonical, StateContext: ctx, Metadata: Metadata{NodeID: "test-node"}}
+	logs, err := Open(home, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop()
+	logs.Write(issueEvent(time.Now(), "v1.0.0"))
+	if err := logs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	count := func() int {
+		t.Helper()
+		var n int
+		if err := canonical.Reader.QueryRow("SELECT coalesce(sum(count),0) FROM issue_counts").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if got := count(); got != 0 {
+		t.Fatalf("shutdown published %d issues to state.db", got)
+	}
+	options.StateContext = t.Context()
+	logs, err = Open(home, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logs.Close()
+	flushStore(t, logs)
+	if got := count(); got != 1 {
+		t.Fatalf("recovered %d issues, want one", got)
+	}
+}

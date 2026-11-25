@@ -132,7 +132,7 @@ func (r *Replicator) WriteVersion(ctx context.Context, version int64, exclude []
 	if version < 0 || len(exclude) != 0 && len(exclude) != 16 {
 		return errors.New("invalid change version parameters")
 	}
-	tx, err := s.Reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.replicationReads.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
@@ -187,7 +187,7 @@ func (r *Replicator) ChangePage(ctx context.Context, since int64, exclude []byte
 	if since < 0 || maxBytes < 2 || len(exclude) != 0 && len(exclude) != 16 {
 		return nil, since, errors.New("invalid change page parameters")
 	}
-	tx, err := s.Reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.replicationReads.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, since, err
 	}
@@ -278,6 +278,16 @@ func (s *Store) catchUpServed(ctx context.Context) error {
 	}
 	served, _ := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
 	s.served.Store(served)
+	if served <= 0 {
+		return nil
+	}
+	// Opening a current database must coexist with live worker writes. Even an
+	// INSERT that changes no rows must acquire the WAL writer lock.
+	version, err := s.DBVersion(ctx)
+	if err != nil || served <= version {
+		return err
+	}
+	// Check again inside the write in case another opener or worker advanced it.
 	_, err = s.DB.ExecContext(ctx, `INSERT INTO crsql_db_versions(site_id,db_version) SELECT crsql_site_id(),?1
  WHERE ?1>(SELECT coalesce(max(db_version),0) FROM crsql_db_versions)
  ON CONFLICT(site_id) DO UPDATE SET db_version=excluded.db_version WHERE db_version<excluded.db_version`, served)

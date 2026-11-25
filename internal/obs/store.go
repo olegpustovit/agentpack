@@ -38,8 +38,10 @@ CREATE INDEX IF NOT EXISTS events_session ON events(session_id) WHERE session_id
 `
 
 type StoreOptions struct {
-	Metadata      Metadata
-	State         *state.Store
+	Metadata Metadata
+	State    *state.Store
+	// StateContext ends shared-state maintenance while the day log can still drain.
+	StateContext  context.Context
 	Now           func() time.Time
 	FlushInterval time.Duration
 	SweepInterval time.Duration
@@ -83,7 +85,7 @@ func Open(home string, options StoreOptions) (*Store, error) {
 	store := &Store{queue: NewQueue(), directory: directory, options: options, flush: make(chan chan error), stop: make(chan struct{}), done: make(chan struct{}), pendingIssues: map[string]pendingIssue{}, published: map[string]time.Time{}}
 	err := store.recoverIssues()
 	if err == nil {
-		err = store.sweep()
+		err = store.sweep(context.Background(), false)
 	}
 	if err != nil {
 		if store.db != nil {
@@ -152,6 +154,9 @@ func (s *Store) recordError(err error) {
 	}
 }
 
+// Give each flush one budget, including all batches and issue transactions.
+const flushBudget = 5 * time.Second
+
 func (s *Store) run() {
 	defer close(s.done)
 	sweep := time.NewTicker(s.options.SweepInterval)
@@ -182,62 +187,77 @@ func (s *Store) run() {
 			pendingError = err
 		}
 	}
-	flush := func() {
+	flushEvents := func(ctx context.Context) {
 		if flushDue != nil {
 			timer.Stop()
 			flushDue = nil
 		}
 		if len(batch) != 0 {
-			failed(s.writeBatch(batch))
+			if err := s.writeBatch(ctx, batch); err != nil {
+				failed(fmt.Errorf("write diagnostic day log: %w", err))
+			}
 			batch = batch[:0]
 		}
-		failed(s.publishIssues(false))
+	}
+	flush := func(ctx context.Context, force bool) {
+		flushEvents(ctx)
+		failed(s.maintainState(ctx, force))
 		if s.options.Now().Sub(s.swept) >= s.options.SweepInterval {
-			failed(s.sweep())
+			failed(s.sweep(ctx, true))
 		}
 		// Coalesced issue counts still need to publish if no more events arrive.
 		if len(s.pendingIssues) != 0 {
 			armFlush()
 		}
 	}
-	add := func(event Event) {
+	withBudget := func(run func(context.Context)) {
+		ctx, cancel := context.WithTimeout(context.Background(), flushBudget)
+		defer cancel()
+		run(ctx)
+	}
+	add := func(event Event) bool {
 		batch = append(batch, event)
-		if len(batch) == 256 {
-			flush()
-		} else if len(batch) == 1 {
+		if len(batch) == 1 {
 			armFlush()
 		}
+		return len(batch) == cap(batch)
 	}
-	drain := func() {
+	drain := func(ctx context.Context, force bool) {
 		for range len(s.queue.Events) {
-			add(<-s.queue.Events)
+			if add(<-s.queue.Events) {
+				flushEvents(ctx)
+			}
 		}
-		flush()
+		flush(ctx, force)
 	}
-	for {
+	flushPeriodically := func(ctx context.Context) { flush(ctx, false) }
+	if len(s.pendingIssues) != 0 {
+		armFlush()
+	}
+	for !s.closed.Load() {
 		select {
 		case event := <-s.queue.Events:
-			add(event)
+			if add(event) {
+				withBudget(flushPeriodically)
+			}
 		case <-flushDue:
-			flush()
+			withBudget(flushPeriodically)
 		case <-sweep.C:
-			flush()
+			withBudget(flushPeriodically)
 		case reply := <-s.flush:
-			drain()
+			withBudget(func(ctx context.Context) { drain(ctx, false) })
 			reply <- pendingError
 			pendingError = nil
 		case <-s.stop:
-			drain()
-			s.recordError(s.publishIssues(true))
-			if s.db != nil {
-				s.recordError(s.db.Close())
-			}
-			return
 		}
+	}
+	withBudget(func(ctx context.Context) { drain(ctx, true) })
+	if s.db != nil {
+		s.recordError(s.db.Close())
 	}
 }
 
-func (s *Store) openDay(day string) error {
+func (s *Store) openDay(ctx context.Context, day string) error {
 	if s.db != nil && s.day == day {
 		return nil
 	}
@@ -264,27 +284,27 @@ func (s *Store) openDay(day string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := db.Exec(daySchema); err != nil {
+	if _, err := db.ExecContext(ctx, daySchema); err != nil {
 		return errors.Join(err, db.Close())
 	}
 	var hasFlag bool
-	if err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM pragma_table_info('events') WHERE name='error_trace')").Scan(&hasFlag); err != nil {
+	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM pragma_table_info('events') WHERE name='error_trace')").Scan(&hasFlag); err != nil {
 		return errors.Join(err, db.Close())
 	}
 	if !hasFlag {
-		if _, err := db.Exec(`BEGIN IMMEDIATE; ALTER TABLE events ADD COLUMN error_trace INTEGER NOT NULL DEFAULT 0;
+		if _, err := db.ExecContext(ctx, `BEGIN IMMEDIATE; ALTER TABLE events ADD COLUMN error_trace INTEGER NOT NULL DEFAULT 0;
 UPDATE events SET error_trace=id WHERE trace_id IN (SELECT trace_id FROM events WHERE level='error'); COMMIT;`); err != nil {
 			return errors.Join(err, db.Close())
 		}
 	}
-	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS events_error_trace ON events(error_trace) WHERE error_trace>0"); err != nil {
+	if _, err := db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS events_error_trace ON events(error_trace) WHERE error_trace>0"); err != nil {
 		return errors.Join(err, db.Close())
 	}
 	s.db, s.day = db, day
 	return nil
 }
 
-func (s *Store) writeBatch(events []Event) error {
+func (s *Store) writeBatch(ctx context.Context, events []Event) error {
 	byDay := map[string][]Event{}
 	for _, event := range events {
 		day := event.TS.UTC().Format(time.DateOnly)
@@ -300,20 +320,20 @@ func (s *Store) writeBatch(events []Event) error {
 	}
 	slices.Sort(days)
 	for _, day := range days {
-		if err := s.openDay(day); err != nil {
+		if err := s.openDay(ctx, day); err != nil {
 			return err
 		}
-		if err := s.insert(byDay[day]); err != nil {
+		if err := s.insert(ctx, byDay[day]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Store) insert(events []Event) error {
+func (s *Store) insert(ctx context.Context, events []Event) error {
 	if s.options.State != nil {
 		aliases := map[string]bool{}
-		rows, err := s.options.State.Reader.Query("SELECT node_id FROM local_node_aliases")
+		rows, err := s.options.State.Reader.QueryContext(ctx, "SELECT node_id FROM local_node_aliases")
 		if err != nil {
 			return err
 		}
@@ -328,7 +348,7 @@ func (s *Store) insert(events []Event) error {
 		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 			return err
 		}
-		node, err := s.options.State.NodeID(context.Background())
+		node, err := s.options.State.NodeID(ctx)
 		if err != nil {
 			return err
 		}
@@ -345,17 +365,17 @@ func (s *Store) insert(events []Event) error {
 	if err != nil {
 		return err
 	}
-	tx, err := s.db.Begin()
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	statement, err := tx.Prepare(`INSERT OR IGNORE INTO events(ts,duration_us,trace_id,span_id,node_id,proc,kind,name,level,status,session_id,user,fingerprint,stack,attrs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,jsonb(?))`)
+	statement, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO events(ts,duration_us,trace_id,span_id,node_id,proc,kind,name,level,status,session_id,user,fingerprint,stack,attrs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,jsonb(?))`)
 	if err != nil {
 		return err
 	}
 	defer statement.Close()
-	stackStatement, err := tx.Prepare("INSERT OR IGNORE INTO stacks(hash,text) VALUES (?,?)")
+	stackStatement, err := tx.PrepareContext(ctx, "INSERT OR IGNORE INTO stacks(hash,text) VALUES (?,?)")
 	if err != nil {
 		return err
 	}
@@ -365,7 +385,7 @@ func (s *Store) insert(events []Event) error {
 		if event.Stack != "" {
 			hash := sha256.Sum256([]byte(event.Stack))
 			stack = hash[:]
-			if _, err := stackStatement.Exec(stack, event.Stack); err != nil {
+			if _, err := stackStatement.ExecContext(ctx, stack, event.Stack); err != nil {
 				return err
 			}
 		}
@@ -378,7 +398,7 @@ func (s *Store) insert(events []Event) error {
 		if event.Fingerprint != "" {
 			fingerprint = event.Fingerprint
 		}
-		_, err := statement.Exec(event.TS.UnixMicro(), event.DurationUS, trace, span, event.NodeID, event.Proc, event.Kind, event.Name, event.Level, event.Status, session, event.User, fingerprint, stack, string(attrs))
+		_, err := statement.ExecContext(ctx, event.TS.UnixMicro(), event.DurationUS, trace, span, event.NodeID, event.Proc, event.Kind, event.Name, event.Level, event.Status, session, event.User, fingerprint, stack, string(attrs))
 		return err
 	}
 	accounting := issueBatch{store: s, tx: tx, counters: map[string]*dayIssue{}, samples: map[string]string{}, sources: map[string]int64{}}
@@ -426,12 +446,12 @@ func (s *Store) insert(events []Event) error {
 	}
 	// A positive flag is a forwarding position: late failures promote earlier spans beyond saved cursors.
 	var position int64
-	if err := tx.QueryRow("SELECT COALESCE(max(error_trace),0) FROM events WHERE error_trace>0").Scan(&position); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(max(error_trace),0) FROM events WHERE error_trace>0").Scan(&position); err != nil {
 		return err
 	}
 	for _, event := range events {
 		trace, _ := hex.DecodeString(event.TraceID)
-		if _, err := tx.Exec(`UPDATE events SET error_trace=?+id WHERE trace_id=? AND error_trace=0
+		if _, err := tx.ExecContext(ctx, `UPDATE events SET error_trace=?+id WHERE trace_id=? AND error_trace=0
 AND (? OR EXISTS(SELECT 1 FROM events WHERE trace_id=? AND error_trace>0))`, position, trace, event.Level == "error" || event.ErrorTrace, trace); err != nil {
 			return err
 		}
@@ -459,7 +479,7 @@ func logFileSize(path string) (int64, error) {
 	return total, nil
 }
 
-func (s *Store) sweep() error {
+func (s *Store) sweep(ctx context.Context, prune bool) error {
 	entries, err := os.ReadDir(s.directory)
 	if err != nil {
 		return err
@@ -503,8 +523,10 @@ func (s *Store) sweep() error {
 	if deferred {
 		return nil
 	}
-	if err := s.pruneIssueCursors(cutoff); err != nil {
-		return err
+	if prune {
+		if err := s.withStateContext(ctx, func(ctx context.Context) error { return s.pruneIssueCursors(ctx, cutoff) }); err != nil {
+			return err
+		}
 	}
 	s.swept = s.options.Now()
 	return nil

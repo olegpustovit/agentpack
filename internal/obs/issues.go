@@ -171,7 +171,38 @@ func issueTitle(event Event) string {
 	return boundedString(event.Name+" failed", 256)
 }
 
-func (s *Store) publishIssues(force bool) error {
+func (s *Store) maintainState(ctx context.Context, force bool) error {
+	if len(s.pendingIssues) == 0 {
+		return nil
+	}
+	err := s.withStateContext(ctx, func(ctx context.Context) error { return s.publishIssues(ctx, force) })
+	if err != nil {
+		return fmt.Errorf("publish diagnostic issues to state.db: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) withStateContext(ctx context.Context, run func(context.Context) error) error {
+	lifetime := s.options.StateContext
+	if lifetime == nil {
+		return run(ctx)
+	}
+	if lifetime.Err() != nil {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(lifetime, cancel)
+	defer cancel()
+	defer stop()
+	err := run(ctx)
+	if lifetime.Err() != nil {
+		// Unpublished counters remain in the day files for recovery after restart.
+		return nil
+	}
+	return err
+}
+
+func (s *Store) publishIssues(ctx context.Context, force bool) error {
 	if s.options.State == nil {
 		return nil
 	}
@@ -184,9 +215,9 @@ func (s *Store) publishIssues(force bool) error {
 	}
 	for fingerprint, keys := range groups {
 		slices.Sort(keys)
-		err := state.Transaction(context.Background(), s.options.State.DB, func(tx *sql.Tx) error {
+		err := state.Transaction(ctx, s.options.State.DB, func(tx *sql.Tx) error {
 			for _, key := range keys {
-				if err := publishIssue(tx, s.pendingIssues[key]); err != nil {
+				if err := publishIssue(ctx, tx, s.pendingIssues[key]); err != nil {
 					return err
 				}
 			}
@@ -203,19 +234,19 @@ func (s *Store) publishIssues(force bool) error {
 	return nil
 }
 
-func publishIssue(tx *sql.Tx, pending pendingIssue) error {
+func publishIssue(ctx context.Context, tx *sql.Tx, pending pendingIssue) error {
 	counter := pending.Counter
 	// Old day-file cursors keep their keys; only replicated counts follow this machine.
 	var node string
-	if err := tx.QueryRow("SELECT CASE WHEN EXISTS(SELECT 1 FROM local_node_aliases WHERE node_id=?) THEN "+state.LocalNodeSQL+" ELSE ? END", counter.Node, counter.Node).Scan(&node); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT CASE WHEN EXISTS(SELECT 1 FROM local_node_aliases WHERE node_id=?) THEN "+state.LocalNodeSQL+" ELSE ? END", counter.Node, counter.Node).Scan(&node); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("INSERT INTO issues(fingerprint,kind,title,first_seen,sample) VALUES (?,?,?,?,?) ON CONFLICT(fingerprint) DO UPDATE SET first_seen=excluded.first_seen WHERE excluded.first_seen<issues.first_seen", counter.Fingerprint, counter.Kind, counter.Title, counter.FirstSeen, pending.Sample); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO issues(fingerprint,kind,title,first_seen,sample) VALUES (?,?,?,?,?) ON CONFLICT(fingerprint) DO UPDATE SET first_seen=excluded.first_seen WHERE excluded.first_seen<issues.first_seen", counter.Fingerprint, counter.Kind, counter.Title, counter.FirstSeen, pending.Sample); err != nil {
 		return err
 	}
 	var status, fix string
 	var resolvedAt int64
-	if err := tx.QueryRow("SELECT status,resolved_version,resolved_at FROM issues WHERE fingerprint=?", counter.Fingerprint).Scan(&status, &fix, &resolvedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT status,resolved_version,resolved_at FROM issues WHERE fingerprint=?", counter.Fingerprint).Scan(&status, &fix, &resolvedAt); err != nil {
 		return err
 	}
 	versions := make([]string, 0, len(counter.Versions))
@@ -227,7 +258,7 @@ func publishIssue(tx *sql.Tx, pending pendingIssue) error {
 	for _, version := range versions {
 		occurrence := counter.Versions[version]
 		var published int64
-		err := tx.QueryRow("SELECT count FROM issue_log_cursors WHERE day=? AND fingerprint=? AND node_id=? AND version=?", pending.Day, counter.Fingerprint, counter.Node, version).Scan(&published)
+		err := tx.QueryRowContext(ctx, "SELECT count FROM issue_log_cursors WHERE day=? AND fingerprint=? AND node_id=? AND version=?", pending.Day, counter.Fingerprint, counter.Node, version).Scan(&published)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -238,11 +269,11 @@ func publishIssue(tx *sql.Tx, pending pendingIssue) error {
 			continue
 		}
 		trace, _ := hex.DecodeString(occurrence.Trace)
-		if _, err := tx.Exec(`INSERT INTO issue_counts(fingerprint,node_id,count,first_seen,last_seen,last_version,last_trace) VALUES (?,?,?,?,?,?,?)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO issue_counts(fingerprint,node_id,count,first_seen,last_seen,last_version,last_trace) VALUES (?,?,?,?,?,?,?)
 ON CONFLICT(fingerprint,node_id) DO UPDATE SET count=issue_counts.count+excluded.count,first_seen=min(issue_counts.first_seen,excluded.first_seen),last_seen=max(issue_counts.last_seen,excluded.last_seen),last_version=CASE WHEN excluded.last_seen>=issue_counts.last_seen THEN excluded.last_version ELSE issue_counts.last_version END,last_trace=CASE WHEN excluded.last_seen>=issue_counts.last_seen THEN excluded.last_trace ELSE issue_counts.last_trace END`, counter.Fingerprint, node, delta, occurrence.FirstSeen, occurrence.LastSeen, version, trace); err != nil {
 			return err
 		}
-		if _, err := tx.Exec("INSERT INTO issue_log_cursors(day,fingerprint,node_id,version,count) VALUES (?,?,?,?,?) ON CONFLICT(day,fingerprint,node_id,version) DO UPDATE SET count=excluded.count", pending.Day, counter.Fingerprint, counter.Node, version, occurrence.Count); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO issue_log_cursors(day,fingerprint,node_id,version,count) VALUES (?,?,?,?,?) ON CONFLICT(day,fingerprint,node_id,version) DO UPDATE SET count=excluded.count", pending.Day, counter.Fingerprint, counter.Node, version, occurrence.Count); err != nil {
 			return err
 		}
 		if status == "resolved" && occurrence.LastSeen > resolvedAt && versionAtLeast(version, fix) {
@@ -250,7 +281,7 @@ ON CONFLICT(fingerprint,node_id) DO UPDATE SET count=issue_counts.count+excluded
 		}
 	}
 	if reopen {
-		_, err := tx.Exec("UPDATE issues SET status='open',regressed=1 WHERE fingerprint=?", counter.Fingerprint)
+		_, err := tx.ExecContext(ctx, "UPDATE issues SET status='open',regressed=1 WHERE fingerprint=?", counter.Fingerprint)
 		return err
 	}
 	return nil
@@ -278,7 +309,7 @@ func (s *Store) recoverIssues() error {
 		if _, err := time.Parse(time.DateOnly, day); err != nil {
 			continue
 		}
-		if err := s.openDay(day); err != nil {
+		if err := s.openDay(context.Background(), day); err != nil {
 			return err
 		}
 		rows, err := s.db.Query("SELECT key,value FROM meta WHERE key LIKE 'issue:%'")
@@ -315,13 +346,18 @@ func (s *Store) recoverIssues() error {
 			s.pendingIssues[day+":"+key] = pendingIssue{day, counter, sample}
 		}
 	}
-	return s.publishIssues(true)
+	return nil
 }
 
-func (s *Store) pruneIssueCursors(cutoff string) error {
+func (s *Store) pruneIssueCursors(ctx context.Context, cutoff string) error {
 	if s.options.State == nil {
 		return nil
 	}
-	_, err := s.options.State.DB.Exec("DELETE FROM issue_log_cursors WHERE day < ?", cutoff)
+	var expired bool
+	err := s.options.State.Reader.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM issue_log_cursors WHERE day < ?)", cutoff).Scan(&expired)
+	if err != nil || !expired {
+		return err
+	}
+	_, err = s.options.State.DB.ExecContext(ctx, "DELETE FROM issue_log_cursors WHERE day < ?", cutoff)
 	return err
 }

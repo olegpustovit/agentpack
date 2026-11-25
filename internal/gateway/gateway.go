@@ -135,7 +135,10 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 		}
 		defer func() { result = errors.Join(result, store.Close()) }()
 	}
-	nodeID, err := store.NodeID(context.Background())
+	if ctx.Err() != nil {
+		return nil
+	}
+	nodeID, err := store.NodeID(ctx)
 	if err != nil {
 		return err
 	}
@@ -151,19 +154,22 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	if err != nil {
 		return err
 	}
-	logs, err := obs.Open(options.Home, obs.StoreOptions{Metadata: obs.BuildMetadata(options.Version, nodeID, "gateway"), State: store})
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	logs, err := obs.Open(options.Home, obs.StoreOptions{Metadata: obs.BuildMetadata(options.Version, nodeID, "gateway"), State: store, StateContext: ctx})
 	if err != nil {
 		return err
 	}
-	defer func() { result = errors.Join(result, logs.Close()) }()
+	defer func() {
+		cancel()
+		result = errors.Join(result, logs.Close())
+	}()
 	restoreDiagnostics := obs.SetDefault(logs, obs.BuildMetadata(options.Version, nodeID, "gateway"))
 	defer restoreDiagnostics()
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	gateway := &Gateway{options: options, store: store, logs: logs, auth: auth, local: network.NodeRecord{Address: listener.Addr().String(), Secret: network.RandomToken()}, origin: origin, stop: cancel, done: ctx.Done(), archiveWake: make(chan struct{}, 1)}
 	gateway.nodeIDCache.Store(nodeID)
 	defer func() { result = errors.Join(result, gateway.cleanStateTransfers(time.Time{})) }()
-	if err := gateway.loadPublic(context.Background()); err != nil {
+	if err := gateway.loadPublic(ctx); err != nil {
 		return err
 	}
 	gateway.reapStoppedChats(obs.WithSink(ctx, logs, obs.BuildMetadata(options.Version, nodeID, "gateway")))
@@ -198,7 +204,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 		return err
 	}
 	defer os.Remove(record)
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
+	server := &http.Server{Handler: handler, BaseContext: func(net.Listener) context.Context { return ctx }, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute, MaxHeaderBytes: 16 << 10}
 	defer server.Close()
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()

@@ -464,3 +464,48 @@ func TestUnpreservableArchiveEditIsQuarantinedWithoutHoldingTheCursor(t *testing
 		t.Fatalf("cursor %d: %v", cursor, err)
 	}
 }
+
+type pausedChangeWriter struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (w pausedChangeWriter) Write(p []byte) (int, error) {
+	select {
+	case <-w.started:
+	default:
+		close(w.started)
+	}
+	<-w.release
+	return len(p), nil
+}
+
+func TestBulkReplicationKeepsForegroundReaderAvailable(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Reader.SetMaxOpenConns(1)
+
+	writer := pausedChangeWriter{make(chan struct{}), make(chan struct{})}
+	done := make(chan error, 1)
+	go func() { done <- s.Replicator().WriteVersion(t.Context(), 0, nil, writer) }()
+	defer func() {
+		close(writer.release)
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	select {
+	case <-writer.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replication did not start writing")
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if _, err := s.NodeID(ctx); err != nil {
+		t.Fatalf("foreground reader waited behind replication: %v", err)
+	}
+}
