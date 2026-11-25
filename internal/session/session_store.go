@@ -16,9 +16,9 @@ const sessionWriteColumns = `id,last_used,folder_id,name,directory,definition_ro
 	transport,agent_session_id,agent_capabilities,conversation_state,state,started_at,started_by,title,worktree_of`
 
 // goal, subagents, waiting and an ACP chat's conversation_state are written by its log's sink (storeConversationFold), so upserts never clobber them.
-// Upserts set worktree_of, parent_id, tools and replace_subagents only on insert.
-// Tools can change via POST /tools. A negative replace_subagents value keeps native subagents.
-const SessionColumns = sessionWriteColumns + ",node_id,ended_at,archived_at,goal,subagents,waiting,last_event_at,parent_id,tools,(replace_subagents < 0)"
+// Upserts set worktree_of, parent_id, tools and keep_native_subagents only on insert.
+// Tools can change via POST /tools.
+const SessionColumns = sessionWriteColumns + ",node_id,ended_at,archived_at,goal,subagents,waiting,last_event_at,parent_id,tools,keep_native_subagents"
 
 func SessionValues(info SessionInfo) ([]any, error) {
 	if info.ID == "" {
@@ -46,8 +46,8 @@ func SessionValues(info SessionInfo) ([]any, error) {
 		string(owner), info.Title, info.WorktreeOf, email, info.ParentID, info.Tools, info.KeepNativeSubagents}, nil
 }
 
-const InsertSessionSQL = `INSERT INTO sessions (` + sessionWriteColumns + `,node_id,owner_email,parent_id,tools,replace_subagents)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,` + state.LocalNodeSQL + `,?,?,?,-?)`
+const InsertSessionSQL = `INSERT INTO sessions (` + sessionWriteColumns + `,node_id,owner_email,parent_id,tools,keep_native_subagents)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,` + state.LocalNodeSQL + `,?,?,?,?)`
 
 func UpsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
 	args, err := SessionValues(info)

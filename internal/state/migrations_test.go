@@ -66,7 +66,7 @@ func TestSessionsMigrationDefaultsAndEventIdentity(t *testing.T) {
 		"conversation_truncated": false, "archived_at": false, "archived_seq": false, "title": false, "goal": false, "subagents": false, "waiting": false, "parent_id": false, "tools": false, "worktree_of": false,
 		"model": false, "turns": false, "output_tokens": false, "input_tokens": false,
 		"cache_read_tokens": false, "cache_write_tokens": false, "cost_micros": false,
-		"wanted_config": false, "replace_subagents": false,
+		"wanted_config": false, "keep_native_subagents": false,
 	}
 	rows, err := store.Reader.Query("PRAGMA table_info(sessions)")
 	if err != nil {
@@ -185,10 +185,10 @@ func TestConversationProgressMigrationPreservesSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	var label string
-	var lastSeq, lastEvent, truncated, replaceSubagents int64
-	if err := db.QueryRow("SELECT name,last_seq,last_event_at,conversation_truncated,replace_subagents FROM sessions WHERE id='existing'").
-		Scan(&label, &lastSeq, &lastEvent, &truncated, &replaceSubagents); err != nil || label != "Keep this label" || lastSeq != 0 || lastEvent != 0 || truncated != 0 || replaceSubagents != 0 {
-		t.Fatalf("upgrade changed session: name=%q seq=%d last_event=%d truncated=%d replace_subagents=%d err=%v", label, lastSeq, lastEvent, truncated, replaceSubagents, err)
+	var lastSeq, lastEvent, truncated, keepNativeSubagents int64
+	if err := db.QueryRow("SELECT name,last_seq,last_event_at,conversation_truncated,keep_native_subagents FROM sessions WHERE id='existing'").
+		Scan(&label, &lastSeq, &lastEvent, &truncated, &keepNativeSubagents); err != nil || label != "Keep this label" || lastSeq != 0 || lastEvent != 0 || truncated != 0 || keepNativeSubagents != 0 {
+		t.Fatalf("upgrade changed session: name=%q seq=%d last_event=%d truncated=%d keep_native_subagents=%d err=%v", label, lastSeq, lastEvent, truncated, keepNativeSubagents, err)
 	}
 }
 

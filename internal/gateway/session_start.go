@@ -127,23 +127,21 @@ func (g *Gateway) serveForkSession(w http.ResponseWriter, r *http.Request) {
 			ID: input.ID, Directory: record.Session.Directory, Harness: record.Session.Harness,
 			Mode: record.Session.Mode, Transport: "acp", ParentID: input.ParentID, Tools: &record.Session.Tools,
 			forkSessionID: record.Session.AgentSessionID, definitionRoot: record.Session.DefinitionRoot,
+			forkKeepNativeSubagents: record.Session.KeepNativeSubagents,
 		})
 		writeSessionStart(w, r, info, err)
 		return
 	}
-	info := session.SessionInfo{
-		Directory:      record.Session.Directory,
-		DefinitionRoot: record.Session.DefinitionRoot,
-		Harness:        record.Session.Harness,
-		Mode:           record.Session.Mode,
-		Transport:      "acp",
-		ParentID:       input.ParentID,
-	}
-	if err := g.applyAgentDefaults(r.Context(), &info, &record.Session.Tools); err != nil {
-		fail(w, r, err)
-		return
-	}
-	info, err = g.startSession(r.Context(), actor, info, record.Session.AgentSessionID)
+	info, err := g.startSession(r.Context(), actor, session.SessionInfo{
+		Directory:           record.Session.Directory,
+		DefinitionRoot:      record.Session.DefinitionRoot,
+		Harness:             record.Session.Harness,
+		Mode:                record.Session.Mode,
+		Transport:           "acp",
+		ParentID:            input.ParentID,
+		Tools:               record.Session.Tools,
+		KeepNativeSubagents: record.Session.KeepNativeSubagents,
+	}, record.Session.AgentSessionID)
 	writeSessionStart(w, r, info, err)
 }
 
@@ -323,8 +321,9 @@ type chatStartRequest struct {
 	WorktreeName string `json:"worktree_name,omitempty"`
 	Carry        bool   `json:"carry,omitempty"`
 
-	forkSessionID  string
-	definitionRoot string
+	forkSessionID           string
+	definitionRoot          string
+	forkKeepNativeSubagents bool
 }
 
 var (
@@ -372,7 +371,10 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor session.Actor, input
 		ParentID: input.ParentID, StartedBy: &actor,
 		ConversationState: "starting", Reachable: true,
 	}
-	if err := g.applyAgentDefaults(ctx, &info, input.Tools); err != nil {
+	if input.forkSessionID != "" {
+		info.Tools = input.Tools != nil && *input.Tools
+		info.KeepNativeSubagents = input.forkKeepNativeSubagents
+	} else if err := g.applyAgentDefaults(ctx, &info, input.Tools); err != nil {
 		return session.SessionInfo{}, err
 	}
 	if input.Worktree != "" && info.AgentSessionID != "" {

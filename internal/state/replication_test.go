@@ -18,7 +18,7 @@ func TestReplicatedTablesTrackChangesAndLocalTablesStayLocal(t *testing.T) {
 	for table, statement := range map[string]string{
 		"users":                "INSERT INTO users(email,password_hash) VALUES ('member@example.com','hash')",
 		"node_settings":        "INSERT INTO node_settings(node_id,key,value) VALUES ('node','sharing','{}')",
-		"sessions":             "INSERT INTO sessions(id,name,replace_subagents) VALUES ('session','Chat',-1)",
+		"sessions":             "INSERT INTO sessions(id,name,keep_native_subagents) VALUES ('session','Chat',1)",
 		"conversation_events":  "INSERT INTO conversation_events(session_id,seq,body) VALUES ('session',1,'{}')",
 		"limits":               "INSERT INTO limits(node_id,harness,snapshot) VALUES ('node','codex','{}')",
 		"mesh_settings":        "INSERT INTO mesh_settings(key,value) VALUES ('main_node','node')",

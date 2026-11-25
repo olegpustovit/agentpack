@@ -238,7 +238,7 @@ A chat can use these tools itself. When the worker starts a chat it creates a cr
 
 **agentpack Tools** in a chat's row menu, and the switch in its inspector, call `POST /api/sessions/{id}/tools` with `{"enabled": bool}`. The flag is the replicated `sessions.tools` column, written by the chat's own machine. While it is off, every call with that chat's credential returns "agentpack tools are off for this chat". Turning tools back on takes effect on the next call without a reload.
 
-The gateway owner can set the mesh-wide defaults for new chats in **Settings → Agents**. Both Agentpack Tools and Replace built-in subagents are on by default. An explicit `tools` value in a chat start request overrides the tools default. Each chat keeps its subagent setting through a restart or resume. When agentpack tools are available, that setting controls whether Claude and Codex keep their built-in subagents.
+The gateway owner can set the mesh-wide defaults for new chats in **Settings → Agents**. Both Agentpack Tools and Replace built-in subagents are on by default. An explicit `tools` value in a chat start request overrides the tools default. Each chat keeps its subagent setting through a restart or resume. A fork inherits the source chat’s tools and subagent settings. When agentpack tools are available, that setting controls whether Claude and Codex keep their built-in subagents.
 
 ### Agents messaging each other
 
