@@ -33,7 +33,7 @@ func acpLaunch(ctx base.LaunchContext) (base.ACPLaunch, error) {
 	}
 	command := base.ACPAdapterCommand(binary)
 	command.Env = append(os.Environ(), "CODEX_HOME="+home)
-	if ctx.AgentpackTools {
+	if ctx.ReplaceSubagents {
 		config, err := withoutSubagents(os.Getenv("CODEX_CONFIG"))
 		if err != nil {
 			return base.ACPLaunch{}, err

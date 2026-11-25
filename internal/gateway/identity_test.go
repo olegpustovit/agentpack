@@ -411,6 +411,7 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 	sourceSession := session.SessionInfo{
 		ID: "session-source", Directory: directory, FolderID: folderID, Harness: "claude",
 		Mode: "default", Transport: "acp", AgentSessionID: "source-session", StartedBy: &owner,
+		KeepNativeSubagents: true,
 	}
 	if err := testRememberACPConversationOwner(t, home, sourceSession, ""); err != nil {
 		t.Fatal(err)
@@ -483,7 +484,7 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 	if response.Code != http.StatusOK || starts != 1 {
 		t.Fatalf("owner fork status=%d starts=%d body=%s", response.Code, starts, response.Body.String())
 	}
-	if receivedForkID != "source-session" || started.AgentSessionID != "" || started.StartedBy == nil || *started.StartedBy != renamedOwner {
+	if receivedForkID != "source-session" || started.Tools || !started.KeepNativeSubagents || started.AgentSessionID != "" || started.StartedBy == nil || *started.StartedBy != renamedOwner {
 		t.Fatalf("private fork launch: forkID=%q session=%+v", receivedForkID, started)
 	}
 	if strings.Contains(response.Body.String(), "source-session") {
@@ -505,8 +506,8 @@ func TestPeerACPForkRequiresSourceOwnerAndRecordsForkedSession(t *testing.T) {
 
 	const id = "session-0123456789abcdef0123456789abcdef"
 	first, retry := request(renamedOwner, id), request(renamedOwner, id)
-	if first.Code != http.StatusOK || retry.Code != http.StatusOK || starts != 2 || started.ID != id {
-		t.Fatalf("fork retry: first=%d retry=%d starts=%d", first.Code, retry.Code, starts)
+	if first.Code != http.StatusOK || retry.Code != http.StatusOK || starts != 2 || started.ID != id || started.Tools || !started.KeepNativeSubagents {
+		t.Fatalf("fork retry: first=%d retry=%d starts=%d session=%+v", first.Code, retry.Code, starts, started)
 	}
 	if response := request(otherPeer, id); response.Code != http.StatusForbidden || starts != 2 {
 		t.Fatalf("non-owner fork replay: status=%d starts=%d", response.Code, starts)

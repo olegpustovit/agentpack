@@ -84,12 +84,15 @@ func (g *Gateway) serveStartSession(w http.ResponseWriter, r *http.Request) {
 		}
 		input.Directory, definitionRoot = directory, g.definitionRootFor(r.Context(), main)
 	}
-	info, err := g.startSession(r.Context(), actor, session.SessionInfo{
+	info := session.SessionInfo{
 		Directory: input.Directory, DefinitionRoot: definitionRoot, Harness: input.Harness, Mode: input.Mode,
-		Transport: input.Transport, AgentSessionID: input.AgentSessionID,
-		// agentpack tools are on for new chats unless the request turns them off.
-		ParentID: input.ParentID, Tools: input.Transport == "acp" && (input.Tools == nil || *input.Tools),
-	}, "")
+		Transport: input.Transport, AgentSessionID: input.AgentSessionID, ParentID: input.ParentID,
+	}
+	if err := g.applyAgentDefaults(r.Context(), &info, input.Tools); err != nil {
+		fail(w, r, err)
+		return
+	}
+	info, err := g.startSession(r.Context(), actor, info, "")
 	writeSessionStart(w, r, info, err)
 }
 
@@ -124,18 +127,20 @@ func (g *Gateway) serveForkSession(w http.ResponseWriter, r *http.Request) {
 			ID: input.ID, Directory: record.Session.Directory, Harness: record.Session.Harness,
 			Mode: record.Session.Mode, Transport: "acp", ParentID: input.ParentID, Tools: &record.Session.Tools,
 			forkSessionID: record.Session.AgentSessionID, definitionRoot: record.Session.DefinitionRoot,
+			forkKeepNativeSubagents: record.Session.KeepNativeSubagents,
 		})
 		writeSessionStart(w, r, info, err)
 		return
 	}
 	info, err := g.startSession(r.Context(), actor, session.SessionInfo{
-		Directory:      record.Session.Directory,
-		DefinitionRoot: record.Session.DefinitionRoot,
-		Harness:        record.Session.Harness,
-		Mode:           record.Session.Mode,
-		Transport:      "acp",
-		ParentID:       input.ParentID,
-		Tools:          record.Session.Tools,
+		Directory:           record.Session.Directory,
+		DefinitionRoot:      record.Session.DefinitionRoot,
+		Harness:             record.Session.Harness,
+		Mode:                record.Session.Mode,
+		Transport:           "acp",
+		ParentID:            input.ParentID,
+		Tools:               record.Session.Tools,
+		KeepNativeSubagents: record.Session.KeepNativeSubagents,
 	}, record.Session.AgentSessionID)
 	writeSessionStart(w, r, info, err)
 }
@@ -316,8 +321,9 @@ type chatStartRequest struct {
 	WorktreeName string `json:"worktree_name,omitempty"`
 	Carry        bool   `json:"carry,omitempty"`
 
-	forkSessionID  string
-	definitionRoot string
+	forkSessionID           string
+	definitionRoot          string
+	forkKeepNativeSubagents bool
 }
 
 var (
@@ -362,8 +368,14 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor session.Actor, input
 	info := session.SessionInfo{
 		ID: input.ID, Directory: filepath.Clean(input.Directory), DefinitionRoot: input.definitionRoot, Harness: input.Harness,
 		Mode: input.Mode, Transport: input.Transport, AgentSessionID: network.CmpOr(input.AgentSessionID, input.Resume),
-		ParentID: input.ParentID, Tools: input.Tools == nil || *input.Tools, StartedBy: &actor,
+		ParentID: input.ParentID, StartedBy: &actor,
 		ConversationState: "starting", Reachable: true,
+	}
+	if input.forkSessionID != "" {
+		info.Tools = input.Tools != nil && *input.Tools
+		info.KeepNativeSubagents = input.forkKeepNativeSubagents
+	} else if err := g.applyAgentDefaults(ctx, &info, input.Tools); err != nil {
+		return session.SessionInfo{}, err
 	}
 	if input.Worktree != "" && info.AgentSessionID != "" {
 		return session.SessionInfo{}, errResumeOwnFolder

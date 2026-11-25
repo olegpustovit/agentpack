@@ -58,6 +58,10 @@ made with, and its creating node for meshes without a Main.
 omp_settings replicates network-wide Oh My Pi settings, one sparse JSON row per changed key.
 Each gateway renders the rows into its own `omp/settings.yml` overlay.
 
+agent_defaults replicates the defaults for new ACP chats. An absent key is enabled.
+The session's keep_native_subagents column stores the policy for the life of the chat.
+Its default of zero preserves replacement when agentpack tools are available.
+
 agent_credentials replicates agent sign-in files, secrets included, so signing an
 agent in on one node signs it in on all of them. Each publish raises the row's `rev`;
 the local `agent_credential_installs` table records what this machine last installed or

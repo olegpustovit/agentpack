@@ -54,7 +54,7 @@ func prepareSessionPlugins(ctx base.LaunchContext) (func([]byte) []byte, error) 
 		settingsPath = ""
 	}
 	var disallowed []string
-	if ctx.AgentpackTools {
+	if ctx.ReplaceSubagents {
 		disallowed = subagentTools
 	}
 	var rewrite func([]byte) []byte

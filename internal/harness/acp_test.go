@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -55,8 +56,9 @@ func TestHarnessACPLaunchCommands(t *testing.T) {
 	for _, key := range []string{"CLAUDE_CODE_PATH", "OPENCODE_PATH", "CODEX_PATH", "GROK_PATH", "AGY_PATH", "CURSOR_AGENT_PATH", "OMP_PATH"} {
 		t.Setenv(key, binary)
 	}
+	t.Setenv("CODEX_CONFIG", `{"agents.enabled":true}`)
 	effective := mode.ImplicitEffective()
-	ctx := base.LaunchContext{ProjectRoot: project, WorkspaceRoot: project, Mode: effective, Yolo: true}
+	ctx := base.LaunchContext{ProjectRoot: project, WorkspaceRoot: project, Mode: effective, Yolo: true, AgentpackTools: true}
 	root, err := opencode.StagingDir(project, effective.Name())
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +80,21 @@ func TestHarnessACPLaunchCommands(t *testing.T) {
 			}
 			if launch.Cmd.Path == "" {
 				t.Fatal("empty Cmd.Path")
+			}
+			switch candidate.Target {
+			case base.Claude:
+				rewrite, err := launch.PrepareSession()
+				if err != nil {
+					t.Fatal(err)
+				}
+				line := []byte(`{"method":"session/new","params":{"cwd":"/tmp"}}`)
+				if rewrite != nil && strings.Contains(string(rewrite(line)), "disallowedTools") {
+					t.Fatal("Claude native subagents were disabled")
+				}
+			case base.Codex:
+				if !slices.Contains(launch.Cmd.Environ(), `CODEX_CONFIG={"agents.enabled":true}`) {
+					t.Fatal("Codex native subagents were disabled")
+				}
 			}
 		})
 	}

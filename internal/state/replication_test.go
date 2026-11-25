@@ -18,7 +18,7 @@ func TestReplicatedTablesTrackChangesAndLocalTablesStayLocal(t *testing.T) {
 	for table, statement := range map[string]string{
 		"users":                "INSERT INTO users(email,password_hash) VALUES ('member@example.com','hash')",
 		"node_settings":        "INSERT INTO node_settings(node_id,key,value) VALUES ('node','sharing','{}')",
-		"sessions":             "INSERT INTO sessions(id,name) VALUES ('session','Chat')",
+		"sessions":             "INSERT INTO sessions(id,name,keep_native_subagents) VALUES ('session','Chat',1)",
 		"conversation_events":  "INSERT INTO conversation_events(session_id,seq,body) VALUES ('session',1,'{}')",
 		"limits":               "INSERT INTO limits(node_id,harness,snapshot) VALUES ('node','codex','{}')",
 		"mesh_settings":        "INSERT INTO mesh_settings(key,value) VALUES ('main_node','node')",
@@ -29,6 +29,7 @@ func TestReplicatedTablesTrackChangesAndLocalTablesStayLocal(t *testing.T) {
 		// Web Push keys and subscriptions replicate on purpose, secrets included: Main sends to every device.
 		"push_keys":          "INSERT INTO push_keys(public_key,private_key,created_at) VALUES ('public','private',1)",
 		"push_subscriptions": "INSERT INTO push_subscriptions(endpoint,email,p256dh,auth,public_key,created_node) VALUES ('https://push.example/1','member@example.com','key','secret','public','node')",
+		"agent_defaults":     `INSERT INTO agent_defaults(key,value) VALUES ('replace_subagents',0)`,
 		"omp_settings":       `INSERT INTO omp_settings(key,value) VALUES ('edit.mode','"patch"')`,
 		// Agent sign-ins replicate on purpose, secrets included: one sign-in serves every node.
 		"agent_credentials": `INSERT INTO agent_credentials(key,value) VALUES ('agy/token','{}')`,
