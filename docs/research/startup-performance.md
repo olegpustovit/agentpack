@@ -1,5 +1,23 @@
 # Home-workspace startup performance
 
+## Agent defaults launch review (2026-11-25)
+
+A new ACP chat reads its defaults once at creation. The worker uses the
+subagent setting from the session it already has on launch and resume.
+
+Medians of five runs on Linux amd64 (Intel Core i9-12900K), before
+(`f543e8a7`) and after the change.
+
+| Benchmark | Before (ms) | After (ms) |
+| --- | ---: | ---: |
+| `BenchmarkMaterializationHome` | 0.766 | 0.765 |
+| `BenchmarkCodexSetup/cold` | 8.574 | 8.675 |
+| `BenchmarkCodexSetup/warm` | 0.134 | 0.134 |
+
+```sh
+go test ./internal/sync -run '^$' -bench '^(BenchmarkMaterializationHome|BenchmarkCodexSetup)$' -benchtime=100ms -count=5
+```
+
 ## Gateway launch review (2026-11-24)
 
 The gateway now checks invalid worktree selections before accepting a launch and

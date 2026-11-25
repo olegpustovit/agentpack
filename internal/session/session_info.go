@@ -54,6 +54,9 @@ type SessionInfo struct {
 	ParentID string `json:"parent_id,omitempty"`
 	// Tools lets the chat's agent call the agentpack MCP server.
 	Tools bool `json:"tools,omitempty"`
+	// KeepNativeSubagents is snapshotted at creation. Older sessions default to replacement.
+	KeepNativeSubagents bool `json:"keep_native_subagents,omitempty"`
+
 	// WorktreeOf is the main folder of the agentpack worktree Directory is in. Older peers omit it.
 	WorktreeOf string `json:"worktree_of,omitempty"`
 }

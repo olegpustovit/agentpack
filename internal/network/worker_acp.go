@@ -92,6 +92,7 @@ func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir s
 		return nil, nil, err
 	}
 	launchCtx.AgentpackTools = launch.Session.Tools && launch.tools.token != ""
+	launchCtx.ReplaceSubagents = launchCtx.AgentpackTools && !launch.Session.KeepNativeSubagents
 	var stageDone <-chan error
 	if launch.StageInWorker {
 		if !harness.ACPStageAtSession {

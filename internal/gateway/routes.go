@@ -116,6 +116,8 @@ var routeTable = []route{
 	{pattern: "POST /api/agents/{harness}/login/{id}", policy: owner, peer: peerWrite},
 	{pattern: "DELETE /api/agents/{harness}/login/{id}", policy: owner, peer: peerWrite},
 	{pattern: "POST /api/agents/{harness}/logout", policy: owner, peer: peerWrite},
+	{pattern: "GET /api/agents/defaults", peer: peerRead},
+	{pattern: "PUT /api/agents/defaults", policy: owner},
 	{pattern: "GET /api/omp/settings", peer: peerRead},
 	{pattern: "GET /api/omp/models", peer: peerRead},
 	{pattern: "PUT /api/omp/settings/{key}", policy: owner},

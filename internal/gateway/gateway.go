@@ -366,6 +366,7 @@ func (g *Gateway) routes() routeMux {
 	g.registerDiagnostics(mux)
 	g.registerMCPCredentials(mux)
 	g.registerWorktrees(mux)
+	g.registerAgentDefaults(mux)
 	g.registerOMP(mux)
 	g.registerTelemetry(mux)
 	g.registerAuth(mux)

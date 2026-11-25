@@ -83,7 +83,7 @@ func TestRoutePoliciesArePinned(t *testing.T) {
 		"POST " + replicationPrefix + "peers", "DELETE " + replicationPrefix + "peers/{peer}", "POST " + replicationPrefix + "sync",
 		"POST /api/agents/{harness}/login", "GET /api/agents/{harness}/login/{id}", "POST /api/agents/{harness}/login/{id}",
 		"DELETE /api/agents/{harness}/login/{id}", "POST /api/agents/{harness}/logout",
-		"PUT /api/omp/settings/{key}", "DELETE /api/omp/settings/{key}", "POST /api/worktrees/remove", "POST /api/worktrees/push",
+		"PUT /api/agents/defaults", "PUT /api/omp/settings/{key}", "DELETE /api/omp/settings/{key}", "POST /api/worktrees/remove", "POST /api/worktrees/push",
 	}
 	cliRoutes := []string{"GET /api/debug/pprof/{name...}", "POST /api/local/sessions/{id}/presence", "DELETE /api/local/sessions/{id}/presence"}
 	// A peer may call these with its verified identity alone; every other peer route needs a forwarded account.
@@ -143,7 +143,7 @@ func TestRoutePoliciesArePinned(t *testing.T) {
 		"POST /api/packages", "POST /api/mcp/servers", "GET /api/projects", "GET /api/folders", "POST /api/folders", "GET /api/folders/found", "GET /api/worktrees",
 		"POST /api/worktrees/remove", "POST /api/worktrees/push", "GET /api/limits", "POST /api/limits/refresh", "GET /api/agents",
 		"POST /api/agents/{harness}/login", "GET /api/agents/{harness}/login/{id}", "POST /api/agents/{harness}/login/{id}",
-		"DELETE /api/agents/{harness}/login/{id}", "POST /api/agents/{harness}/logout", "GET /api/omp/settings", "GET /api/omp/models",
+		"DELETE /api/agents/{harness}/login/{id}", "POST /api/agents/{harness}/logout", "GET /api/agents/defaults", "GET /api/omp/settings", "GET /api/omp/models",
 		"GET /api/node/update", "POST /api/node/update", "POST /api/mcp/credentials/{id}/refresh",
 		"GET /api/sessions", "POST /api/sessions", "PATCH /api/sessions/{id}", "GET /api/sessions/{id}", "GET /api/sessions/{id}/shells",
 		"POST /api/sessions/{id}/detach-shell", "GET /api/sessions/{id}/terminal", "GET /api/sessions/{id}/output", "GET /api/sessions/{id}/conversation",

@@ -16,6 +16,7 @@ DELETE /api/sessions/{id}/conversation/queue/{queueId}
 GET /api/agent-sessions
 GET /api/agent-snapshot
 GET /api/agents
+GET /api/agents/defaults
 GET /api/agents/{harness}/login/{id}
 GET /api/cache/{cache_key}
 GET /api/config
@@ -139,6 +140,7 @@ POST /api/sync/main/release
 POST /api/telemetry
 POST /api/worktrees/push
 POST /api/worktrees/remove
+PUT /api/agents/defaults
 PUT /api/omp/settings/{key}
 PUT /api/projects/mcp-login
 PUT /api/projects/settings

@@ -40,8 +40,9 @@ type LaunchContext struct {
 	// SessionID is the agentpack terminal session this launch runs in (a worker launch only), so
 	// the agent's hooks can report its turns; empty for a plain terminal.
 	SessionID string
-	// AgentpackTools is set when the chat's agent has agentpack tools, which replace its own subagent tool.
-	AgentpackTools bool
+	// AgentpackTools is set when the chat can access agentpack tools.
+	AgentpackTools   bool
+	ReplaceSubagents bool
 }
 
 type MCPProjectedFile struct {
