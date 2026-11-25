@@ -89,6 +89,10 @@ export function FolderBrowser({ browser, query, setQuery, setBrowsing, pick, too
     ? creation.error : null
 
   useEffect(() => {
+    if (browsing) aside.current?.querySelector("input")?.focus()
+  }, [browsing])
+
+  useEffect(() => {
     if (browsing && moved && choices.length) {
       document.getElementById(`${id}-${active}`)?.scrollIntoView({ block: "nearest" })
     }
@@ -148,7 +152,10 @@ export function FolderBrowser({ browser, query, setQuery, setBrowsing, pick, too
       {/* One field: search projects, or type a path (/ or ~/) to browse folders. The filter button and tokens come from the caller. */}
       <div className="flex min-w-0 items-center gap-(--s2) px-(--s5)">
         {browsing && (
-          <Button type="button" variant="ghost" size="icon" aria-label="Back to projects" title="Back to projects (Esc)" disabled={creation.isPending} onClick={() => setBrowsing(false)}>
+          <Button type="button" variant="ghost" size="icon" aria-label="Back to projects" title="Back to projects (Esc)" disabled={creation.isPending} onClick={() => {
+            setBrowsing(false)
+            aside.current?.querySelector("input")?.focus()
+          }}>
             <ChevronLeft aria-hidden />
           </Button>
         )}

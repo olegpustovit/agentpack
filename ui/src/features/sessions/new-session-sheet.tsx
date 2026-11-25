@@ -7,7 +7,7 @@ import { StatusGlyph } from "@/components/kit/status-dot"
 import { Kbd, Spinner } from "@/components/kit/feedback"
 import { FilterButton, FilterChip, FilterFacet, FilterToken } from "@/components/kit/filters"
 import { GroupHeader, SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@/components/kit/list"
-import { Popover, PopoverContent } from "@/components/ui/popover"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { ChevronRight, FolderSearch, History } from "lucide-react"
 import { isFolderPath } from "./folder-path"
 import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
@@ -108,10 +108,9 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
   const [query, setQuery] = useState("")
   const [folderPath, setFolderPath] = useState("~/")
   const [browseFolders, setBrowseFolders] = useState(false)
-  // The machine to browse when no machine filter is set; defaults to this machine.
+  // An explicit browsing choice overrides the machine suggested by the project filter.
   const [browseOn, setBrowseOn] = useState<string | null>(null)
   const [filtersOpen, setFiltersOpen] = useState(false)
-  const filterButton = useRef<HTMLButtonElement>(null)
   const [chooseProjectOnPhone, setChooseProjectOnPhone] = useState(false)
   const isPhone = useIsPhone()
   const [chosenWorkspace, setWorkspace] = useState<string | null>(null)
@@ -126,8 +125,9 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
   const now = Date.now()
   const machineFilter = machines.some((machine) => machine.id === filters.machine) ? filters.machine : "all"
   const agentFilter = agentIds.includes(filters.agent) ? filters.agent : "all"
-  const browserMachine = machines.find((machine) => machine.id === machineFilter)
-    ?? machines.find((machine) => machine.id === browseOn)
+  const filteredMachine = machines.find((machine) => machine.id === machineFilter)
+  const browserMachine = machines.find((machine) => machine.id === browseOn && machine.online)
+    ?? filteredMachine
     ?? machines.find((machine) => machine.id === LOCAL && machine.online)
     ?? online[0]
   const browsing = browseFolders && Boolean(browserMachine)
@@ -169,7 +169,7 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
   const summary = place?.row
   // The suggested project is visible as soon as the sheet opens. Wait for a
   // choice before asking a Mac to inspect that particular project on disk.
-  const explicit = Boolean(project && ((project === pickedProject && picked?.browsed) || listKey(project) === selectedProject || chosenPlace === place?.key))
+  const explicit = Boolean(project && (project === pickedProject || listKey(project) === selectedProject || chosenPlace === place?.key))
   const projectDetails = useQuery({
     ...selectedProjectQuery(place?.machine ?? "", summary?.directory ?? ""),
     enabled: !history && Boolean(explicit && place?.online && summary?.details_deferred),
@@ -229,7 +229,7 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
 
   const worktreeError = showWorkspace && start.input?.worktree && start.error instanceof ApiError && start.error.status === 422 ? start.error.message : undefined
   useEffect(() => {
-    if (worktreeError) worktreeControl.current?.focus()
+    if (worktreeError) worktreeControl.current?.querySelector<HTMLElement>('[role="combobox"]')?.focus()
   }, [worktreeError])
   const showProjectPicker = isPhone && !history && (chooseProjectOnPhone || !row)
   const unavailable = account?.installed === false
@@ -250,7 +250,10 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
 
   function changeFilters(next: typeof filters) {
     if (isPhone && !history) setChooseProjectOnPhone(true)
-    if (filters.machine !== next.machine) setFolderPath("~/")
+    if (filters.machine !== next.machine) {
+      setBrowseOn(null)
+      setFolderPath("~/")
+    }
     setFilters(next)
     saveProjectFilters(next)
     resetProject()
@@ -416,47 +419,47 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
             setChooseProjectOnPhone(false)
           } : undefined}
           tools={!browsing && (
-            <>
-              <FilterButton ref={filterButton} active={filtered} aria-expanded={filtersOpen} onClick={() => setFiltersOpen(!filtersOpen)}
-                aria-label={filtered ? "Filters, on" : "Filters"} title="Filter by machine or agent" />
-              <Popover open={filtersOpen} onOpenChange={setFiltersOpen}>
-                <PopoverContent anchor={filterButton} align="end" sideOffset={6} aria-label="Project filters"
-                  className="w-80 gap-(--s5) rounded-(--r-pop) bg-(--raised) p-(--s5) text-(length:--fs) shadow-(--e-pop) ring-0">
-                  {machines.length > 1 && (
-                    <FilterFacet label="Machine" active={machineFilter !== "all"} onClear={() => changeFilters({ ...filters, machine: "all" })}>
-                      {machineItems.map((item) => (
-                        <FilterChip key={item.value} pressed={machineFilter === item.value} count={machineCount(item.value)}
-                          onClick={() => changeFilters({ ...filters, machine: machineFilter === item.value ? "all" : item.value })}>
-                          {item.offline && <span aria-hidden className="size-1.5 rounded-full border border-dashed border-(--fg3)" />}
-                          {item.label}
-                        </FilterChip>
-                      ))}
-                    </FilterFacet>
-                  )}
-                  <FilterFacet label="Used with" active={agentFilter !== "all"} onClear={() => changeFilters({ ...filters, agent: "all" })}>
-                    {agentIds.filter((agent) => agent === agentFilter || agentCount(agent) > 0).map((agent) => (
-                      <FilterChip key={agent} pressed={agentFilter === agent} count={agentCount(agent)}
-                        onClick={() => changeFilters({ ...filters, agent: agentFilter === agent ? "all" : agent })}>
-                        {harnessName(agent)}
+            <Popover open={filtersOpen} onOpenChange={setFiltersOpen}>
+              <PopoverTrigger render={<FilterButton active={filtered} />} aria-label={filtered ? "Filters, on" : "Filters"} title="Filter by machine or agent" />
+              <PopoverContent align="end" sideOffset={6} aria-label="Project filters"
+                className="w-80 gap-(--s5) rounded-(--r-pop) bg-(--raised) p-(--s5) text-(length:--fs) shadow-(--e-pop) ring-0">
+                {machines.length > 1 && (
+                  <FilterFacet label="Machine" active={machineFilter !== "all"} onClear={() => changeFilters({ ...filters, machine: "all" })}>
+                    {machineItems.map((item) => (
+                      <FilterChip key={item.value} pressed={machineFilter === item.value} count={machineCount(item.value)}
+                        onClick={() => changeFilters({ ...filters, machine: machineFilter === item.value ? "all" : item.value })}>
+                        {item.offline && <span aria-hidden className="size-1.5 rounded-full border border-dashed border-(--fg3)" />}
+                        {item.label}
                       </FilterChip>
                     ))}
                   </FilterFacet>
-                </PopoverContent>
-              </Popover>
-            </>
+                )}
+                <FilterFacet label="Used with" active={agentFilter !== "all"} onClear={() => changeFilters({ ...filters, agent: "all" })}>
+                  {agentIds.filter((agent) => agent === agentFilter || agentCount(agent) > 0).map((agent) => (
+                    <FilterChip key={agent} pressed={agentFilter === agent} count={agentCount(agent)}
+                      onClick={() => changeFilters({ ...filters, agent: agentFilter === agent ? "all" : agent })}>
+                      {harnessName(agent)}
+                    </FilterChip>
+                  ))}
+                </FilterFacet>
+              </PopoverContent>
+            </Popover>
           )}
           filters={browsing ? (
             <div className="flex min-w-0 items-center gap-(--s3) px-(--s5) text-(length:--fs-sm) text-(--fg2)">
               <span className="shrink-0">Browsing on</span>
               <PopupSelect label="Browse folders on" value={browserMachine?.id ?? ""} onValueChange={(machine) => {
                 setFolderPath("~/")
-                if (machineFilter !== "all") changeFilters({ ...filters, machine })
-                else setBrowseOn(machine)
+                setBrowseOn(machine)
+                if (picked?.browsed) {
+                  setPicked(undefined)
+                  resetProject()
+                }
               }} items={machineItems.filter((item) => !item.offline).map(({ value, label }) => ({ value, label }))} />
             </div>
           ) : (filtered || query.trim()) ? (
             <div role="group" aria-label="Active filters" className="flex min-w-0 flex-wrap items-center gap-(--s2) px-(--s5)">
-              {machineFilter !== "all" && <FilterToken label="Machine" value={browserMachine?.name ?? machineFilter} onOpen={() => setFiltersOpen(true)} onRemove={() => changeFilters({ ...filters, machine: "all" })} />}
+              {machineFilter !== "all" && <FilterToken label="Machine" value={filteredMachine?.name ?? machineFilter} onOpen={() => setFiltersOpen(true)} onRemove={() => changeFilters({ ...filters, machine: "all" })} />}
               {agentFilter !== "all" && <FilterToken label="Used with" value={harnessName(agentFilter)} onOpen={() => setFiltersOpen(true)} onRemove={() => changeFilters({ ...filters, agent: "all" })} />}
               <span className="ms-auto flex items-center gap-(--s2) text-(length:--fs-xs) text-(--fg2) tabular-nums">
                 {`${shown.length} of ${total}`}
@@ -550,7 +553,7 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
                         items={modes.map((name) => ({ value: name, label: name === "default" ? "Default mode" : name }))} />
                     )}
                     {showWorkspace && !resuming && (
-                      <div ref={worktreeControl} tabIndex={-1} aria-invalid={worktreeError ? true : undefined} aria-describedby={worktreeError ? worktreeErrorId : undefined} className="contents">
+                      <div ref={worktreeControl} aria-invalid={worktreeError ? true : undefined} aria-describedby={worktreeError ? worktreeErrorId : undefined} className="contents">
                         <PopupSelect label="Workspace" value={workspace} onValueChange={(value) => { setWorkspace(value); start.reset() }}
                           items={[
                             { value: "folder", label: "This folder" },
