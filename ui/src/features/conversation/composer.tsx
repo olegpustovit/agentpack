@@ -329,6 +329,7 @@ export function Composer({
   })
 
   const canSend = (draft.trim().length > 0 || attachments.length > 0) && uploadingFiles.length === 0 && !needsUpdate && !awaitingSignIn && !(resumable && (attachments.length > 0 || resume.isPending))
+  const working = !starting && parent.working
   const nextQueued = parent.queue?.find((item) => !item.steer && !item.delivered)
 
   function submit(steer = false) {
@@ -347,7 +348,7 @@ export function Composer({
       return
     }
     // Writing instead of answering an open question interrupts it, as in the Claude CLI.
-    send.mutate({ text, attachments, clearComposer: true, steer: steer || (parent.needs_you && parent.working) })
+    send.mutate({ text, attachments, clearComposer: true, steer: !starting && (steer || (parent.needs_you && working)) })
   }
 
   const diffPaths = listDiffChanges(parent.items).map((change) => change.path)
@@ -431,7 +432,7 @@ export function Composer({
           queue={parent.queue ?? []}
           machine={machine}
           sessionId={sessionId}
-          readOnly={needsUpdate}
+          readOnly={needsUpdate || starting}
           steering={steerQueued.isPending ? steerQueued.input : undefined}
           steerJoins={steering}
           onSteer={steerQueued.mutate}
@@ -474,7 +475,7 @@ export function Composer({
                 id="conversation-message"
                 aria-label="Message"
                 rows={1}
-                placeholder={needsUpdate ? "Update this peer to open the conversation…" : starting || resume.isPending ? `Starting ${agentName}…` : awaitingSignIn ? "Draft a message while you sign in…" : resumable ? "Draft a message to send when you resume…" : nextQueued ? "Queue another message, or choose Send now on a queued message" : parent.working ? `Queue a message for ${agentName} (⌘↵ ${steering ? "steers" : "interrupts to steer"})` : `Message ${agentName}`}
+                placeholder={needsUpdate ? "Update this peer to open the conversation…" : starting || resume.isPending ? "Queue a message while the agent connects…" : awaitingSignIn ? "Draft a message while you sign in…" : resumable ? "Draft a message to send when you resume…" : nextQueued ? "Queue another message, or choose Send now on a queued message" : working ? `Queue a message for ${agentName} (⌘↵ ${steering ? "steers" : "interrupts to steer"})` : `Message ${agentName}`}
                 value={draft}
                 disabled={needsUpdate}
                 aria-controls={composerHints.length > 0 ? "composer-hints-list" : undefined}
@@ -643,7 +644,7 @@ export function Composer({
                 <ContextRing percent={contextPercent} />
               </button>
             )}
-            {parent.working && (
+            {working && (
               <Button
                 type="button"
                 size="icon"
@@ -656,17 +657,17 @@ export function Composer({
                 {stopping ? <Spinner /> : <Square aria-hidden className="fill-current" />}
               </Button>
             )}
-            {parent.working && canSend && (
+            {working && canSend && (
               <Button type="button" size="sm" variant="ghost" title={steering ? "Send this into the agent's current turn now (⌘↵)" : "Interrupt the agent and send this now (⌘↵)"} onClick={() => submit(true)}>
                 <CornerDownLeft aria-hidden /> Steer
               </Button>
             )}
-            {(!parent.working || canSend) && (
+            {(!working || canSend) && (
               <button
                 type="button"
                 disabled={!canSend}
-                aria-label={parent.working ? "Queue" : resumable ? "Send and resume" : "Send"}
-                title={parent.working ? "Queue for after this turn (↵)" : resumable ? `Start ${agentName} again and send (↵)` : "Send (↵)"}
+                aria-label={starting || working ? "Queue" : resumable ? "Send and resume" : "Send"}
+                title={starting ? "Send when the agent connects (↵)" : working ? "Queue for after this turn (↵)" : resumable ? `Start ${agentName} again and send (↵)` : "Send (↵)"}
                 className="ml-(--s2) grid size-6 shrink-0 place-items-center rounded-full bg-(--accent-fill) text-(--accent-fg) disabled:bg-(--track) disabled:text-(--fg3) [&_svg]:size-(--s4)"
                 onClick={() => submit()}
               >

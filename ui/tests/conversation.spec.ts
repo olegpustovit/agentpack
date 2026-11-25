@@ -874,6 +874,29 @@ test("a starting chat shows the last agent choices before its worker is ready", 
   await expect(page.getByRole("button", { name: "Model", exact: true })).toHaveText("Opus")
 })
 
+test("a starting chat accepts messages without offering to interrupt startup", async ({ page }) => {
+  await page.route("**/api/sessions", (route) => route.fulfill({
+    json: [{ ...session, id: "chat-one", transport: "acp", conversation_state: "starting" }],
+  }))
+  const queued = { seq: 1, ts: 1000, kind: "queued_prompt", payload: { queueId: "first", text: { text: "First message" } } }
+  await page.route("**/api/sessions/chat-one/conversation**", (route) =>
+    route.fulfill({ body: JSON.stringify(queued) + "\n", contentType: "application/x-ndjson" }),
+  )
+  let posted: unknown
+  await page.route("**/api/sessions/chat-one/conversation/prompt", (route) => {
+    posted = route.request().postDataJSON()
+    return route.fulfill({ json: { accepted: true, queued: route.request().headers()["idempotency-key"] } })
+  })
+  await page.goto("/sessions/local/chat-one")
+  await expect(page.getByRole("list", { name: "Queued messages" })).toContainText("First message")
+  await expect(page.getByRole("button", { name: "Send now" })).toHaveCount(0)
+  const composer = page.getByRole("textbox", { name: "Message" })
+  await composer.fill("A follow-up before startup finishes")
+  await expect(page.getByRole("button", { name: "Queue", exact: true })).toBeEnabled()
+  await composer.press("Control+Enter")
+  await expect.poll(() => posted).toEqual({ text: "A follow-up before startup finishes" })
+})
+
 test("a sent message shows before the gateway answers, and a failure puts it back in the composer", async ({ page }) => {
   const ids: Array<string | undefined> = []
   let release: (() => void) | undefined
@@ -1059,7 +1082,7 @@ test("a message to a stopped chat resumes that chat", async ({ page }) => {
   await expect.poll(() => resumed).toEqual({ text: "continue" })
   await expect(composer).toHaveValue("")
   await expect(page).toHaveURL(/\/sessions\/local\/chat-one/)
-  await expect(page.getByPlaceholder(/Starting/)).toBeVisible()
+  await expect(page.getByPlaceholder("Queue a message while the agent connects…")).toBeVisible()
 })
 
 test("an Oh My Pi chat switches to a role's model and thinking from the model menu", async ({ page }) => {
