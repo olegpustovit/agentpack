@@ -309,7 +309,7 @@ func (m *Server) startSession(ctx context.Context, _ *mcp.CallToolRequest, in mc
 			event.Set("session_id", info.ID)
 			var err error
 			if actor, _ := session.ActorFrom(ctx); actor.Chat != "" {
-				_, err = m.ask(ctx, in.Node, info.ID, in.Prompt, "") // an agent's helper answers it
+				_, err = m.ask(ctx, in.Node, info.ID, in.Prompt, "", false) // an agent's helper answers it
 			} else {
 				_, err = m.sendPrompt(ctx, in.Node, info.ID, in.Prompt, false, 2*time.Minute)
 			}
@@ -617,10 +617,10 @@ func (m *Server) chatTools(server *mcp.Server) {
 		out.Truncated = truncated
 		return nil, out, nil
 	})
-	addTool(server, "send_prompt", "Send a message to a chat. It queues behind a running turn, and waits up to 25 seconds for a chat that is still starting.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
+	addTool(server, "send_prompt", "Send a message as the person. Normal delivery waits if the agent is busy. Set steer for Send now when the current work needs to change. Waits up to 25 seconds for a chat that is still starting.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		mcpSessionInput
 		Text  string `json:"text" jsonschema:"The message."`
-		Steer bool   `json:"steer,omitempty" jsonschema:"Interrupt the running turn and send this first."`
+		Steer bool   `json:"steer,omitempty" jsonschema:"Send now. Steer the running turn where supported, or interrupt it and send this first."`
 	}) (*mcp.CallToolResult, mcpPromptResult, error) {
 		if strings.TrimSpace(in.Text) == "" {
 			return nil, mcpPromptResult{}, network.ErrEmptyPrompt
@@ -729,7 +729,7 @@ func (m *Server) chatTools(server *mcp.Server) {
 		if _, out.Session, err = m.startSession(ctx, nil, mcpStartInput{Directory: self.Directory, Agent: mcpAgent(network.CmpOr(string(in.Agent), self.Harness)), Mode: self.Mode}); err != nil {
 			return nil, out, err
 		}
-		asked, err := m.ask(ctx, "", out.Session.ID, in.Prompt, "")
+		asked, err := m.ask(ctx, "", out.Session.ID, in.Prompt, "", false)
 		out.TaskID = asked.TaskID
 		return nil, out, err
 	})

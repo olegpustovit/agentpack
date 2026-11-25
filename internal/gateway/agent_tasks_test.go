@@ -24,6 +24,7 @@ import (
 type receivedPrompt struct {
 	method, path, text, key string
 	from                    *acp.PromptFrom
+	steer                   bool
 }
 
 // fakeChatWorker points a chat fixture at a worker that records each request it is sent.
@@ -61,11 +62,12 @@ func fakeChatWorker(t *testing.T, h *oauthHarness, id string) func() []receivedP
 	var got []receivedPrompt
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Text string `json:"text"`
+			Text  string `json:"text"`
+			Steer bool   `json:"steer"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		mu.Lock()
-		got = append(got, receivedPrompt{r.Method, r.URL.Path, body.Text, r.Header.Get("Idempotency-Key"), network.PromptFromHeader(r)})
+		got = append(got, receivedPrompt{r.Method, r.URL.Path, body.Text, r.Header.Get("Idempotency-Key"), network.PromptFromHeader(r), body.Steer})
 		mu.Unlock()
 		network.WritePromptAccepted(w, "")
 	}))
@@ -162,7 +164,7 @@ func TestAgentsAskReplyAndWakeTheSender(t *testing.T) {
 		t.Fatalf("ask: %s %+v", text, asked)
 	}
 	prompts := toB()
-	if len(prompts) != 1 || prompts[0].from == nil || prompts[0].from.Session != "session-a" || prompts[0].from.Task != asked.TaskID || prompts[0].from.Kind != "ask" ||
+	if len(prompts) != 1 || prompts[0].steer || prompts[0].from == nil || prompts[0].from.Session != "session-a" || prompts[0].from.Task != asked.TaskID || prompts[0].from.Kind != "ask" ||
 		!strings.HasPrefix(prompts[0].text, "[agentpack message · task "+asked.TaskID) || !strings.HasSuffix(prompts[0].text, network.EnvelopeSeparator+"Review auth.go") || !network.ValidOperationID(prompts[0].key) {
 		t.Fatalf("B received %+v", prompts)
 	}
@@ -176,7 +178,7 @@ func TestAgentsAskReplyAndWakeTheSender(t *testing.T) {
 		t.Fatalf("reply: %s %+v", text, replied)
 	}
 	prompts = toA()
-	if len(prompts) != 1 || prompts[0].from == nil || prompts[0].from.Session != "session-b" || prompts[0].from.Kind != "reply" || prompts[0].from.State != "completed" ||
+	if len(prompts) != 1 || prompts[0].steer || prompts[0].from == nil || prompts[0].from.Session != "session-b" || prompts[0].from.Kind != "reply" || prompts[0].from.State != "completed" ||
 		!strings.Contains(prompts[0].text, "[agentpack reply · task "+asked.TaskID+" · completed") || !strings.HasSuffix(prompts[0].text, "Line 4 leaks the token.") {
 		t.Fatalf("A received %+v", prompts)
 	}
@@ -629,11 +631,11 @@ func TestAgentsMessageAcrossMachines(t *testing.T) {
 	one, two, idOne, idTwo := meshPair(t)
 	tokenA, tokenB := chatFixture(t, one, "session-a", ""), chatFixture(t, two, "session-b", "")
 	toA, toB := fakeChatWorker(t, one, "session-a"), fakeChatWorker(t, two, "session-b")
-	asked, text, failed := structured[taskAsked](t, one, tokenA, "ask", map[string]any{"session_id": "session-b", "node": idTwo, "text": "Run the GPU benchmark"})
+	asked, text, failed := structured[taskAsked](t, one, tokenA, "ask", map[string]any{"session_id": "session-b", "node": idTwo, "text": "Change course before the next GPU benchmark", "send_now": true})
 	if failed {
 		t.Fatal("ask across machines:", text)
 	}
-	if last := lastPrompt(t, toB); last.from.Node != idOne || last.from.Task != asked.TaskID {
+	if last := lastPrompt(t, toB); !last.steer || last.from.Node != idOne || last.from.Task != asked.TaskID {
 		t.Fatalf("B received %+v", last)
 	}
 	var fromNode string
