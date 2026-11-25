@@ -125,7 +125,7 @@ export function SessionList() {
       if (row && sessionRules(row).rename) setSheet({ kind: "rename", row })
       return
     }
-    // ⌘⌫ archives the marked rows, or the focused one, as Finder moves to Trash. Confirms only when it would stop an agent.
+    // ⌘⌫ archives the marked rows, or the focused one, as Finder moves to Trash. Confirms only when it would interrupt an agent.
     if ((event.key === "Backspace" || event.key === "Delete") && (isMac ? event.metaKey : event.ctrlKey)) {
       const targets = (marked.size > 0 ? markedRows : rows[current] ? [rows[current]] : []).filter((row) => sessionRules(row).archive)
       if (targets.length === 0) return
@@ -210,9 +210,9 @@ export function SessionList() {
     )
   }
 
-  // Archiving stops running agents first, so that case is reviewed (SES-03); idle rows archive at once.
+  // Archiving stops busy agents first, so that case is reviewed (SES-03); idle rows archive at once.
   function requestArchive(targets: ListedSession[]) {
-    if (targets.some((row) => sessionRules(row).stop)) setConfirm({ kind: "archive", rows: targets })
+    if (targets.some((row) => sessionRules(row).busy)) setConfirm({ kind: "archive", rows: targets })
     else archiveRows(targets)
   }
 

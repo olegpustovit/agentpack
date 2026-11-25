@@ -53,9 +53,13 @@ func prepareSessionPlugins(ctx base.LaunchContext) (func([]byte) []byte, error) 
 	if os.IsNotExist(err) {
 		settingsPath = ""
 	}
+	var disallowed []string
+	if ctx.AgentpackTools {
+		disallowed = subagentTools
+	}
 	var rewrite func([]byte) []byte
-	if len(plugins) > 0 || settingsPath != "" {
-		rewrite = rewriteSessionPlugins(plugins, settingsPath)
+	if len(plugins) > 0 || settingsPath != "" || len(disallowed) > 0 {
+		rewrite = rewriteSessionPlugins(plugins, settingsPath, disallowed)
 	}
 	return rewrite, nil
 }
@@ -84,7 +88,10 @@ func stagedPluginDirs(plugins string) ([]string, error) {
 	return dirs, nil
 }
 
-func rewriteSessionPlugins(pluginDirs []string, settingsPath string) func([]byte) []byte {
+// subagentTools is Claude Code's subagent tool and its older name; agentpack tools start helpers instead.
+var subagentTools = []string{"Agent", "Task"}
+
+func rewriteSessionPlugins(pluginDirs []string, settingsPath string, disallowed []string) func([]byte) []byte {
 	return func(line []byte) []byte {
 		var envelope struct {
 			Method string          `json:"method"`
@@ -140,6 +147,13 @@ func rewriteSessionPlugins(pluginDirs []string, settingsPath string) func([]byte
 		}
 		if settingsPath != "" {
 			options["settings"] = settingsPath
+		}
+		if len(disallowed) > 0 {
+			existing, _ := options["disallowedTools"].([]any)
+			for _, name := range disallowed {
+				existing = append(existing, name)
+			}
+			options["disallowedTools"] = existing
 		}
 		claudeCode["options"] = options
 		meta["claudeCode"] = claudeCode

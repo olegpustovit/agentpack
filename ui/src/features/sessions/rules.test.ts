@@ -45,6 +45,13 @@ describe("sessionRules", () => {
     expect(sessionRules(session({ running: false, ended_at })).resume).toBe(false)
   })
 
+  it("archive confirms only for a terminal agent or a chat with work in progress", () => {
+    expect(sessionRules(session()).busy).toBe(true)
+    expect(sessionRules(session({ transport: "acp", conversation_state: "idle" })).busy).toBe(false)
+    expect(sessionRules(session({ transport: "acp", conversation_state: "working" })).busy).toBe(true)
+    expect(sessionRules(session({ transport: "acp", conversation_state: "idle", waiting: [{} as never] })).busy).toBe(true)
+  })
+
   it("stop needs a running session", () => {
     expect(sessionRules(session({ running: false })).stop).toBe(false)
   })

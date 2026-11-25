@@ -91,6 +91,7 @@ func startACPConversation(ctx context.Context, launch WorkerLaunch, sessionDir s
 	if err != nil {
 		return nil, nil, err
 	}
+	launchCtx.AgentpackTools = launch.Session.Tools && launch.tools.token != ""
 	var stageDone <-chan error
 	if launch.StageInWorker {
 		if !harness.ACPStageAtSession {

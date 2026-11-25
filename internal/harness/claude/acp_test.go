@@ -8,8 +8,8 @@ import (
 )
 
 func TestRewriteSessionPlugins(t *testing.T) {
-	rewrite := rewriteSessionPlugins([]string{"/plugins/agentpack"}, "/plugins/agentpack-bundle/agentpack-settings.json")
-	line := []byte(`{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"/tmp"}}`)
+	rewrite := rewriteSessionPlugins([]string{"/plugins/agentpack"}, "/plugins/agentpack-bundle/agentpack-settings.json", subagentTools)
+	line := []byte(`{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"/tmp","_meta":{"claudeCode":{"options":{"disallowedTools":["WebSearch"]}}}}}`)
 	out := rewrite(line)
 	var envelope struct {
 		Params struct {
@@ -27,6 +27,9 @@ func TestRewriteSessionPlugins(t *testing.T) {
 	}
 	if options["settings"] != "/plugins/agentpack-bundle/agentpack-settings.json" {
 		t.Fatalf("settings=%v", options["settings"])
+	}
+	if got, _ := json.Marshal(options["disallowedTools"]); string(got) != `["WebSearch","Agent","Task"]` {
+		t.Fatalf("disallowedTools=%s", got)
 	}
 	for _, method := range []string{"session/load", "session/resume"} {
 		line := []byte(`{"method":"` + method + `","params":{"sessionId":"id","cwd":"/tmp"}}`)

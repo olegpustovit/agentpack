@@ -167,10 +167,10 @@ export default function CommandPalette({
       list.push({
         id: "archive",
         group: "This session",
-        label: rules.stop ? "Archive session…" : "Archive session",
+        label: rules.busy ? "Archive session…" : "Archive session",
         icon: <Archive aria-hidden />,
-        review: rules.stop,
-        run: () => rules.stop ? setReview({ kind: "archive", session }) : archiveSession(session),
+        review: rules.busy,
+        run: () => rules.busy ? setReview({ kind: "archive", session }) : archiveSession(session),
       })
     }
     if (live && chat && session.agent_session_id && session.agent_capabilities?.sessionCapabilities?.fork) {

@@ -25,6 +25,8 @@ export function sessionRules(session: ListedSession) {
     // A stopped chat starts its agent again on the same conversation.
     resume: !offline && session.transport === "acp" && !session.state.running && Boolean(session.ended_at),
     stop: !offline && !session.ended_at && session.state.running,
+    // Archiving this stops work in progress: a terminal agent may be mid-turn; an idle chat with nothing to wake for is not.
+    busy: !offline && !session.ended_at && session.state.running && (session.transport !== "acp" || session.conversation_state !== "idle" || Boolean(session.waiting?.length)),
     reconnect: !offline && !nonInteractive,
     projectSettings: !session.offline && !pending,
     // Archive writes the replicated row, so an offline machine's sessions can go too.
