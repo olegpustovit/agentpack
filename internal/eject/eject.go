@@ -25,6 +25,7 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/artifacts"
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/agy"
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
@@ -185,7 +186,7 @@ func Eject(opts Options) (Result, error) {
 		case base.Codex:
 			err = planCodex(&p, codexCopy)
 		case base.Agy:
-			err = planAgy(&p, stage)
+			err = planAgy(&p, opts.ProjectRoot, stage)
 		default:
 			err = fmt.Errorf("eject does not write for %s; start it with `agentpack %s`", target, target)
 		}
@@ -435,17 +436,29 @@ func planCodex(p *plan, copied string) error {
 	return nil
 }
 
-func planAgy(p *plan, stage string) error {
+func planAgy(p *plan, projectRoot, stage string) error {
 	bundle := filepath.Join(stage, "agy", paths.StagedAgentpackBundleName)
 	if _, err := os.Stat(filepath.Join(bundle, "plugin.json")); err != nil {
 		return fmt.Errorf("no Antigravity bundle is staged: %w", err)
 	}
 	overlay := filepath.Join(".agents", "plugins", paths.StagedAgentpackBundleName)
-	// The launcher links this path to its staging; that link is Agentpack's own and is replaced.
-	if info, err := os.Lstat(filepath.Join(p.workspace, overlay)); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		if err := os.Remove(filepath.Join(p.workspace, overlay)); err != nil {
+	// The launcher's overlay (a marked copy, or a link from older versions) is Agentpack's own and is replaced.
+	path := filepath.Join(p.workspace, overlay)
+	info, err := os.Lstat(path)
+	_, marker := os.Lstat(filepath.Join(path, agy.OverlayMarker))
+	if err == nil && (info.Mode()&os.ModeSymlink != 0 || marker == nil) {
+		if err := os.RemoveAll(path); err != nil {
 			return err
 		}
+	}
+	// The ejected copy is the project's own: forget the overlay record, or the
+	// next launch would take the copy for an old overlay and replace it.
+	manifest, err := agy.OverlayManifestPath(projectRoot)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(manifest); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return p.copyDir(bundle, overlay)
 }
