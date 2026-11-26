@@ -611,3 +611,22 @@ using the 32 MiB fixture and the benchmark commands above.
 The Windows regression ran on `kyiv-win-1` with different temp roots for the
 builder and launcher. The baseline Windows Codex benchmark could not report
 timings because its cleanup tried to remove a lease held for the process lifetime.
+
+## Shared secrets for agents (2026-11-26)
+
+Linux amd64 (WSL2), Intel i9-12900K, Go 1.27.3. Medians from five interleaved
+runs of ten iterations per revision with the 32 MiB history fixture, both
+binaries in one ext4 temporary directory outside the user's home, CPUs 2 and 4,
+`PATH=/usr/bin:/bin`. The change adds one loopback request when a session worker
+starts an agent; the measured setup code is not touched.
+
+| Benchmark | Before (`351d6440`, ms) | After (ms) | Budget (ms) |
+| --- | ---: | ---: | ---: |
+| `BenchmarkMaterializationHome` | 0.407 | 0.381 | <1 |
+| `BenchmarkCodexSetup/cold` | 8.481 | 8.451 | <20 |
+| `BenchmarkCodexSetup/warm` | 0.157 | 0.159 | <1 |
+
+Use the commands above with `env PATH=/usr/bin:/bin`. With the host's own `PATH`,
+where agent CLIs are installed, `BenchmarkMaterializationHome` measured about
+1.8 s at both revisions: that is not caused by this change and is still to be
+investigated.

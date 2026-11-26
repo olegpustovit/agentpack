@@ -213,6 +213,21 @@ The checkbox writes an override by server name in `[mcp.enabled]` in `agentpack.
 
 Limits: the bridge opens no standalone server-sent-event stream, so notifications a server sends outside a request (such as a changed tool list) arrive only with the next request. Logins use dynamic client registration or a client ID you supply (`--client-id`, or the server's `[mcp.servers.<name>.oauth]`); register the redirect URL that Settings → Vault shows with a pre-registered OAuth app. Removing a machine from the mesh does not erase what it already received: reconnect the logins you want to rotate.
 
+## Shared secrets
+
+An env connection can also be given to your agents, as environment variables, on every machine. It is off until you turn it on:
+
+```sh
+agentpack mcp login --var STRIPE_API_KEY --label stripe     # reads the value hidden
+agentpack mcp approve stripe agentpack:agents
+```
+
+- **Who gets it.** Chats and terminal agents of sessions started by the account that owns the connection, from the web UI, another machine of the mesh, the agentpack tools or the gateway's API. Shells get nothing. Neither does an agent started directly in a terminal with `agentpack claude` and the like: that session belongs to the OS user, not to an account. The machine's local account binding plays no part.
+- **Only as environment variables.** The session worker asks its own gateway over loopback (`GET /api/sessions/{id}/agent-env`, this machine's CLI only) and sets the variables in the agent process, over any value the machine already had. They are not written to launch records, session rows, staged files, launch fingerprints or diagnostics; the `vault.use` event names the connection and session IDs. A replaced value applies at the next agent start. If the gateway cannot answer, the agent starts without them and the failure is recorded.
+- **Never through MCP.** A tool result is saved in replicated chat history and sent to the model provider, so `list_secrets` returns names only.
+- **Reserved names.** `PATH`, `HOME`, `SHELL` and names starting `LD_`, `DYLD_` or `AGENTPACK_`, in any case, cannot be given to agents: the gateway refuses the approval, refuses such a replacement of a connection already given to agents, and drops them again at start. Connections used only by local MCP servers may hold them.
+- **The risk.** An agent with a shell can read the values and may print them into the chat or send them elsewhere. Removing a connection does not erase copies already replicated or printed: rotate the secret at its provider. A gateway older than this feature shows `agentpack:agents` as a plugin approval and gives agents nothing.
+
 ## The gateway's own tools
 
 The gateway serves its own MCP server at `/mcp` (see [Deploy the public gateway](../guides/gateway-deployment.md#connect-an-mcp-client) for sign-in). Every tool publishes an `outputSchema` and returns `structuredContent`, so typed clients such as codemode generate typed results. Closed sets are enums taken from the Go constants: `agent` (`claude`, `agent` for Cursor, `codex`, `opencode`, `grok`, `agy`, `omp`), session `state` (`starting`, `working`, `needs_you`, `idle`, `stopped`), permission `decision` (`allow_once`, `allow_always`, `reject_once`, `reject_always`), `wait`'s `until` (`needs_you`, `idle`, `any`) and task `state` (`submitted`, `working`, `input_required`, `completed`, `failed`, `canceled`, `rejected`). Lists page with `cursor` / `next_cursor`, and the gateway refuses any result over 1 MB.
@@ -226,6 +241,7 @@ The gateway serves its own MCP server at `/mcp` (see [Deploy the public gateway]
 | `respond_permission`, `answer_question` | Answer a request. Repeating an applied answer is a no-op. |
 | `cancel`, `fork_session` | Cancel a turn or one subagent; fork a chat (the agent's own fork of the whole conversation). |
 | `get_usage`, `get_limits` | Usage for an RFC 3339 range (default: the last seven days) and reported plan limits. Read-only. |
+| `list_secrets` | Names only, never a value. `connections` lists your account's stored connections as `id`, `kind`, `label`, `status`, `variables` (an env connection's variable names) and `given_to_agents`; `agents` is the shared sign-in list of `GET /api/agents/shared` and is empty unless you are the gateway owner. See [Shared secrets](#shared-secrets). Read-only. |
 | `run_helper` | For a chat's agent: starts a helper chat in its folder and mode and `ask`s it the task; it returns the helper and `task_id` at once. Agents told to prefer it over a built-in subagent tool the chat cannot show, such as Antigravity's `invoke_subagent`; the parent chat shows the helper as a card. |
 | `ask`, `reply`, `cancel_task`, `tasks` | For a chat's agent: message another chat and get its answer back; see below. |
 | `show` | For a chat's agent: adds a card to its own chat for the person, with a title, Markdown, a table (up to 12 columns and 100 rows) and an image (`image_path` on the chat's machine or inline base64; PNG, JPEG, GIF or WebP). The image goes to the session's blob store; the card does not reach the agent or other chats, and `read_conversation` lists it as a `card`. |
