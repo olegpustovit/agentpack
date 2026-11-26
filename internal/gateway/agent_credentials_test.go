@@ -419,3 +419,44 @@ func TestAgentCredentialRenewalSurvivesShutdownAndAFailedWrite(t *testing.T) {
 		t.Fatalf("spent file republished: row %s rev %d file %s", got.Data, got.Rev, read())
 	}
 }
+
+// With a Main it alone renews, once it has claimed the row; without one the publisher does.
+func TestAgentCredentialOnlyMainRenewsWhileThereIsOne(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	self, err := g.store.NodeID(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	renews := countedRenewal(t, g, self)
+	shared, peerPublish := credentialRow(t, g, "agy/token")
+	if renews() != 1 {
+		t.Fatal("the publisher did not renew without a Main")
+	}
+	archiveRoles(t, g, "birch", "birch")
+	if renews() != 0 || renews() != 0 || shared().Node != self {
+		t.Fatal("a publisher renewed while another machine is Main")
+	}
+
+	// This machine becomes Main while the row still names a peer.
+	archiveRoles(t, g, self, self)
+	row := shared()
+	row.Node = "birch"
+	peerPublish(row)
+	if renews() != 0 || shared().Node != self || shared().Rev != row.Rev {
+		t.Fatalf("Main did not claim the peer's row first: %+v", shared())
+	}
+	if renews() != 1 {
+		t.Fatal("Main did not renew the row it claimed")
+	}
+
+	if released, err := g.store.ReleaseMain(t.Context(), 0); err != nil || !released {
+		t.Fatal(released, err)
+	}
+	if renews() != 0 {
+		t.Fatal("a released Main renewed")
+	}
+	peerPublish(row)
+	if renews() != 0 || shared().Node != "birch" {
+		t.Fatal("a released Main claimed a row")
+	}
+}
