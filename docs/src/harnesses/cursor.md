@@ -25,6 +25,10 @@ agentpack does not install pack content into your real `~/.cursor`. It may creat
 
 Sign in once through Agentpack on any enrolled machine. Agentpack shares Cursor’s native credential file with the other gateways. On macOS, Agentpack sign-in uses Cursor’s file store so the login can travel across machines. An existing keychain-only login needs one sign-in through Agentpack before it can be shared. Expired access tokens and incomplete credential files are skipped.
 
+## Usage limits
+
+Cursor's limits are one monthly billing cycle with four windows: Included usage, Auto models, API models and, when a spending limit is set, On-demand. Reading them needs the shared file sign-in above: a login that exists only in the macOS keychain is not read. A machine with the CLI and no such login shows **Sign-in needed** on the Limits page.
+
 ## Workspace and the agents symlink
 
 `--workspace` defaults to the **current working directory** where you invoked agentpack — not the pack root. In a monorepo where `agentpack.toml` lives in a parent directory, that distinction matters; pass `--workspace <path>` to override.

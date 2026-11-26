@@ -35,6 +35,9 @@ reports neither, so its turns count without tokens, and an agent that reports no
 cost shows "—", never $0. Sessions from before the counters existed are not
 backfilled. A gateway re-reads an agent's limits after its turns, at most every five
 minutes per agent, and the Limits pane asks each online peer to refresh while open.
+For each provider the pane shows the newest reading with a current window; one login
+can be shared by several machines. An Antigravity window nobody has used yet has no
+reset date and reads `starts on first use`.
 
 ## Trust and enrollment
 
