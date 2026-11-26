@@ -844,3 +844,57 @@ func TestVaultSecretsReachOnlyTheAgentProcess(t *testing.T) {
 		})
 	}
 }
+
+func TestListSecretsNamesOnly(t *testing.T) {
+	h := newOAuthHarness(t)
+	g := h.gateway
+	id := setEnvCredential(t, g, testBrowserEmail, "gh", map[string]string{"VAULT_TOKEN": "s3cret-env"}, true)
+	if _, err := g.saveMCPCredential(t.Context(), mcpCredential{Kind: mcp.CredentialHeader, Match: "https://x.example/mcp", Label: "X", Account: testBrowserEmail,
+		State: mcpCredentialState{Generation: 1, Status: mcpStatusConnected, Headers: map[string]string{"Authorization": "Bearer s3cret-header"}}}); err != nil {
+		t.Fatal(err)
+	}
+	const other = "other@example.com"
+	testBrowserSession(t, g.auth, other, "other-cookie")
+	mine := chatFixture(t, h, "session-mine", "")
+	theirs := chatFixture(t, h, "session-theirs", "")
+	member := session.BrowserActor(other)
+	if err := session.UpsertSession(t.Context(), g.store.DB, session.SessionInfo{ID: "session-theirs", Harness: "claude", Transport: "acp", Tools: true, StartedBy: &member}); err != nil {
+		t.Fatal(err)
+	}
+	list := func(token string) (listed struct {
+		Agents      []map[string]any `json:"agents"`
+		Connections []map[string]any `json:"connections"`
+	}, text string) {
+		t.Helper()
+		result, text := callTool(t, mcpClient(t, h, token), "list_secrets", nil)
+		if result.IsError {
+			t.Fatal(text)
+		}
+		data, _ := json.Marshal(result)
+		if bytes.Contains(data, []byte("s3cret")) {
+			t.Fatalf("a value left the gateway: %s", data)
+		}
+		if err := json.Unmarshal([]byte(text), &listed); err != nil {
+			t.Fatal(err)
+		}
+		return listed, text
+	}
+	// The owner's chat and the owner's own MCP client see the same names.
+	for _, token := range []string{mine, h.exchange(t, h.codeForm(h.code(t)), 200).Access} {
+		got, text := list(token)
+		if len(got.Connections) != 2 || len(got.Agents) == 0 || !strings.Contains(text, "VAULT_TOKEN") ||
+			got.Connections[0]["id"] != id || got.Connections[0]["given_to_agents"] != true || got.Connections[1]["given_to_agents"] != false {
+			t.Fatalf("list_secrets: %s", text)
+		}
+	}
+	if got, text := list(theirs); len(got.Connections) != 0 || len(got.Agents) != 0 {
+		t.Fatalf("another account saw: %s", text)
+	}
+	// The one route MCP gained is the list: the secret route still refuses it.
+	r := httptest.NewRequest(http.MethodGet, "/api/mcp/credentials/"+id+"/secret", nil)
+	w := httptest.NewRecorder()
+	g.ServeAPI(w, r.WithContext(session.WithActor(r.Context(), session.Actor{Kind: "mcp", User: testBrowserEmail})), "")
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("secret route: %d %s", w.Code, w.Body)
+	}
+}

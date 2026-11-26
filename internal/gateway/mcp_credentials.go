@@ -661,7 +661,11 @@ func (g *Gateway) registerMCPCredentials(mux routeRegistrar) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /api/mcp/credentials", func(w http.ResponseWriter, r *http.Request) {
-		_, account, ok := credentialAccount(r)
+		actor, account, ok := credentialAccount(r)
+		// Names only, so list_secrets may read it too; every other credential route stays closed to MCP.
+		if !ok && actor.Kind == "mcp" && actor.User != "" {
+			account, ok = actor.User, true
+		}
 		if !ok {
 			http.Error(w, "an enabled account is required for MCP credentials", http.StatusForbidden)
 			return
