@@ -526,6 +526,64 @@ func (g *Gateway) ownedMCPCredential(w http.ResponseWriter, r *http.Request) (mc
 	return credential, actor, true
 }
 
+// agentEnvName reports whether a variable may reach an agent from a shared secret: nothing that
+// changes which programs or libraries run, or agentpack itself. Windows ignores case, so this does too.
+func agentEnvName(name string) bool {
+	upper := strings.ToUpper(name)
+	return envNamePattern.MatchString(name) && upper != "PATH" && upper != "HOME" && upper != "SHELL" &&
+		!strings.HasPrefix(upper, "LD_") && !strings.HasPrefix(upper, "DYLD_") && !strings.HasPrefix(upper, "AGENTPACK_")
+}
+
+// reservedForAgents refuses an env credential that is given to agents, or is about to be, while it
+// holds a name agents never get. Other env credentials, which only local MCP servers read, may.
+func reservedForAgents(values map[string]string) error {
+	for name := range values {
+		if !agentEnvName(name) {
+			return fmt.Errorf("the variable %s is reserved and cannot be given to agents", name)
+		}
+	}
+	return nil
+}
+
+// agentSecrets is what the agent of session id gets as environment variables: the env credentials
+// that the account which started the session gives to agents. The machine's local account binding
+// plays no part, and names are checked again because rows replicate.
+func (g *Gateway) agentSecrets(ctx context.Context, id string) (network.AgentSecrets, error) {
+	var secrets network.AgentSecrets
+	info, err := session.StoredSession(ctx, g.store.Reader, id)
+	if err != nil {
+		return secrets, err
+	}
+	owner := info.StartedBy
+	if info.Transport == "shell" || owner == nil || !owner.HasAccount() || !g.accountEnabled(ctx, owner.User) {
+		return secrets, nil
+	}
+	credentials, err := g.listMCPCredentials(ctx, owner.User)
+	if err != nil {
+		return secrets, err
+	}
+	for _, credential := range credentials {
+		if credential.Kind != mcp.CredentialEnv || !slices.Contains(credential.Plugins, mcp.AgentsModule) {
+			continue
+		}
+		used := false
+		for name, value := range credential.State.Env {
+			// A NUL byte would stop the agent from starting at all.
+			if !agentEnvName(name) || strings.ContainsRune(value, 0) {
+				continue
+			}
+			if secrets.Env == nil {
+				secrets.Env = map[string]string{}
+			}
+			secrets.Env[name], used = value, true
+		}
+		if used {
+			secrets.Credentials = append(secrets.Credentials, credential.ID)
+		}
+	}
+	return secrets, nil
+}
+
 func credentialFailure(w http.ResponseWriter, r *http.Request, err error) {
 	if event := obs.From(r.Context()); event != nil {
 		event.Fail(err)
@@ -603,7 +661,11 @@ func (g *Gateway) registerMCPCredentials(mux routeRegistrar) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /api/mcp/credentials", func(w http.ResponseWriter, r *http.Request) {
-		_, account, ok := credentialAccount(r)
+		actor, account, ok := credentialAccount(r)
+		// Names only, so list_secrets may read it too; every other credential route stays closed to MCP.
+		if !ok && actor.Kind == "mcp" && actor.User != "" {
+			account, ok = actor.User, true
+		}
 		if !ok {
 			http.Error(w, "an enabled account is required for MCP credentials", http.StatusForbidden)
 			return
@@ -638,6 +700,20 @@ func (g *Gateway) registerMCPCredentials(mux routeRegistrar) {
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		// Saving the same label replaces the values and keeps the approvals.
+		if err := reservedForAgents(credential.State.Env); err != nil {
+			existing, listErr := g.listMCPCredentials(r.Context(), account)
+			if listErr != nil {
+				credentialFailure(w, r, listErr)
+				return
+			}
+			if slices.ContainsFunc(existing, func(old mcpCredential) bool {
+				return old.Kind == mcp.CredentialEnv && old.Label == credential.Label && slices.Contains(old.Plugins, mcp.AgentsModule)
+			}) {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 		id, err := g.saveMCPCredential(r.Context(), credential)
 		if err != nil {
@@ -703,6 +779,16 @@ func (g *Gateway) registerMCPCredentials(mux routeRegistrar) {
 			http.Error(w, "a package module ID is required", http.StatusBadRequest)
 			return
 		}
+		if module == mcp.AgentsModule {
+			if credential.Kind != mcp.CredentialEnv {
+				http.Error(w, "only an env credential can be given to agents", http.StatusBadRequest)
+				return
+			}
+			if err := reservedForAgents(credential.State.Env); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		if err := g.store.Credentials().Approve(r.Context(), credential.ID, module); err != nil {
 			credentialFailure(w, r, err)
 			return
@@ -734,7 +820,8 @@ func (g *Gateway) registerMCPCredentials(mux routeRegistrar) {
 		if !ok {
 			return
 		}
-		if actor.Kind != "local" || !g.localRequest(r) || !g.accountEnabled(r.Context(), credential.Account) {
+		// callerCLI, not localRequest: a chat's agentpack tools act as its owner, who may be a local actor.
+		if actor.Kind != "local" || callerOf(r.Context()) != callerCLI || !g.accountEnabled(r.Context(), credential.Account) {
 			http.Error(w, "local access only", http.StatusForbidden)
 			return
 		}
@@ -744,6 +831,20 @@ func (g *Gateway) registerMCPCredentials(mux routeRegistrar) {
 			return
 		}
 		network.WriteJSON(w, secret)
+	})
+	// A session worker asks what to put in its agent's environment. The route is cli-only: values
+	// never go to a peer, a browser or an MCP client.
+	mux.HandleFunc("GET /api/sessions/{id}/agent-env", func(w http.ResponseWriter, r *http.Request) {
+		secrets, err := g.agentSecrets(r.Context(), r.PathValue("id"))
+		if errors.Is(err, session.ErrSessionNotFound) {
+			http.Error(w, "session not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			credentialFailure(w, r, err)
+			return
+		}
+		network.WriteJSON(w, secrets)
 	})
 	// A bridge whose token was rejected, or a peer asking the refresher (Main), asks for a newer one.
 	mux.HandleFunc("POST /api/mcp/credentials/{id}/refresh", func(w http.ResponseWriter, r *http.Request) {

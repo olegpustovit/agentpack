@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +45,8 @@ type WorkerLaunch struct {
 
 	tools             chatTools
 	replaceMissingACP bool
+	// secretsHome is set by the worker that launches an agent, so only agents get shared secrets.
+	secretsHome string
 }
 
 // WorkerRecord is private connection material, readable only by the local OS
@@ -216,6 +220,7 @@ func (worker *workerRuntime) run(ctx, startCtx context.Context, started *obs.Eve
 			return 1, err
 		}
 		launch.tools = NewChatTools(worker.home, filepath.Base(directory))
+		launch.secretsHome = worker.home
 		if launch.tools.Close != nil {
 			defer launch.tools.Close()
 		}
@@ -312,11 +317,61 @@ func (worker *workerRuntime) startTerminal(ctx context.Context, validate func() 
 	}
 	command.Dir, command.Env = launch.Directory, append(append([]string(nil), environment...), "AGENTPACK_SESSION=1", "AGENTPACK_SESSION_ID="+filepath.Base(directory))
 	command.Env = append(command.Env, "AGENTPACK_TRACE="+obs.ParseTraceParent(obs.TraceParent(ctx)).ID)
+	if launch.Transport != "shell" {
+		command.Env = append(command.Env, agentSecretEnvironment(ctx, worker.home, filepath.Base(directory))...)
+	}
 	session, err := StartSession(command, rows, columns)
 	if session != nil {
 		session.shell = launch.Transport == "shell"
 	}
 	return session, err
+}
+
+// AgentSecrets is the local gateway's answer for what one session's agent gets as environment variables.
+type AgentSecrets struct {
+	Env         map[string]string `json:"env,omitempty"`
+	Credentials []string          `json:"credentials,omitempty"`
+}
+
+// agentSecretEnvironment asks the local gateway for the shared secrets of the account that started
+// session id. The values belong in the agent process's environment and nowhere else: not the launch,
+// the session row, a file or a log. When they cannot be read the agent starts without them.
+func agentSecretEnvironment(ctx context.Context, home, id string) []string {
+	node, err := LoadNode(home)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil // no gateway has run on this machine, so there is nothing to give
+	}
+	var secrets AgentSecrets
+	if err == nil {
+		err = func() error {
+			response, err := LocalRequest(ctx, WorkerRecord{Address: node.Address, Secret: node.Secret}, http.MethodGet, "/api/sessions/"+url.PathEscape(id)+"/agent-env", "", 5*time.Second)
+			if err != nil {
+				return err
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				return fmt.Errorf("gateway refused the agent environment: %s", response.Status)
+			}
+			if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&secrets) != nil {
+				secrets = AgentSecrets{}
+				return errors.New("unreadable agent environment")
+			}
+			return nil
+		}()
+	}
+	if err == nil && len(secrets.Credentials) == 0 {
+		return nil
+	}
+	_, event := obs.Start(ctx, "vault", "use")
+	event.Set("session_id", id)
+	event.Set("connections", secrets.Credentials) // IDs only; obs would redact a key named credentials
+	event.Fail(err)
+	event.End()
+	environment := make([]string, 0, len(secrets.Env))
+	for name, value := range secrets.Env {
+		environment = append(environment, name+"="+value)
+	}
+	return environment
 }
 
 func (worker *workerRuntime) sessionRecord(ctx context.Context) (WorkerRecord, error) {

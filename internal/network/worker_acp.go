@@ -366,6 +366,9 @@ func connectACP(ctx context.Context, launch WorkerLaunch, workspace string, acpL
 	cmd.Stdout, cmd.Stderr, cmd.Dir = agentOutW, stderr, workspace
 	cmd.Env = workerAgentEnvironment(launch.Environment, cmd.Env, workspace)
 	cmd.Env = append(cmd.Env, "AGENTPACK_TRACE="+obs.ParseTraceParent(obs.TraceParent(ctx)).ID)
+	if launch.secretsHome != "" {
+		cmd.Env = append(cmd.Env, agentSecretEnvironment(ctx, launch.secretsHome, launch.Session.ID)...)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("open ACP adapter stdin: %w", err), acpLaunch.Finished())

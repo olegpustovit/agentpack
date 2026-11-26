@@ -22,6 +22,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/acp"
 	"github.com/olegpustovit/agentpack/internal/gateway/mesh"
 	"github.com/olegpustovit/agentpack/internal/harness"
+	packmcp "github.com/olegpustovit/agentpack/internal/mcp"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/session"
@@ -487,6 +488,10 @@ func (m *Server) tools(server *mcp.Server) {
 		out.Packages, err = callAPI[[]network.ProjectPackage](ctx, m, in.Node, "GET", "/api/packages?directory="+url.QueryEscape(in.Directory), nil)
 		return nil, out, err
 	})
+	addTool(server, "list_secrets", "List the agent sign-ins and stored connections of your account by name. Values are never returned: a connection given_to_agents is already in your environment under its variable names if your chat started after it was given.", readOnly, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, mcpSecrets, error) {
+		out, err := m.listSecrets(ctx)
+		return nil, out, err
+	})
 	addTool(server, "install_package", "Install an agentpack package in a previously used folder and automatically restart affected running agents.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpInstallInput) (*mcp.CallToolResult, struct {
 		Installed bool `json:"installed"`
 	}, error) {
@@ -498,6 +503,56 @@ func (m *Server) tools(server *mcp.Server) {
 		}{in.Directory, in.Spec})
 		return nil, out, err
 	})
+}
+
+type mcpSecrets struct {
+	Agents      []map[string]any `json:"agents" jsonschema:"Shared agent sign-ins; only the gateway owner sees them."`
+	Connections []mcpConnection  `json:"connections"`
+}
+
+// mcpConnection is a stored connection by name. It has no field that could carry a value.
+type mcpConnection struct {
+	ID            string   `json:"id"`
+	Kind          string   `json:"kind"`
+	Label         string   `json:"label"`
+	Status        string   `json:"status"`
+	Variables     []string `json:"variables,omitempty" jsonschema:"Environment variable names of an env connection."`
+	GivenToAgents bool     `json:"given_to_agents"`
+}
+
+func (m *Server) listSecrets(ctx context.Context) (mcpSecrets, error) {
+	out := mcpSecrets{Agents: []map[string]any{}, Connections: []mcpConnection{}}
+	signIns, err := callAPI[struct {
+		Agents []map[string]any `json:"agents"`
+	}](ctx, m, "", "GET", "/api/agents/shared", nil)
+	if err != nil && apiStatus(err) != http.StatusForbidden {
+		return out, err
+	}
+	if len(signIns.Agents) > 0 {
+		out.Agents = signIns.Agents
+	}
+	list, err := callAPI[struct {
+		Credentials []struct {
+			ID      string   `json:"id"`
+			Kind    string   `json:"kind"`
+			Label   string   `json:"label"`
+			Status  string   `json:"status"`
+			Names   []string `json:"names"`
+			Plugins []string `json:"plugins"`
+		} `json:"credentials"`
+	}](ctx, m, "", "GET", "/api/mcp/credentials", nil)
+	if err != nil {
+		return out, err
+	}
+	for _, credential := range list.Credentials {
+		connection := mcpConnection{ID: credential.ID, Kind: credential.Kind, Label: credential.Label, Status: credential.Status,
+			GivenToAgents: credential.Kind == packmcp.CredentialEnv && slices.Contains(credential.Plugins, packmcp.AgentsModule)}
+		if credential.Kind == packmcp.CredentialEnv {
+			connection.Variables = credential.Names
+		}
+		out.Connections = append(out.Connections, connection)
+	}
+	return out, nil
 }
 
 // apiError is a gateway answer outside 2xx; its text is the tool's error message.

@@ -83,6 +83,10 @@ local. A bridge reads a secret only through the local gateway for the bound
 account. Main (or the creating node) is the only refresher of a rotating
 refresh token; other nodes ask it over the mesh. See `docs/src/concepts/mcp.md`.
 
+An env connection approved for `agentpack:agents` is a shared secret: it is never
+returned by MCP and reaches only agent processes (never shells), as environment
+variables, in sessions started by its owning account.
+
 Web Push keys and subscriptions (`push_keys`, `push_subscriptions`) also
 replicate their secrets: Main notifies every device, and without a Main each
 node notifies the subscriptions it created. The oldest key pair is current;

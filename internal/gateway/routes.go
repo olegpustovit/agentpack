@@ -190,6 +190,8 @@ var routeTable = []route{
 	{pattern: "GET /api/sessions", peer: peerRead},
 	{pattern: "POST /api/sessions", peer: peerWrite, timeout: timeoutLong},
 	{pattern: "GET /api/sessions/{id}", peer: peerRead}, // the replicated row; read on any node
+	// Secret values for this machine's own worker: never routed to another node, never given an ETag.
+	{pattern: "GET /api/sessions/{id}/agent-env", policy: cli, noETag: true},
 	{pattern: "PATCH /api/sessions/{id}", peer: peerWrite, session: true},
 	{pattern: "GET /api/sessions/{id}/shells", peer: peerRead, session: true},
 	{pattern: "POST /api/sessions/{id}/detach-shell", peer: peerWrite, session: true},

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -1510,5 +1511,56 @@ func TestAntigravityPromptSteerVersionFence(t *testing.T) {
 	waitConversationState(t, conv, "idle")
 	if got := strings.Join(agent.recordedMethods(), ","); got != "initialize,session/new,session/prompt,session/cancel,session/prompt" {
 		t.Fatalf("wire methods for pre-1.5.0 = %q", got)
+	}
+}
+
+// A chat's agent process gets the shared secrets; a probe that is no session's agent gets none, and
+// a gateway that cannot answer never stops the start.
+func TestVaultSecretsInACPAgentEnvironment(t *testing.T) {
+	home := t.TempDir()
+	status := http.StatusOK
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/sessions/session-vault/agent-env" || r.Header.Get("Authorization") != "Bearer "+strings.Repeat("x", 64) {
+			t.Errorf("unexpected request %s", r.URL.Path)
+		}
+		w.WriteHeader(status)
+		WriteJSON(w, AgentSecrets{Env: map[string]string{"VAULT_TOKEN": "s3cret-value"}, Credentials: []string{"mcpc-1"}})
+	}))
+	t.Cleanup(gateway.Close)
+	record, _ := json.Marshal(NodeRecord{Address: gateway.Listener.Addr().String(), Secret: strings.Repeat("x", 64)})
+	if err := os.MkdirAll(filepath.Join(home, "network"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "network", "node.json"), record, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environment := func(secretsHome string) []string {
+		t.Helper()
+		launch := WorkerLaunch{Session: session.SessionInfo{ID: "session-vault"}, Environment: []string{"VAULT_TOKEN=from-the-machine"}, secretsHome: secretsHome}
+		acpLaunch := base.ACPLaunch{Cmd: exec.Command("agent")}
+		client := acp.NewHarnessClient(home, acp.NewEventLog(0), acp.NewBroker(nil, nil, nil, nil))
+		process, err := connectACP(t.Context(), launch, home, &acpLaunch, client, io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = process.agentOutW.Close()
+		_ = process.clientInW.Close()
+		_ = process.stdin.Close()
+		<-process.adapted
+		if !slices.Equal(launch.Environment, []string{"VAULT_TOKEN=from-the-machine"}) {
+			t.Fatal("the launch itself changed")
+		}
+		return process.cmd.Env
+	}
+	// The last entry of a name is the one the process sees.
+	if got := environment(home); !slices.Contains(got, "VAULT_TOKEN=s3cret-value") || slices.Index(got, "VAULT_TOKEN=s3cret-value") < slices.Index(got, "VAULT_TOKEN=from-the-machine") {
+		t.Fatalf("agent environment %v", got)
+	}
+	if got := environment(""); slices.Contains(got, "VAULT_TOKEN=s3cret-value") {
+		t.Fatal("a probe got a shared secret")
+	}
+	status = http.StatusServiceUnavailable
+	if got := environment(home); slices.Contains(got, "VAULT_TOKEN=s3cret-value") {
+		t.Fatal("a refused answer was used")
 	}
 }

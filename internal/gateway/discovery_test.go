@@ -133,7 +133,8 @@ func TestLibraryPeerRoutesCoverConflictsAndVersions(t *testing.T) {
 // named here as local-only, so a new route cannot silently fail remotely.
 func TestPeerPatternsCoverSessionRoutes(t *testing.T) {
 	// show is only called by a chat's own agent, through the gateway of the machine the chat runs on.
-	localOnly := map[string]bool{"GET /api/sessions/{id}": true, "POST /api/sessions/{id}/conversation/show": true}
+	// agent-env hands this machine's own worker secret values.
+	localOnly := map[string]bool{"GET /api/sessions/{id}": true, "GET /api/sessions/{id}/agent-env": true, "POST /api/sessions/{id}/conversation/show": true}
 	for _, row := range routeTable {
 		if strings.Contains(row.pattern, " /api/sessions/{id}") && !localOnly[row.pattern] && row.peer == peerNone {
 			t.Errorf("%q has no peer access; give it one or name it in localOnly", row.pattern)
