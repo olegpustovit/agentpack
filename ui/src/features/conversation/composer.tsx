@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react"
+import { AttachmentRow } from "./attachment-row"
 import { ArrowUp, AtSign, Check, ChevronDown, CornerDownLeft, Plus, Square, SquareSlash } from "lucide-react"
 import { ConfirmAlert, ConfirmAlertContent, Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
 import { Spinner } from "@/components/kit/feedback"
@@ -459,13 +460,7 @@ export function Composer({
           )}
           <div className="relative flex min-h-(--ctl-h) flex-col gap-(--s2)">
             {attachments.map((item, index) => (
-              <div key={`${item.sha}-${index}`} className="flex items-center gap-(--s2) rounded-(--r-ctl) border-[0.5px] border-(--sep) bg-(--window) p-(--s2)">
-                <img src={item.previewUrl} alt="" className="h-12 w-16 rounded-(--r-row) object-cover" />
-                <span className="min-w-0 flex-1 truncate text-(length:--fs-xs) text-(--fg2)">Image attached · {item.name}</span>
-                <Button type="button" size="sm" variant="ghost" aria-label={`Remove ${item.name}`} disabled={send.isPending} onClick={() => setAttachments((current) => current.filter((_, attachmentIndex) => attachmentIndex !== index))}>
-                  Remove
-                </Button>
-              </div>
+              <AttachmentRow key={`${item.sha}-${index}`} name={item.name} previewUrl={item.previewUrl} disabled={send.isPending} onRemove={() => setAttachments((current) => current.filter((_, attachmentIndex) => attachmentIndex !== index))} />
             ))}
             {uploadingFiles.map((file, index) => (
               <p key={index} role="status" className="truncate px-(--s2) text-(length:--fs-xs) text-(--fg2)">Attaching {file.name}…</p>
