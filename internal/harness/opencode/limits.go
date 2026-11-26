@@ -43,8 +43,9 @@ func ReadLimits(ctx context.Context) base.LimitSnapshot {
 		WriteScope: "none",
 	})
 	if err != nil {
+		// Info, not an issue: an OpenCode without `api` (older builds) fails here on every poll.
 		_, event := obs.Start(obs.ProcessTrace(ctx), "harness", "read OpenCode limits")
-		event.Fail(err)
+		event.Set("probe_error", err.Error())
 		event.End()
 		snapshot.Error = "OpenCode could not report usage limits."
 		return snapshot
