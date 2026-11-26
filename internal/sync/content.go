@@ -17,6 +17,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/cache"
 	"github.com/olegpustovit/agentpack/internal/environment"
 	"github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/agy"
 	"github.com/olegpustovit/agentpack/internal/hooks"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
@@ -265,9 +266,9 @@ func selectedContent(definitionRoot, workspace string, project *manifest.Manifes
 }
 
 // walkDotAgents visits the regular files under a project's .agents in walk
-// order, with their native relative paths. Antigravity's launch puts the
-// staged bundle there (a link, or a copy where links are refused); it is
-// Agentpack's own output, not an input. A missing root has no files.
+// order, with their native relative paths. Antigravity's launch copies the
+// staged bundle there; the copy and the directories it is built in are
+// Agentpack's own output, not inputs. A missing root has no files.
 func walkDotAgents(root string, visit func(relative, path string, entry os.DirEntry) error) error {
 	overlay := filepath.Join(root, "plugins", paths.StagedAgentpackBundleName)
 	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
@@ -277,7 +278,7 @@ func walkDotAgents(root string, visit func(relative, path string, entry os.DirEn
 		if walkErr != nil {
 			return walkErr
 		}
-		if path == overlay {
+		if path == overlay || entry.IsDir() && filepath.Dir(path) == root && strings.HasPrefix(entry.Name(), agy.OverlayTempPrefix) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}

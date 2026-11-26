@@ -8,7 +8,6 @@ import (
 
 	"github.com/gofrs/flock"
 	base "github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/harness/agy"
 	"github.com/olegpustovit/agentpack/internal/harness/codex"
 	"github.com/olegpustovit/agentpack/internal/harness/cursor"
 	"github.com/olegpustovit/agentpack/internal/harness/grok"
@@ -444,7 +443,7 @@ func TestPipelineLaunchStagesOnlySelectedHarness(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			for _, manifestPath := range []func(string) (string, error){cursor.OverlayManifestPath, agy.OverlayManifestPath} {
+			for _, manifestPath := range []func(string) (string, error){cursor.OverlayManifestPath} {
 				tracking, err := manifestPath(project)
 				if err != nil {
 					t.Fatal(err)

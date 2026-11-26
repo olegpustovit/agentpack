@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/agy"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
@@ -69,9 +70,9 @@ func staged(t *testing.T) (string, string) {
 	put(t, filepath.Join(cursor, "cli-config.json"), `{"private": true}`)
 	put(t, filepath.Join(stage, "cursor-home", ".cursor", "hooks.json"),
 		`{"version": 1, "hooks": {"beforeSubmitPrompt": [{"command": "agentpack hook-exec --specs-dir `+esc(cursor)+`/hooks"}]}}`)
-	agy := filepath.Join(stage, "agy", "agentpack-bundle")
-	put(t, filepath.Join(agy, "plugin.json"), `{"name": "agentpack-bundle"}`)
-	put(t, filepath.Join(agy, "mcp_config.json"), mcpJSON)
+	agyBundle := filepath.Join(stage, "agy", "agentpack-bundle")
+	put(t, filepath.Join(agyBundle, "plugin.json"), `{"name": "agentpack-bundle"}`)
+	put(t, filepath.Join(agyBundle, "mcp_config.json"), mcpJSON)
 	codexHome := filepath.Join(stage, "codex-home")
 	put(t, filepath.Join(codexHome, "skills", "demo", "SKILL.md"), "---\nname: demo\n---\nBody\n")
 	put(t, filepath.Join(codexHome, "skills", ".system", "builtin", "SKILL.md"), "builtin\n")
@@ -83,6 +84,36 @@ func staged(t *testing.T) (string, string) {
 
 func all(project string) Options {
 	return Options{ProjectRoot: project, WorkspaceRoot: project, Mode: "default", Targets: Supported()}
+}
+
+func TestEjectReplacesTheLaunchersAgyOverlay(t *testing.T) {
+	project, stage := staged(t)
+	bundle := filepath.Join(stage, "agy", "agentpack-bundle")
+	put(t, filepath.Join(bundle, "skills", "demo", "SKILL.md"), "---\nname: demo\n---\nBody\n")
+	overlay := filepath.Join(project, ".agents", "plugins", "agentpack-bundle")
+	put(t, filepath.Join(overlay, "plugin.json"), `{"name": "agentpack-bundle"}`)
+	put(t, filepath.Join(overlay, "skills", "stale", "SKILL.md"), "stale\n")
+	put(t, filepath.Join(overlay, ".gitignore"), "*\n")
+	put(t, filepath.Join(overlay, agy.OverlayMarker), bundle)
+	manifest, err := agy.OverlayManifestPath(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put(t, manifest, overlay+"\n")
+	for range 2 {
+		if _, err := Eject(Options{ProjectRoot: project, WorkspaceRoot: project, Mode: "default", Targets: []base.Target{base.Agy}}); err != nil {
+			t.Fatal(err)
+		}
+		read(t, filepath.Join(overlay, "skills", "demo", "SKILL.md"))
+		for _, name := range []string{agy.OverlayMarker, ".gitignore", "skills/stale"} {
+			if _, err := os.Lstat(filepath.Join(overlay, name)); !os.IsNotExist(err) {
+				t.Fatalf("%s survived eject: %v", name, err)
+			}
+		}
+		if _, err := os.Stat(manifest); !os.IsNotExist(err) {
+			t.Fatalf("a launch could still replace the ejected copy: %v", err)
+		}
+	}
 }
 
 func TestEjectCopiesRewritesAndRegisters(t *testing.T) {

@@ -24,6 +24,7 @@ Live run, 2026-11-04, Linux ARM64, a project with one staged skill (`gws-drive-u
 | opencode | ok after `session/set_config_option` model `anthropic/claude-fable-5` | its default ACP model `opencode/crouton-alpha-free` needs an OpenCode sign-in and refuses with "Authentication required"; the chat notice now says to pick a signed-in model |
 | grok | ok (after the owner signed in) | yes |
 
+Workspace overlay check, 2026-11-26, Linux amd64, `agy` 1.5.18, after the overlay became a copy: `agy acp` `session/new` listed the pack's skill and command (no model call). One `agy -p "run: echo ok"` with `gemini-3.8-flash-medium` ran the command, applied the pack's `alwaysApply` rule, fired its SessionStart, PreToolUse and Stop hooks and started its stdio MCP server, with no hook denial and no MCP startup error.
 
 Verified harness ACP surface (2026-11-02, j7 §1):
 
@@ -34,7 +35,7 @@ Verified harness ACP surface (2026-11-02, j7 §1):
 | opencode | `opencode acp` | yes | yes | `OPENCODE_CONFIG_DIR` |
 | cursor | `cursor-agent acp` | yes | no resume in probe | five `cursor/*` extensions |
 | grok | `grok agent stdio` | yes | yes | needs `authenticate` when logged out |
-| agy | `agy acp` | not advertised | yes | workspace plugin overlay |
+| agy | `agy acp` | not advertised | yes | workspace plugin copy (agy ignores symlinks) |
 | omp | `omp acp` | yes | yes | `--plugin-dir` staging |
 
 Gaps discovered in-repo only (not re-probed each run): see artifact [j7 PLAN.md](https://artifacts.microapps.space/a/j7t4c503fsmt) WP0 for live staging checks.

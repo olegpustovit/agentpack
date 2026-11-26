@@ -6,8 +6,6 @@
     "agy/agentpack-bundle/agents/check.md": "---\nname: check\ndescription: Check work\n---\n\nCheck it.\n",
     "agy/agentpack-bundle/agents/team/": "",
     "agy/agentpack-bundle/agents/team/check.md": "---\ndescription: Check work\ncolor: blue\nmodel: sonnet\ntools: Read, Grep\ndisallowedTools: Write\nthinkingLevel: high\n---\nCheck it.\n",
-    "agy/agentpack-bundle/commands/": "",
-    "agy/agentpack-bundle/commands/review.md": "---\ndescription: Review a change\n---\n\nReview it.\n",
     "agy/agentpack-bundle/hooks.json": "{\n  \"agentpack\": {\n    \"PreToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"agentpack hook-exec dispatch --target agy --event PreToolUse --specs-dir $ROOT/hooks/_packages\",\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"*\"\n      }\n    ]\n  }\n}\n",
     "agy/agentpack-bundle/hooks/": "",
     "agy/agentpack-bundle/hooks/_packages/": "",
@@ -41,6 +39,8 @@
     "agy/agentpack-bundle/rules/team/check.md": "---\ndescription: Check sources\ntrigger: glob\nglobs: \"**/*.go,**/*.md\"\n---\n\nCheck sources.\n",
     "agy/agentpack-bundle/rules/team/check.mdc": "---\ndescription: Check sources\nglobs: ['**/*.go', '**/*.md']\n---\nCheck sources.\n",
     "agy/agentpack-bundle/skills/": "",
+    "agy/agentpack-bundle/skills/review-command/": "",
+    "agy/agentpack-bundle/skills/review-command/SKILL.md": "---\nname: review-command\ndescription: Review a change\ndisable-model-invocation: true\n---\n\nReview it.\n",
     "agy/agentpack-bundle/skills/review/": "",
     "agy/agentpack-bundle/skills/review/SKILL.md": "---\nname: review\ndescription: Read a change\n---\n\nRead it.\n",
     "agy/agentpack-bundle/skills/review/example.txt": "Supporting file\n"

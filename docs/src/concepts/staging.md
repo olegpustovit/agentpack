@@ -6,7 +6,7 @@ Staging materializes cached packages into the directory layout each harness expe
 
 Staged trees are deliberately kept out of your project's Git repository. They are machine-specific, regenerated on demand from the cache, and can be large. agentpack also does **not** symlink pack content into your real `~/.claude` or `~/.cursor` — that would leak project-specific pins into your global agent config.
 
-Only `agentpack.toml` and `pack.lock` belong in version control. (Two opt-in exceptions exist: the `agentpack agent` and `agentpack agy` launchers create a single workspace symlink — see their harness guides.)
+Only `agentpack.toml` and `pack.lock` belong in version control. (Two opt-in exceptions write into the checkout: `agentpack agent` creates a workspace symlink and `agentpack agy` a copy of the pack that ignores itself in Git — see their harness guides.)
 
 ## Staging root
 

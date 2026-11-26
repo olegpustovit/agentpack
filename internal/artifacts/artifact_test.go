@@ -38,6 +38,18 @@ func TestCursorCommandRendersForOpenCodeAndCursor(t *testing.T) {
 	}
 }
 
+// agy never loads a plugin's commands/.
+func TestAgyCommandRendersAsSkill(t *testing.T) {
+	t.Parallel()
+	artifact, err := artifacts.Parse(".cursor/commands/review-code.md", "# Review code\n", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := artifact.Render(layoutFor(t, harness.Agy)); got.RelativePath != "skills/review-code/SKILL.md" || !strings.Contains(got.Contents, "name: review-code") {
+		t.Fatalf("agy = %#v", got)
+	}
+}
+
 func TestRuleFallsBackToScopedSkillExceptNativeTargets(t *testing.T) {
 	t.Parallel()
 	artifact, err := artifacts.Parse(".cursor/rules/typescript.mdc", "---\ndescription: TypeScript standards\nglobs: **/*.ts\nalwaysApply: true\n---\n\nUse strict types.\n", "")

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/harness/agy"
 	"github.com/olegpustovit/agentpack/internal/harness/cursor"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
 	"github.com/olegpustovit/agentpack/internal/manifest"
@@ -76,6 +77,79 @@ func TestServiceAddsPathDependencyAndStagesIt(t *testing.T) {
 	plugins, _ := paths.StagingPluginsDirForMode(project, "default")
 	if _, err := os.Stat(filepath.Join(plugins, paths.StagedAgentpackBundleName, "skills", "demo", "SKILL.md")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAgyOverlayIsARealCopyThatOtherLaunchesKeep(t *testing.T) {
+	project, home := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	t.Setenv("AGENTPACK_STAGING_ROOT", t.TempDir())
+	source := filepath.Join(project, "demo", "SKILL.md")
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(source, "---\nname: demo\ndescription: Demo\n---\nFirst\n")
+	service := NewService()
+	if _, err := service.Add(t.Context(), project, filepath.Dir(source)); err != nil {
+		t.Fatal(err)
+	}
+	launch := func(target base.Target) bool {
+		t.Helper()
+		_, skipped, err := service.SyncForLaunchOptions(t.Context(), project, SyncOptions{Target: &target})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return skipped
+	}
+	overlay := filepath.Join(project, ".agents", "plugins", paths.StagedAgentpackBundleName)
+	skill := func() string {
+		t.Helper()
+		if err := filepath.WalkDir(overlay, func(path string, entry os.DirEntry, err error) error {
+			if err == nil && entry.Type()&os.ModeSymlink != 0 {
+				t.Fatalf("symlink in the overlay: %s", path)
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(overlay, "skills", "demo", "SKILL.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	launch(base.Agy)
+	skill()
+	launch(base.Claude)
+	if got := skill(); !strings.Contains(got, "First") {
+		t.Fatalf("overlay after a claude launch: %q", got)
+	}
+	// A directory left by an interrupted copy is not a project input.
+	launch(base.Agy)
+	write(filepath.Join(project, ".agents", agy.OverlayTempPrefix+"123", "SKILL.md"), "leftover")
+	if !launch(base.Agy) {
+		t.Fatal("a leftover temporary directory forced a rebuild")
+	}
+	write(source, "---\nname: demo\ndescription: Demo\n---\nSecond\n")
+	// Launches do not read a path dependency's source; a sync does.
+	if _, err := service.Sync(t.Context(), project, SyncOptions{Target: new(base.Agy)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := skill(); !strings.Contains(got, "Second") {
+		t.Fatalf("overlay was not updated: %q", got)
+	}
+	launch(base.Agy)
+	if !launch(base.Agy) {
+		t.Fatal("unchanged launch rebuilt")
 	}
 }
 

@@ -1,5 +1,38 @@
 # Home-workspace startup performance
 
+## Antigravity overlay copy (2026-11-26)
+
+`agy` ignores symlinks, so its launch now copies the staged bundle into
+`.agents/plugins/agentpack-bundle`, and the `.agents` walk skips the
+directories the copy is built in. Medians of five interleaved runs on Linux
+amd64 (WSL2, Intel i9-12900K), baseline `bb942d9e`, with the 32 MiB history
+fixture. The Linux ARM64 reference host was not measured.
+
+| Benchmark | Before | After | Budget |
+| --- | ---: | ---: | ---: |
+| `BenchmarkMaterializationHome` | 0.754 ms | 0.746 ms | <1 ms |
+| `BenchmarkCodexSetup/cold` | 8.278 ms | 8.342 ms | <20 ms |
+| `BenchmarkCodexSetup/warm` | 0.138 ms | 0.136 ms | <1 ms |
+
+Run each revision's `internal/sync` test binary from that directory with
+`/mnt/` entries removed from `PATH`. With WSL's Windows directories on it,
+looking up a harness that is not installed made `BenchmarkMaterializationHome`
+take about 1.8 s on both revisions.
+
+```sh
+"$bench_binary" -test.run '^$' -test.bench '^BenchmarkMaterializationHome$' -test.benchtime=50x -test.cpu=2
+"$bench_binary" -test.run '^$' -test.bench '^BenchmarkCodexSetup$/^(cold|warm)$' -test.benchtime=20x -test.cpu=2
+```
+
+One `agy` launch of the built binary (`AGY_PATH=/bin/true`, a path dependency
+of 15.9 MiB in about 700 files), medians of five. Cold removes the staging
+root, the project state and the overlay first; the package stays cached.
+
+| Launch | Before (link) | After (copy) |
+| --- | ---: | ---: |
+| cold | 181 ms | 215 ms |
+| warm | 16 ms | 16 ms |
+
 ## Shared Cursor sign-in and chat setup (2026-11-25)
 
 On Linux ARM64 (`oracle-vm`), five interleaved runs with the 32 MiB history

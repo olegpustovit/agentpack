@@ -8,9 +8,9 @@ import (
 )
 
 var artifactLayout = artifacts.Layout{
-	NativeKinds:   []artifacts.Kind{artifacts.Skill, artifacts.Command, artifacts.Agent, artifacts.Rule},
-	CommandFields: []string{"description"},
-	Rule:          renderRule,
+	// agy never loads a plugin's commands/, so commands are staged as skills.
+	NativeKinds: []artifacts.Kind{artifacts.Skill, artifacts.Agent, artifacts.Rule},
+	Rule:        renderRule,
 }
 
 // renderRule writes a rule the way Antigravity reads one: a .md file whose

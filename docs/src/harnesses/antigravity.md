@@ -15,22 +15,23 @@ agentpack agy
 agentpack --yolo agy       # adds --dangerously-skip-permissions
 ```
 
-## The workspace plugin symlink
+## The workspace plugin copy
 
-Pack content is staged into `<staging>/modes/<mode>/agy/agentpack-bundle/` with a root `plugin.json`. **Only** `agentpack agy` creates the workspace symlink that exposes it:
+Pack content is staged into `<staging>/modes/<mode>/agy/agentpack-bundle/` with a root `plugin.json`. **Only** `agentpack agy` (a terminal launch or a chat start) copies it to `./.agents/plugins/agentpack-bundle` in the current working directory, the same rule as Cursor's `--workspace`.
 
-```text
-./.agents/plugins/agentpack-bundle  ->  <staging>/.../agy/agentpack-bundle
-```
+It is a real copy because `agy` ignores symbolic links during workspace discovery (observed on 1.5.18: a linked plugin, skills directory, skill or `SKILL.md` is not listed).
 
-This follows the same current-working-directory rule as Cursor's `--workspace`. The symlink is tracked in a per-project overlay manifest for safe cleanup — bare `sync` and the other launchers never create it and remove any stale one. Add `.agents/plugins/agentpack-bundle` to `.gitignore` if you don't want it tracked.
+- The copy holds a `.gitignore` containing `*`, so you add nothing to your own, and a `.agentpack-overlay` marker that says agentpack owns it. The next `agy` launch replaces an owned copy whenever the staged bundle changed. Anything else at that path is left alone, with a warning, and `agy` gets no pack content until you move it.
+- Other launchers and bare `sync` do not touch the copy. A plain `agy` started in that folder also sees it; its hook and MCP commands point into staging, which a reboot can remove until the next `agentpack agy`.
+- A server's `mcp_config.json` can carry headers. The directory is private to your user and ignored by Git, but backups and file sync of the checkout include it.
+- A skill removed from the pack stays in another folder's copy until `agy` is launched there.
 
 ## Staged layout
 
 ```text
 agy/agentpack-bundle/
   plugin.json
-  skills/ agents/ commands/ rules/
+  skills/ agents/ rules/    # commands are staged as skills: agy never loads commands/
   mcp_config.json      # remote MCP servers use serverUrl
 ```
 
@@ -61,7 +62,7 @@ Hooks are staged as `hooks.json` at the root of the staged plugin, in Antigravit
 
 Every entry calls `agentpack hook-exec dispatch`, which runs the package's handlers in a staged copy of the package and answers in Antigravity's output contract. A hook that does not object returns no decision: agentpack never answers `"allow"` for a tool on a hook's behalf, because for Antigravity that approves the tool without asking you.
 
-Nothing is written to `~/.gemini`. The plugin reaches Antigravity through the workspace link `./.agents/plugins/agentpack-bundle`, as its skills and MCP servers do, and Antigravity loads workspace hooks once the folder is trusted. What `agy plugin validate` confirms is that the file is found and parsed; that a session fires the hooks of a workspace plugin can only be seen in a session. An observation with agy 1.0.3 and a Claude-shape `hooks/hooks.json` found that it did not; that file was in the wrong place and shape, so it does not settle the question for the file staged now.
+Nothing is written to `~/.gemini`. The plugin reaches Antigravity through the workspace copy `./.agents/plugins/agentpack-bundle`, as its skills and MCP servers do, and Antigravity loads workspace hooks once the folder is trusted. What `agy plugin validate` confirms is that the file is found and parsed; that a session fires the hooks of a workspace plugin can only be seen in a session. An observation with agy 1.0.3 and a Claude-shape `hooks/hooks.json` found that it did not; that file was in the wrong place and shape, so it does not settle the question for the file staged now.
 
 ## Attribution
 
