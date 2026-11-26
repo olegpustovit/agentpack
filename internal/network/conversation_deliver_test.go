@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -255,5 +256,143 @@ func TestSteeringDoesNotWaitForHistorySave(t *testing.T) {
 	unblock()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// While a permission or question is open nothing is steered into the turn: a plain prompt
+// queues, a person's Send now cancels the turn and goes next, an agent's message waits.
+func TestOpenRequestHoldsPrompts(t *testing.T) {
+	for _, request := range []acp.LogEntry{
+		entry("permission_request", map[string]string{"requestId": "p1"}),
+		entry("elicitation", map[string]string{"elicitationId": "e1"}),
+	} {
+		for _, test := range []struct {
+			name      string
+			send      func(*testing.T, *ConversationSession) error
+			dismisses bool
+		}{
+			{name: "enter", send: func(t *testing.T, conv *ConversationSession) error {
+				_, _, err := conv.Submit(t.Context(), acp.PromptInput{QueueID: "q", Text: "look here"}, false)
+				return err
+			}},
+			{name: "send now", dismisses: true, send: func(t *testing.T, conv *ConversationSession) error {
+				_, _, err := conv.Submit(t.Context(), acp.PromptInput{QueueID: "q", Text: "look here"}, true)
+				return err
+			}},
+			{name: "queued chip", dismisses: true, send: func(t *testing.T, conv *ConversationSession) error {
+				if _, _, err := conv.Submit(t.Context(), acp.PromptInput{QueueID: "q", Text: "look here"}, false); err != nil {
+					return err
+				}
+				return conv.SteerQueued(t.Context(), "q")
+			}},
+			{name: "agent message", send: func(t *testing.T, conv *ConversationSession) error {
+				_, _, err := conv.Submit(t.Context(), messageFromAgent("q", "look here"), true)
+				return err
+			}},
+			{name: "goal pause", send: func(t *testing.T, conv *ConversationSession) error {
+				conv.pauseNativeGoal(t.Context())
+				return nil
+			}},
+		} {
+			t.Run(request.Kind+"/"+test.name, func(t *testing.T) {
+				log := acp.NewEventLog(0)
+				prompts, end := make(chan string, 4), make(chan string, 4)
+				var cancels atomic.Int32
+				broker := acp.NewBroker(func(ctx context.Context, input acp.PromptInput) error {
+					log.Append("prompt", 1, PromptLogPayload(input))
+					if input.Text == "first" {
+						log.Append(request.Kind, 1, request.Payload)
+					}
+					acp.Accepted(ctx)
+					prompts <- input.Text
+					log.Append("turn_end", 1, MustRawJSON(map[string]string{"stopReason": <-end}))
+					return nil
+				}, func(context.Context) error { cancels.Add(1); end <- "cancelled"; return nil }, nil, nil)
+				conv := NewConversationSession(log, broker)
+				var steered atomic.Int32
+				conv.steer = func(context.Context, acp.PromptInput) (bool, error) { steered.Add(1); return false, nil }
+				next := func() string {
+					select {
+					case text := <-prompts:
+						return text
+					case <-time.After(2 * time.Second):
+						t.Fatal("no prompt reached the agent")
+						return ""
+					}
+				}
+				if _, _, err := conv.Submit(t.Context(), acp.PromptInput{Text: "first"}, false); err != nil {
+					t.Fatal(err)
+				}
+				next()
+				waitConversationState(t, conv, "needs_you")
+				if err := test.send(t, conv); err != nil {
+					t.Fatal(err)
+				}
+				if steered.Load() != 0 {
+					t.Fatal("a prompt was steered into a held turn")
+				}
+				if !test.dismisses {
+					if cancels.Load() != 0 || len(queuedIDs(conv)) != 1 {
+						t.Fatalf("cancels %d, queue %v", cancels.Load(), queuedIDs(conv))
+					}
+					end <- "cancelled" // let the agent go
+				}
+				if got := next(); got != "look here" && got != "/goal clear" {
+					t.Fatalf("next prompt = %q", got)
+				}
+				end <- "end_turn"
+				waitConversationState(t, conv, "idle")
+				waitReleased(conv)
+				if test.dismisses && cancels.Load() != 1 {
+					t.Fatalf("cancels = %d", cancels.Load())
+				}
+				if len(prompts) != 0 || len(queuedIDs(conv)) != 0 {
+					t.Fatalf("sent twice or stuck: %d more, queue %v", len(prompts), queuedIDs(conv))
+				}
+			})
+		}
+	}
+}
+
+// A request that outlives its turn (an MCP sign-in link) has no turn to cancel: messages queue
+// until it is resolved, whatever key sent them.
+func TestRequestLeftOpenAfterItsTurnQueuesPrompts(t *testing.T) {
+	conv, agent := newFakeAgentSession(t)
+	agent.log.Append("elicitation", 1, MustRawJSON(map[string]string{"elicitationId": "e1", "agentElicitationId": "a1"}))
+	queued, first, err := conv.Submit(t.Context(), acp.PromptInput{Text: "go on"}, true)
+	if err != nil || queued == "" || first != nil || len(agent.cancels) != 0 || len(agent.prompts) != 0 {
+		t.Fatalf("queued %q, %d cancels, %v", queued, len(agent.cancels), err)
+	}
+	agent.log.Append("elicitation_result", 1, MustRawJSON(map[string]string{"elicitationId": "e1"}))
+	if prompt := agent.nextPrompt(t); prompt.Text != "go on" {
+		t.Fatalf("sent %q", prompt.Text)
+	}
+	agent.turns <- fakeTurn{}
+}
+
+// Claude takes agent messages in during its turn and holds them behind the open request itself.
+func TestOpenRequestStillDeliversAgentMessagesToClaude(t *testing.T) {
+	conv, agent := newCyclingSession(t, true)
+	conv.steer = func(context.Context, acp.PromptInput) (bool, error) {
+		t.Error("steered into a held turn")
+		return false, nil
+	}
+	if _, _, err := conv.Submit(t.Context(), acp.PromptInput{Text: "work"}, false); err != nil {
+		t.Fatal(err)
+	}
+	agent.next(t)
+	agent.log.Append("permission_request", 1, MustRawJSON(map[string]string{"requestId": "p1"}))
+	if _, _, err := conv.Submit(t.Context(), messageFromAgent("ask-1", "question"), true); err != nil {
+		t.Fatal(err)
+	}
+	if got := agent.next(t); got != "question" {
+		t.Fatalf("delivered %q", got)
+	}
+	agent.log.Append("permission_result", 1, MustRawJSON(map[string]string{"requestId": "p1"}))
+	close(agent.release)
+	waitConversationState(t, conv, "idle")
+	waitReleased(conv)
+	if len(agent.prompts) != 0 || len(queuedIDs(conv)) != 0 {
+		t.Fatalf("delivered twice or stuck: queue %v", queuedIDs(conv))
 	}
 }

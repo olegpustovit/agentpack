@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"runtime"
 	"slices"
 	"strings"
@@ -142,7 +143,7 @@ func TestNativeGoalUsesAgentCommandAndSnapshots(t *testing.T) {
 		t.Fatalf("goal = %+v", goal)
 	}
 	agent.log.Append("session_info_update", 2, snapshot(nil).Payload)
-	agent.goalUntil(t, func(goal *session.Goal) bool { return goal == nil })
+	agent.goalUntil(t, noGoal)
 }
 
 // Claude's background Agent tasks arrive as AIR's subagent_spawned / subagent_state_update; the
@@ -210,11 +211,37 @@ func TestLegacyNativeGoalFollowsUnpromptedWork(t *testing.T) {
 		t.Fatalf("state %q goal %+v", state, goal)
 	}
 	agent.log.Append("prompt", 3, MustRawJSON(map[string]any{"text": map[string]string{"text": "thanks"}}))
-	session.mu.Lock()
-	revived := session.goal.State != "met"
-	session.mu.Unlock()
-	if revived {
-		t.Fatal("a user prompt revived a met goal")
+	agent.goalUntil(t, noGoal)
+}
+
+// A met goal leaves when the person's next prompt starts: not on an agent's message or a goal
+// command, not while history replays, and a repeated completion does not bring it back.
+func TestPersonPromptRetiresAMetGoal(t *testing.T) {
+	complete := claudeGoalCheck(map[string]any{"objective": "ship it. Done when: tests pass", "status": "complete"})
+	prompt := func(input acp.PromptInput) acp.LogEntry {
+		return acp.LogEntry{Kind: "prompt", TS: 1, Payload: PromptLogPayload(input)}
+	}
+	// A chat from before this rule: the prompt after the met goal logged no clear.
+	conv, agent := newFakeAgentSession(t,
+		entry("goal_update", session.Goal{Objective: "ship it", State: "met", Engine: "native"}),
+		prompt(acp.PromptInput{Text: "thanks"}))
+	conv.publishGoal()
+	if kinds := strings.Join(logKinds(agent.log), ","); kinds != "goal_update,prompt" || goalNow(conv).State != "met" {
+		t.Fatalf("replay published %s, goal %+v", kinds, goalNow(conv))
+	}
+	for _, input := range []acp.PromptInput{messageFromAgent("a1", "question"), {Text: "/goal clear it"}} {
+		agent.log.Append("prompt", 2, PromptLogPayload(input))
+		if goalNow(conv).State != "met" {
+			t.Fatalf("%q retired the goal", input.Text)
+		}
+	}
+	agent.log.Append("prompt", 3, PromptLogPayload(acp.PromptInput{Text: "next thing"}))
+	agent.goalUntil(t, noGoal)
+	agent.log.Append("session_info_update", 4, complete)
+	conv.mu.Lock()
+	defer conv.mu.Unlock()
+	if conv.goal != nil || conv.goalDirty {
+		t.Fatalf("a repeated completion recreated the goal: %+v", conv.goal)
 	}
 }
 
@@ -327,9 +354,16 @@ func goalNow(conv *ConversationSession) session.Goal {
 }
 
 // Stopping a Claude goal clears it in the agent, which has no /goal pause, and keeps it paused
-// here; resuming sets it again.
+// here; resuming sets it again. Claude's adapter reports goals, an older one does not.
 func TestStopPausesClaudeGoalByClearing(t *testing.T) {
+	for _, reports := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reports=%v", reports), func(t *testing.T) { stopPausesClaudeGoal(t, reports) })
+	}
+}
+
+func stopPausesClaudeGoal(t *testing.T, reports bool) {
 	conv, agent := newFakeAgentSession(t, claudeGoalCommand)
+	conv.nativeGoalReports = reports
 	if err := conv.SetGoal(t.Context(), "ship it", "tests pass", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -357,6 +391,58 @@ func TestStopPausesClaudeGoalByClearing(t *testing.T) {
 	if prompt := agent.nextPrompt(t); prompt.Text != command {
 		t.Fatalf("resume sent %q, want %q", prompt.Text, command)
 	}
+	agent.turns <- fakeTurn{}
+}
+
+// The Pause button on Claude, which reports goals but cannot pause one, clears it in the agent
+// and keeps it paused here, also after a worker restart.
+func TestPausingClaudeGoalClearsAndKeepsIt(t *testing.T) {
+	conv, agent := newFakeAgentSession(t, claudeGoalCommand)
+	conv.configureACPGoal(map[string]any{"jetbrains": map[string]any{"air": map[string]any{
+		"goal": map[string]any{"version": float64(1), "controlMethod": acp.GoalControlMethod}}}}, nil)
+	if err := conv.SetGoal(t.Context(), "ship it", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	agent.nextPrompt(t)
+	if err := conv.UpdateGoal(t.Context(), GoalChange{Action: "pause"}); err != nil {
+		t.Fatal(err)
+	}
+	agent.turns <- fakeTurn{}
+	if prompt := agent.nextPrompt(t); prompt.Text != "/goal clear" {
+		t.Fatalf("pause sent %q", prompt.Text)
+	}
+	agent.log.Append("session_info_update", 1, claudeGoalCheck(nil))
+	agent.turns <- fakeTurn{}
+	waitConversationState(t, conv, "idle")
+	if goal := goalNow(conv); goal.State != "paused" {
+		t.Fatalf("goal = %+v", goal)
+	}
+
+	// A restarted worker replays the paused goal, or restores it from the row.
+	paused := entry("goal_update", goalNow(conv))
+	replayed, events := newFakeAgentSession(t, claudeGoalCommand, paused)
+	replayed.nativeGoalReports = true
+	events.log.Append("session_info_update", 1, claudeGoalCheck(nil))
+	if goal := goalNow(replayed); goal.State != "paused" {
+		t.Fatalf("replayed goal = %+v", goal)
+	}
+	restored, events := newFakeAgentSession(t, claudeGoalCommand)
+	restored.nativeGoalReports = true
+	events.log.Append("session_info_update", 1, claudeGoalCheck(nil))
+	saved := goalNow(conv)
+	restored.restoreGoal(&saved)
+	if goal := goalNow(restored); goal.State != "paused" {
+		t.Fatalf("restored goal = %+v", goal)
+	}
+
+	if err := conv.UpdateGoal(t.Context(), GoalChange{Action: "resume"}); err != nil {
+		t.Fatal(err)
+	}
+	if prompt := agent.nextPrompt(t); prompt.Text != "/goal ship it" {
+		t.Fatalf("resume sent %q", prompt.Text)
+	}
+	agent.log.Append("session_info_update", 1, claudeGoalCheck(nil)) // now the agent's clear counts
+	agent.goalUntil(t, noGoal)
 	agent.turns <- fakeTurn{}
 }
 
