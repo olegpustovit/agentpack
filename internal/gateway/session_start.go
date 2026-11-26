@@ -662,6 +662,8 @@ func (g *Gateway) resumeSession(ctx context.Context, id, prompt, queueID string)
 
 // claimResume restarts a stopped chat; the caller holds chatLifecycle.
 func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string) (session.SessionInfo, error) {
+	// Whoever claims the chat ends its wait. Deferred, so the wait shows until the row says starting.
+	defer g.dropAutoResume(id)
 	info, err := session.StoredSession(ctx, g.store.Reader, id)
 	if err != nil {
 		return session.SessionInfo{}, err
@@ -856,6 +858,10 @@ func (g *Gateway) reapStoppedChatsExcept(ctx context.Context, manual string) {
 		err = errors.Join(err, marshalErr)
 	}
 	for _, id := range resume {
+		if !g.caughtUp() {
+			g.resumeWhenCaughtUp(ctx, id)
+			continue
+		}
 		if _, resumeErr := g.claimResume(ctx, id, mcp.AutoResumePrompt, ""); resumeErr != nil && !errors.Is(resumeErr, errResumeConflict) {
 			err = errors.Join(err, resumeErr)
 		}
@@ -865,6 +871,56 @@ func (g *Gateway) reapStoppedChatsExcept(ctx context.Context, manual string) {
 		event.Fail(err)
 		event.End()
 	}
+}
+
+// resumeCatchUp bounds how long a cut-off chat waits for sign-ins to sync before it resumes anyway.
+const resumeCatchUp = 75 * time.Second
+
+// resumeWhenCaughtUp resumes a cut-off chat once this gateway has caught up, so its agent does not
+// start on a sign-in the mesh has already replaced.
+// shortcut: a second restart during the wait drops the auto-resume; the chat still resumes on the next message.
+func (g *Gateway) resumeWhenCaughtUp(ctx context.Context, id string) {
+	if _, pending := g.resumePending.LoadOrStore(id, struct{}{}); pending {
+		return
+	}
+	if !g.beginBackground(&g.starting) {
+		g.resumePending.Delete(id)
+		return
+	}
+	g.emitEvent(eventMessage{Topic: "sessions"})
+	deadline := g.wallNow().Add(resumeCatchUp)
+	ctx = context.WithoutCancel(ctx) // the reap may serve a request; only shutdown ends the wait
+	obs.Go("gateway.auto_resume", func() {
+		defer g.starting.Done()
+		defer g.dropAutoResume(id)
+		if !g.awaitCaughtUp(ctx, deadline) {
+			return
+		}
+		g.syncAgentCredentials(ctx, "") // install what arrived before the agent reads its sign-in
+		g.chatLifecycle.Lock()
+		defer g.chatLifecycle.Unlock()
+		if _, pending := g.resumePending.Load(id); !pending {
+			return // resumed or switched by hand meanwhile
+		}
+		if _, err := g.claimResume(ctx, id, mcp.AutoResumePrompt, ""); err != nil && !errors.Is(err, errResumeConflict) {
+			_, event := obs.Start(ctx, "gateway", "auto_resume")
+			event.Set("session_id", id)
+			event.Fail(err)
+			event.End()
+		}
+	})
+}
+
+func (g *Gateway) dropAutoResume(id string) {
+	if _, pending := g.resumePending.LoadAndDelete(id); pending {
+		g.emitEvent(eventMessage{Topic: "sessions"})
+	}
+}
+
+// ResumePending reports a cut-off chat still waiting to resume by itself.
+func (g *Gateway) ResumePending(id string) bool {
+	_, pending := g.resumePending.Load(id)
+	return pending
 }
 
 // cutOffTurn reads from the log whether a stopped chat may resume by itself: its own last prompt has

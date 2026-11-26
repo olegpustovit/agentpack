@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/network"
@@ -225,5 +227,236 @@ func TestCursorSharingSkipsAnExpiredLoginAndInstallsAReplacement(t *testing.T) {
 	}
 	if got, err := os.ReadFile(path); err != nil || string(got) != string(valid) {
 		t.Fatalf("shared credential mismatch: %v", err)
+	}
+}
+
+// credentialRow reads and writes one agent_credentials row as this gateway and a peer would.
+func credentialRow(t *testing.T, g *Gateway, key string) (read func() sharedAgentCredential, peerPublish func(sharedAgentCredential)) {
+	t.Helper()
+	read = func() sharedAgentCredential {
+		t.Helper()
+		credential, err := g.sharedAgentCredential(t.Context(), key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return credential
+	}
+	peerPublish = func(credential sharedAgentCredential) {
+		t.Helper()
+		value, _ := json.Marshal(credential)
+		if _, err := g.store.DB.Exec("INSERT INTO agent_credentials(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, string(value)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return read, peerPublish
+}
+
+func claudeToken(account string, expires int) []byte {
+	return fmt.Appendf(nil, `{"claudeAiOauth":{"accessToken":%q,"expiresAt":%d}}`, account, expires)
+}
+
+func writeCredential(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAgentCredentialAStaleFileDoesNotWin(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	ctx := t.Context()
+	agent, err := registry.ByTarget(harness.Claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.Login.Refresh = nil
+	path := filepath.Join(t.TempDir(), ".credentials.json")
+	shared, peerPublish := credentialRow(t, g, "claude/.credentials.json")
+	sync := func(signedIn bool) {
+		t.Helper()
+		if _, err := g.syncAgentCredential(ctx, agent, path, "local", signedIn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	expect := func(step, local, row string) {
+		t.Helper()
+		got, _ := os.ReadFile(path)
+		if string(got) != local || string(shared().Data) != row {
+			t.Fatalf("%s: local %s row %s", step, got, shared().Data)
+		}
+	}
+	backup := func(want []byte) {
+		t.Helper()
+		if got, err := os.ReadFile(path + ".bak"); string(got) != string(want) {
+			t.Fatalf("backup %s, want %s: %v", got, want, err)
+		}
+	}
+	current, stale, fresh := claudeToken("a", 2000), claudeToken("a", 1000), claudeToken("a", 3000)
+
+	writeCredential(t, path, current)
+	sync(false)
+	expect("first publish", string(current), string(current))
+
+	// A changed but older file is stale: the shared sign-in is installed and the file kept.
+	writeCredential(t, path, stale)
+	sync(false)
+	expect("stale file", string(current), string(current))
+	backup(stale)
+	if rev := shared().Rev; rev != 1 {
+		t.Fatalf("stale file raised the revision to %d", rev)
+	}
+	writeCredential(t, path, fresh)
+	sync(false)
+	expect("newer file", string(fresh), string(fresh))
+
+	// Token age never promotes: an unchanged file with a later expiry takes another account's newer row,
+	other := claudeToken("b", 2500)
+	peerPublish(sharedAgentCredential{Data: other, Rev: shared().Rev + 1, Node: "peer"})
+	sync(false)
+	expect("peer's newer row", string(other), string(other))
+	// and on first sight the shared row wins.
+	later := claudeToken("c", 9000)
+	writeCredential(t, path, later)
+	if _, err := g.store.DB.Exec("DELETE FROM agent_credential_installs"); err != nil {
+		t.Fatal(err)
+	}
+	sync(false)
+	expect("first sight", string(other), string(other))
+	backup(later)
+
+	// A web sign-in is published whatever its expiry says, and sign-out still stops sharing.
+	web := claudeToken("d", 100)
+	writeCredential(t, path, web)
+	sync(true)
+	expect("web sign-in", string(web), string(web))
+	if err := g.stopSharingAgentCredential(ctx, agent); err != nil {
+		t.Fatal(err)
+	}
+	writeCredential(t, path, later)
+	sync(false)
+	expect("signed out", string(later), "")
+	sync(true)
+	expect("signed in again", string(later), string(later))
+}
+
+func TestAgentCredentialAnEmptyFileIsNeverPublished(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	for _, target := range []harness.Target{harness.Claude, harness.Codex} {
+		agent, err := registry.ByTarget(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), "auth.json")
+		writeCredential(t, path, []byte(`{}`))
+		for _, signedIn := range []bool{false, true} {
+			if _, err := g.syncAgentCredential(t.Context(), agent, path, "local", signedIn); err != nil {
+				t.Fatal(err)
+			}
+		}
+		shared, _ := credentialRow(t, g, string(target)+"/auth.json")
+		if got := shared(); got.Data != nil || got.Rev != 0 {
+			t.Fatalf("%s published an empty sign-in: rev %d", target, got.Rev)
+		}
+	}
+}
+
+// A renewal already sent survives a shutdown, and one whose file write fails is installed later.
+func TestAgentCredentialRenewalSurvivesShutdownAndAFailedWrite(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	path := filepath.Join(t.TempDir(), "token")
+	var renew func() []byte
+	agent := registry.Entry{Harness: harness.Harness{Target: harness.Agy}, Login: &harness.LoginSpec{Refresh: func(ctx context.Context, _ []byte) ([]byte, error) {
+		if renew == nil {
+			return nil, nil
+		}
+		renewed := renew()
+		return renewed, ctx.Err()
+	}}}
+	shared, _ := credentialRow(t, g, "agy/token")
+	read := func() string {
+		data, _ := os.ReadFile(path)
+		return string(data)
+	}
+	writeCredential(t, path, []byte(`{"n":1}`))
+	if _, err := g.syncAgentCredential(t.Context(), agent, path, "local", false); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	renew = func() []byte {
+		cancel() // the gateway stops while the server answers
+		return []byte(`{"n":2}`)
+	}
+	if _, err := g.syncAgentCredential(ctx, agent, path, "local", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := shared(); string(got.Data) != `{"n":2}` || read() != `{"n":2}` {
+		t.Fatalf("renewal lost to a shutdown: row %s file %s", got.Data, read())
+	}
+
+	renew = func() []byte {
+		// A directory in the file's place makes the install fail.
+		if err := errors.Join(os.Remove(path), os.Mkdir(path, 0o700)); err != nil {
+			t.Fatal(err)
+		}
+		return []byte(`{"n":3}`)
+	}
+	if _, err := g.syncAgentCredential(t.Context(), agent, path, "local", false); err == nil {
+		t.Fatal("the failed write was not reported")
+	}
+	if got := shared(); string(got.Data) != `{"n":3}` || got.Rev != 3 {
+		t.Fatalf("renewal not published: %+v", got)
+	}
+	renew = nil
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	writeCredential(t, path, []byte(`{"n":2}`)) // the spent file is still there
+	if _, err := g.syncAgentCredential(t.Context(), agent, path, "local", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := shared(); read() != `{"n":3}` || string(got.Data) != `{"n":3}` || got.Rev != 3 {
+		t.Fatalf("spent file republished: row %s rev %d file %s", got.Data, got.Rev, read())
+	}
+}
+
+// With a Main it alone renews, once it has claimed the row; without one the publisher does.
+func TestAgentCredentialOnlyMainRenewsWhileThereIsOne(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	self, err := g.store.NodeID(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	renews := countedRenewal(t, g, self)
+	shared, peerPublish := credentialRow(t, g, "agy/token")
+	if renews() != 1 {
+		t.Fatal("the publisher did not renew without a Main")
+	}
+	archiveRoles(t, g, "birch", "birch")
+	if renews() != 0 || renews() != 0 || shared().Node != self {
+		t.Fatal("a publisher renewed while another machine is Main")
+	}
+
+	// This machine becomes Main while the row still names a peer.
+	archiveRoles(t, g, self, self)
+	row := shared()
+	row.Node = "birch"
+	peerPublish(row)
+	if renews() != 0 || shared().Node != self || shared().Rev != row.Rev {
+		t.Fatalf("Main did not claim the peer's row first: %+v", shared())
+	}
+	if renews() != 1 {
+		t.Fatal("Main did not renew the row it claimed")
+	}
+
+	if released, err := g.store.ReleaseMain(t.Context(), 0); err != nil || !released {
+		t.Fatal(released, err)
+	}
+	if renews() != 0 {
+		t.Fatal("a released Main renewed")
+	}
+	peerPublish(row)
+	if renews() != 0 || shared().Node != "birch" {
+		t.Fatal("a released Main claimed a row")
 	}
 }

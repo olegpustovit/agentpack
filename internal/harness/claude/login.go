@@ -71,6 +71,35 @@ func CredentialFile() string {
 	return path
 }
 
+// ValidCredential requires a Claude account token; an expired one stays valid because it can be
+// renewed. A Console sign-in (checked in the 2.1.330 bundle) writes this same claudeAiOauth key only
+// when its grant carries user:inference; otherwise it keeps its API key as primaryApiKey in
+// ~/.claude.json (the keychain on macOS), which is not shared.
+func ValidCredential(data []byte) bool { return credentialOAuth(data).AccessToken != "" }
+
+// Freshness is when the access token expires, zero when the file does not say.
+func Freshness(data []byte) time.Time {
+	if expires := credentialOAuth(data).ExpiresAt; expires > 0 {
+		return time.UnixMilli(int64(expires))
+	}
+	return time.Time{}
+}
+
+type oauthCredential struct {
+	AccessToken string  `json:"accessToken"`
+	ExpiresAt   float64 `json:"expiresAt"`
+}
+
+func credentialOAuth(data []byte) oauthCredential {
+	var file struct {
+		OAuth oauthCredential `json:"claudeAiOauth"`
+	}
+	if json.Unmarshal(data, &file) != nil {
+		return oauthCredential{}
+	}
+	return file.OAuth
+}
+
 // Claude Code's own OAuth client (from its bundle); tests point tokenURL at a fake.
 var tokenURL = "https://platform.claude.com/v1/oauth/token"
 

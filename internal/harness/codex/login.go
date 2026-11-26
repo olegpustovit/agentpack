@@ -35,7 +35,7 @@ func Account(ctx context.Context) base.Account {
 		sources = append(sources, shared)
 	}
 	for _, path := range sources {
-		if data, err := os.ReadFile(path); err == nil && validAuthData(data) {
+		if data, err := os.ReadFile(path); err == nil && ValidCredential(data) {
 			account.SignedIn, account.Label = true, authEmail(data)
 			return account
 		}
@@ -106,7 +106,7 @@ func Login(string) (base.LoginFlow, error) {
 		Code:    deviceCode,
 		Finish: func() error {
 			data, err := os.ReadFile(filepath.Join(home, "auth.json"))
-			if err != nil || !validAuthData(data) {
+			if err != nil || !ValidCredential(data) {
 				return errors.New("Codex finished without saving a login")
 			}
 			_, err = persistLogin(data)

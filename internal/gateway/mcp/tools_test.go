@@ -28,6 +28,7 @@ func (fakeHost) RemoveStartingPrompt(context.Context, string, string) (bool, err
 	return false, nil
 }
 func (fakeHost) Emit(string)                        {}
+func (fakeHost) ResumePending(string) bool          { return false }
 func (fakeHost) Changes() (<-chan struct{}, func()) { return nil, func() {} }
 func (fakeHost) Sessions(context.Context, string, bool) ([]session.SessionInfo, error) {
 	return nil, nil

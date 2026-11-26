@@ -325,6 +325,9 @@ func (g *Gateway) mcpRefresher(ctx context.Context, credential mcpCredential) (r
 	return refresher, refresher == "" || refresher == self && (roles.MainNode != self || roles.ActsAsMain(self)), nil
 }
 
+// onDemandCatchUp plus the 30 s token call stays inside the bridge's one-minute request.
+const onDemandCatchUp = 20 * time.Second
+
 // freshMCPSecret returns a credential ready to send, refreshing an OAuth token that expired or that failedGeneration was rejected with.
 func (g *Gateway) freshMCPSecret(ctx context.Context, id string, failedGeneration int64) (mcpBridgeSecret, error) {
 	credential, err := g.loadMCPCredential(ctx, id)
@@ -355,6 +358,8 @@ func (g *Gateway) freshMCPSecret(ctx context.Context, id string, failedGeneratio
 		}
 		return secret, err
 	}
+	// A newer token may still be on its way after a start or wake; an agent is waiting, so not for long.
+	g.awaitCaughtUp(ctx, g.wallNow().Add(onDemandCatchUp))
 	credential, err = g.refreshMCPToken(ctx, id, max(failedGeneration, secret.Generation))
 	if err != nil {
 		return g.bridgeSecret(credential), err
@@ -365,6 +370,10 @@ func (g *Gateway) freshMCPSecret(ctx context.Context, id string, failedGeneratio
 // refreshMCPToken refreshes on this node under the credential's lock, unless
 // another refresh already moved past the failed generation.
 func (g *Gateway) refreshMCPToken(ctx context.Context, id string, failedGeneration int64) (mcpCredential, error) {
+	// Shutdown waits for a refresh asked over HTTP too: its rotated token must reach the table.
+	if g.beginBackground(&g.operations) {
+		defer g.operations.Done()
+	}
 	lock := g.mcpBroker.lock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -395,6 +404,8 @@ func (g *Gateway) refreshMCPToken(ctx context.Context, id string, failedGenerati
 	}
 	config := oauth2.Config{ClientID: credential.Client.ClientID, ClientSecret: credential.Client.ClientSecret, Scopes: credential.Client.Scopes, RedirectURL: credential.Client.RedirectURL,
 		Endpoint: oauth2.Endpoint{AuthURL: credential.Client.AuthURL, TokenURL: credential.Client.TokenURL, AuthStyle: oauth2.AuthStyle(credential.Client.AuthStyle)}}
+	// Once sent, the server may rotate the token: a cancelled caller or a shutdown must not drop the answer.
+	ctx = context.WithoutCancel(ctx)
 	refreshCtx, cancel := context.WithTimeout(context.WithValue(ctx, oauth2.HTTPClient, mcpOutboundClient()), 30*time.Second)
 	defer cancel()
 	// shortcut: the refresh omits RFC 8707 resource; add it if a server requires it on refresh.
@@ -903,6 +914,9 @@ func (g *Gateway) runMCPCredentials(ctx context.Context, interval time.Duration)
 }
 
 func (g *Gateway) renewMCPTokens(ctx context.Context) {
+	if !g.caughtUp() {
+		return
+	}
 	rows, err := g.store.Credentials().MCPOfKind(ctx, mcp.CredentialOAuth)
 	if err != nil {
 		return

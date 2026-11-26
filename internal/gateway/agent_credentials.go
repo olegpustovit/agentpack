@@ -25,7 +25,7 @@ type sharedAgentCredential struct {
 	Data     []byte `json:"data,omitempty"`
 	Rev      int64  `json:"rev,omitempty"`  // raised by every publish; the higher rev wins, never a clock
 	Modified int64  `json:"modified"`       // publish time, Unix ms; orders rows only before a machine has a rev record
-	Node     string `json:"node,omitempty"` // the publisher, which alone renews a rotating sign-in
+	Node     string `json:"node,omitempty"` // the publisher, or Main once it claims the row; renews while no other machine is Main
 }
 
 // installedCredential is what this machine last installed or published for a key (local, not replicated).
@@ -40,6 +40,7 @@ func (g *Gateway) runAgentCredentials(ctx context.Context, interval time.Duratio
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
+		g.noticeWake()
 		g.syncAgentCredentials(ctx, "")
 		select {
 		case <-ctx.Done():
@@ -86,7 +87,7 @@ func (g *Gateway) syncAgentCredentials(ctx context.Context, signedIn string) {
 
 // syncAgentCredential publishes the local file when it changed since this machine last installed or
 // published it, installs the shared one when its rev is higher and the local file is unchanged, and
-// renews the shared one ahead of the agent when this machine published it. After a web UI sign-out
+// renews the shared one ahead of the agent when this machine is its renewer. After a web UI sign-out
 // nothing is published until signedIn. It reports whether it replaced the local file.
 func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry, path, node string, signedIn bool) (bool, error) {
 	key := string(agent.Target) + "/" + filepath.Base(path)
@@ -111,18 +112,30 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 	// The row moved since this machine last touched it: a higher rev, or a concurrent publish of the same rev that won.
 	localChanged, sharedNewer := !bytes.Equal(localDigest[:], record.Hash), shared.Rev != record.Rev || !bytes.Equal(sharedDigest[:], record.Hash)
 	signedOut := shared.Data == nil && shared.Rev > 0
+	roles, err := g.store.Main(ctx)
+	if err != nil {
+		return false, err
+	}
 	if !known {
 		// First sight of this key here: a shared sign-in wins (file times from different clocks cannot
 		// order the copies), and the local file is published only when nothing is shared.
 		localChanged, sharedNewer = !sharedUsable && !signedOut, sharedUsable
 	}
 	localChanged = localChanged || signedIn
+	changed := localChanged // for .bak
+	// A changed file whose token is older than the shared one is stale (restored, or left from before
+	// a sleep): install the shared one instead. Token age never promotes a file.
+	if age := agent.Login.Freshness; age != nil && localChanged && !signedIn && !signedOut && localUsable && sharedUsable {
+		if mine, theirs := age(local), age(shared.Data); !mine.IsZero() && !theirs.IsZero() && mine.Before(theirs) {
+			localChanged, sharedNewer = false, true
+		}
+	}
 	same := bytes.Equal(local, shared.Data)
 	switch {
 	case localUsable && localChanged && !same && (!signedOut || signedIn):
 		return false, g.publishAgentCredential(ctx, key, sharedAgentCredential{Data: local, Rev: shared.Rev + 1, Modified: time.Now().UnixMilli(), Node: node})
 	case sharedUsable && (!localUsable || sharedNewer && !localChanged) && !same:
-		if !known && local != nil {
+		if (!known || changed) && local != nil {
 			if err := os.WriteFile(path+".bak", local, 0o600); err != nil {
 				return false, err
 			}
@@ -131,26 +144,31 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 			return false, err
 		}
 		return true, g.recordAgentCredential(ctx, key, shared)
-	case shared.Node == "" && localUsable && same:
-		// A row published before rows named their publisher: a holder adopts it, hours before
-		// any renewal is due, so the replicated choice settles on one machine first.
+	case (shared.Node == "" || shared.Node != node && roles.ActsAsMain(node)) && localUsable && same:
+		// Main claims every row it holds; so does any holder of a row published before rows named
+		// their publisher. That is hours before a renewal is due, so the replicated choice settles first.
 		shared.Node = node
 		return false, g.publishAgentCredential(ctx, key, shared)
 	case localUsable && same && (!known || localChanged || sharedNewer):
 		return false, g.recordAgentCredential(ctx, key, shared)
-	case agent.Login.Refresh != nil && shared.Node == node && localUsable && same:
+	// One renewer: Main when there is one (none while it is away or released), else the publisher.
+	// No failover on timeout: both sides of a partition would spend the token.
+	case agent.Login.Refresh != nil && shared.Node == node && (roles.MainNode == "" || roles.ActsAsMain(node)) && localUsable && same && g.caughtUp():
+		// Once sent, the server may rotate the token whatever happens here: a shutdown must not drop the answer.
+		ctx := context.WithoutCancel(ctx)
 		renewed, err := agent.Login.Refresh(ctx, local)
 		if renewed == nil || err != nil {
 			return false, err
 		}
 		// The old refresh token is spent: keep the new one locally even if publishing fails, and
-		// in the table even if the file write fails; the next round reconciles either.
+		// in the table even if the file write fails; the next round reconciles either. The file goes
+		// first, so a crash between the two never publishes the spent token as a new sign-in.
 		credential := sharedAgentCredential{Data: renewed, Rev: shared.Rev + 1, Modified: time.Now().UnixMilli(), Node: node}
+		installed, installErr := installAgentCredential(path, local, credential)
 		publishErr := g.publishAgentCredential(ctx, key, credential)
-		installed, err := installAgentCredential(path, local, credential)
-		if err != nil {
+		if installErr != nil {
 			// The spent file stays recorded as unchanged, so the next round installs the renewal instead of publishing it.
-			return false, errors.Join(publishErr, err, g.recordAgentCredential(ctx, key, sharedAgentCredential{Data: local, Rev: credential.Rev}))
+			return false, errors.Join(publishErr, installErr, g.recordAgentCredential(ctx, key, sharedAgentCredential{Data: local, Rev: credential.Rev}))
 		}
 		return installed, publishErr
 	}

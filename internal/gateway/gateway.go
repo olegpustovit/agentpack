@@ -95,6 +95,13 @@ type Gateway struct {
 	found             folderDiscovery
 	credentialsMu     sync.Mutex // one agent credential sync at a time
 
+	syncSince   atomic.Int64     // wall time (Unix ns) of the start or last wake; renewals wait for a pull after it
+	lastLook    atomic.Int64     // wall time of the last wake check
+	clock       func() time.Time // nil: time.Now; tests move it
+	catchUpPoll time.Duration    // zero: one second
+	// resumePending holds the IDs of cut-off chats waiting to resume.
+	resumePending sync.Map
+
 	worktreeHistoryMu sync.Mutex
 	worktreeHistory   map[string]worktreeDivergence
 }
@@ -168,6 +175,7 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	defer restoreDiagnostics()
 	gateway := &Gateway{options: options, store: store, logs: logs, auth: auth, local: network.NodeRecord{Address: listener.Addr().String(), Secret: network.RandomToken()}, origin: origin, stop: cancel, done: ctx.Done(), archiveWake: make(chan struct{}, 1)}
 	gateway.nodeIDCache.Store(nodeID)
+	gateway.syncSince.Store(gateway.wallNow().UnixNano())
 	defer func() { result = errors.Join(result, gateway.cleanStateTransfers(time.Time{})) }()
 	if err := gateway.loadPublic(ctx); err != nil {
 		return err

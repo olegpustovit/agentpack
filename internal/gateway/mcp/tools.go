@@ -230,6 +230,8 @@ type Host interface {
 	ServePrompt(w http.ResponseWriter, r *http.Request)
 	// RemoveStartingPrompt drops a queued prompt from a chat that is still starting.
 	RemoveStartingPrompt(ctx context.Context, session, queueID string) (bool, error)
+	// ResumePending reports a cut-off chat still waiting to resume by itself.
+	ResumePending(session string) bool
 	// Emit tells browsers that topic changed.
 	Emit(topic string)
 	// Changes signals gateway events until stop is called.
