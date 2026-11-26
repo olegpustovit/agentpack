@@ -1,9 +1,7 @@
 package agy
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -15,7 +13,6 @@ import (
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/mcp"
-	"github.com/olegpustovit/agentpack/internal/obs"
 	"github.com/olegpustovit/agentpack/internal/paths"
 )
 
@@ -258,20 +255,9 @@ func removeOverlayLeftovers(agents string) error {
 	return nil
 }
 
+// warnUnowned only prints: a successful launch never opens diagnostic files (AGENTS.md).
 func warnUnowned() {
 	log.Print(unownedOverlay)
-	home, err := paths.UserAgentpackHome()
-	if err != nil {
-		return
-	}
-	spool, err := obs.OpenSpool(home, obs.SpoolOptions{Proc: "cli"})
-	if err != nil {
-		return
-	}
-	defer spool.Close()
-	_, event := obs.Start(obs.WithSink(obs.ProcessTrace(context.Background()), spool, obs.BuildMetadata("", "local", "cli")), "harness", "agy workspace overlay")
-	event.Fail(errors.New(unownedOverlay))
-	event.End()
 }
 
 func entriesIn(root string) []string {

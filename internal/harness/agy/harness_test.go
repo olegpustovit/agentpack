@@ -200,8 +200,9 @@ func TestOverlayLeavesAUsersDirectoryAlone(t *testing.T) {
 	if !strings.Contains(logged.String(), "is not agentpack's") {
 		t.Fatalf("no warning: %q", logged.String())
 	}
-	if recorded, _ := filepath.Glob(filepath.Join(os.Getenv("AGENTPACK_HOME"), "logs", "spool", "*")); len(recorded) == 0 {
-		t.Fatal("warning was not recorded")
+	// A successful launch opens no diagnostic files.
+	if recorded, _ := filepath.Glob(filepath.Join(os.Getenv("AGENTPACK_HOME"), "logs", "spool", "*")); len(recorded) != 0 {
+		t.Fatalf("launch wrote diagnostics: %v", recorded)
 	}
 	// Once moved away, the next launch must not take the fast path.
 	if err := os.RemoveAll(overlay); err != nil {
