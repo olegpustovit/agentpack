@@ -116,6 +116,8 @@ func goalIn(state string) func(*session.Goal) bool {
 	return func(goal *session.Goal) bool { return goal != nil && goal.State == state }
 }
 
+func noGoal(goal *session.Goal) bool { return goal == nil }
+
 func entry(kind string, payload any) acp.LogEntry {
 	return acp.LogEntry{Kind: kind, TS: 1, Payload: MustRawJSON(payload)}
 }

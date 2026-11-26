@@ -543,8 +543,7 @@ func initializeACPSession(ctx context.Context, conn *sdkacp.ClientSideConnection
 // explainACPAuthRequired turns an agent's bare "Authentication required" into a sentence that names
 // the agent and machine; the chat then offers to sign the agent in.
 func explainACPAuthRequired(err error, target base.Target) error {
-	var request *sdkacp.RequestError
-	if !errors.As(err, &request) || request.Code != sdkacp.NewAuthRequired(nil).Code {
+	if !authRequired(err) {
 		return err
 	}
 	host, _ := os.Hostname()
@@ -1323,6 +1322,12 @@ func MustRawJSON(v any) json.RawMessage {
 	return b
 }
 
+// authRequired reports an agent refusing work until it is signed in again.
+func authRequired(err error) bool {
+	var request *sdkacp.RequestError
+	return errors.As(err, &request) && request.Code == sdkacp.NewAuthRequired(nil).Code
+}
+
 // logFailedTurn explains a prompt the agent refused, such as one that needs a sign-in, and ends
 // the turn unless another prompt still runs, so viewers see why instead of a turn that never ends.
 func logFailedTurn(log *acp.EventLog, harness string, err error, end bool) {
@@ -1332,8 +1337,7 @@ func logFailedTurn(log *acp.EventLog, harness string, err error, end bool) {
 		description = "The request to the agent was interrupted before it finished. Send the message again."
 	}
 	notice := map[string]any{"sessionUpdate": "notice", "severity": "error", "title": "The agent could not run this prompt", "description": description}
-	var request *sdkacp.RequestError
-	if errors.As(err, &request) && request.Code == sdkacp.NewAuthRequired(nil).Code {
+	if authRequired(err) {
 		notice["code"], notice["harness"], notice["methods"] = "auth_required", harness, LoginMethods(harness)
 		notice["description"] = base.DisplayName(base.Target(harness)) + " needs you to sign in again."
 		if harness == "opencode" {

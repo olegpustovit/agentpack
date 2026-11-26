@@ -62,6 +62,7 @@ type turnRunner struct {
 	goalIter        int    // the native goal's last reported iteration
 	nativeGoal      bool   // the agent advertises a /goal command
 	nativeGoalPause bool   // and its /goal takes pause
+	goalHeld        bool   // the worker parked the goal, so an agent that cannot pause may report it gone
 	turnText        []byte
 	turnTools       int
 	goalBlocked     int
@@ -600,7 +601,7 @@ func (cs *ConversationSession) ReplayEntry(entry acp.LogEntry) {
 		if goal.State == "cleared" {
 			cs.goal, cs.goalCleared = nil, &goal
 		} else {
-			cs.goal = &goal
+			cs.goal, cs.goalHeld = &goal, parkedGoal(goal.State)
 		}
 	}
 }

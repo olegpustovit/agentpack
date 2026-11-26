@@ -77,15 +77,30 @@ func sameGoalReason(a, b string) bool {
 	return union > 0 && common*5 >= union*4
 }
 
-// pauseNativeGoal tells the agent to stop pursuing its goal: /goal pause where its /goal takes
-// that (Codex), else /goal clear (Claude's takes only an objective or clear). The goal stays
+// canPauseGoal reports whether the agent can pause its goal itself. The caller holds mu.
+func (cs *ConversationSession) canPauseGoal() bool {
+	return cs.nativeGoalPause || cs.nativeGoalPauseRPC != nil
+}
+
+// parkedGoal reports a goal state a person can resume from.
+func parkedGoal(state string) bool { return state == "paused" || state == "blocked" }
+
+// dropGoal moves the goal to cleared. The caller holds mu.
+func (cs *ConversationSession) dropGoal(now int64) {
+	cleared := *cs.goal
+	setGoalState(&cleared, "cleared", "", now)
+	cs.goal, cs.goalCleared = nil, &cleared
+}
+
+// pauseNativeGoal tells the agent to stop pursuing its goal: /goal pause where it can pause
+// (Codex), else /goal clear (Claude's takes only an objective or clear). The goal stays
 // paused here either way, so the person can resume it. Claude can clear a goal mid-turn even
 // when the goal blocks every stop.
 func (cs *ConversationSession) pauseNativeGoal(ctx context.Context) {
 	cs.mu.Lock()
-	command, steer := "/goal clear", cs.steer != nil
-	if cs.nativeGoalPause || cs.nativeGoalReports {
-		command = "/goal pause"
+	command, steer := "/goal pause", cs.steer != nil
+	if !cs.canPauseGoal() {
+		command = "/goal clear"
 	}
 	cs.mu.Unlock()
 	_, _, _ = cs.Submit(ctx, acp.PromptInput{Text: command}, steer)
@@ -182,6 +197,12 @@ func (cs *ConversationSession) observeGoalEntry(entry acp.LogEntry) {
 	switch entry.Kind {
 	case "prompt":
 		cs.turnText, cs.turnTools = cs.turnText[:0], 0
+		// A met goal is history once the person moves on. Live entries only (state is unset while
+		// history replays), so a restart never rewrites it.
+		if cs.state != "" && cs.goal != nil && cs.goal.State == "met" && fromPerson(entry.Payload) {
+			cs.dropGoal(entry.TS)
+			cs.goalDirty = true
+		}
 	case "tool_call":
 		cs.turnTools++
 	case "agent_message_chunk":
@@ -234,17 +255,27 @@ func (cs *ConversationSession) observeGoalEntry(entry acp.LogEntry) {
 	}
 }
 
-// applyNativeGoal follows the agent's snapshot. For a legacy goal, the agent's clear is how
-// the worker pauses it, so its local paused or blocked state takes precedence. The caller holds mu.
+// fromPerson reports a logged prompt the person wrote that is not a goal command.
+func fromPerson(payload json.RawMessage) bool {
+	var prompt struct {
+		Text struct {
+			Text string `json:"text"`
+		} `json:"text"`
+		From *acp.PromptFrom `json:"from"`
+	}
+	return json.Unmarshal(payload, &prompt) == nil && prompt.From == nil && !strings.HasPrefix(prompt.Text.Text, "/goal")
+}
+
+// applyNativeGoal follows the agent's snapshot. Where the agent drops a goal it cannot pause,
+// the worker's own paused or blocked state takes precedence. The caller holds mu.
 func (cs *ConversationSession) applyNativeGoal(raw json.RawMessage, now int64) {
 	reports := cs.nativeGoalReports
-	held := cs.goal != nil && (cs.goal.State == "paused" || cs.goal.State == "blocked") && !reports
+	held := cs.goal != nil && parkedGoal(cs.goal.State) && (!reports || cs.goalHeld && !cs.canPauseGoal())
 	if string(raw) == "null" {
 		cs.nativeGoalAbsent = reports
 		if cs.goal != nil && !held && (!reports || cs.goal.Engine == "native") {
-			cleared := *cs.goal
-			setGoalState(&cleared, "cleared", "", now)
-			cs.goal, cs.goalCleared, cs.goalDirty = nil, &cleared, true
+			cs.dropGoal(now)
+			cs.goalDirty = true
 		}
 		return
 	}
@@ -262,6 +293,11 @@ func (cs *ConversationSession) applyNativeGoal(raw json.RawMessage, now int64) {
 	if state == "" || held && state == "active" {
 		return
 	}
+	// The agent may report a retired goal's completion again; it stays history.
+	if last := cs.goalCleared; state == "met" && cs.goal == nil && last != nil &&
+		(snapshot.Objective == "" || strings.HasPrefix(snapshot.Objective, last.Objective)) {
+		return
+	}
 	cs.nativeGoalAbsent = false
 	goal := cs.goal
 	if goal == nil || reports && goal.Engine != "native" {
@@ -273,7 +309,7 @@ func (cs *ConversationSession) applyNativeGoal(raw json.RawMessage, now int64) {
 			started = now
 		}
 		goal = &session.Goal{Engine: "native", State: "paused", StartedAt: started}
-		cs.goal = goal
+		cs.goal, cs.goalHeld = goal, false
 	}
 	// Claude reports the whole condition sent, done-when criteria included.
 	if snapshot.Objective != "" && (goal.Objective == "" || !strings.HasPrefix(snapshot.Objective, goal.Objective)) {
@@ -303,6 +339,7 @@ func (cs *ConversationSession) applyNativeGoal(raw json.RawMessage, now int64) {
 	}
 	if goal.State != state {
 		setGoalState(goal, state, "", now)
+		cs.goalHeld = false // the agent's own state now
 	}
 	if reports || snapshot.LastReason != "" {
 		goal.LastReason = snapshot.LastReason
@@ -323,6 +360,7 @@ func (cs *ConversationSession) followNativeGoal(entry acp.LogEntry, state string
 		cs.userCancelled && cs.nativeGoalPauseRPC == nil:
 		// A prompted turn is paused by finishTurn; unprompted work has no turn to finish.
 		setGoalState(goal, "paused", "stopped by the user", entry.TS)
+		cs.goalHeld = true
 		cs.goalDirty, cs.goalPauseDue, cs.goalNoticeDue = true, true, goalInterruptedNotice
 	case !cs.nativeGoalReports && state == string(StateIdle) && cs.state == string(StateWorking) && goal.State == "active" &&
 		cs.stopReason != "error" && cs.stopReason != "failed" && cs.stopReason != "cancelled":
@@ -346,6 +384,14 @@ func (cs *ConversationSession) finishTurn(ctx context.Context, err error) {
 		cs.mu.Unlock()
 		return
 	}
+	// Before the early return below: a reporting agent says nothing about a refused prompt.
+	if authRequired(err) {
+		setGoalState(goal, "blocked", "sign-in required", cs.clock().UnixMilli())
+		cs.goalHeld = true
+		cs.mu.Unlock()
+		cs.publishGoal()
+		return
+	}
 	native := goal.Engine == "native"
 	if native && cs.nativeGoalReports && (!cs.userCancelled || cs.nativeGoalPauseRPC != nil) {
 		cs.mu.Unlock()
@@ -357,6 +403,7 @@ func (cs *ConversationSession) finishTurn(ctx context.Context, err error) {
 	switch {
 	case cs.userCancelled:
 		setGoalState(goal, "paused", "stopped by the user", now)
+		cs.goalHeld = true
 	case native:
 	case cs.stopReason == "error" || cs.stopReason == "failed" || err != nil && !errors.Is(err, context.Canceled):
 		setGoalState(goal, "blocked", "the agent turn failed", now)
@@ -446,7 +493,7 @@ func (cs *ConversationSession) SetGoal(ctx context.Context, objective, checks st
 	}
 	cs.goal = &session.Goal{Objective: objective, Checks: checks, State: "active", Engine: engine,
 		StartedAt: now, ResumedAt: now, Limits: limits, UpdatedAt: now}
-	cs.goalBlocked, cs.goalIdle, cs.goalSettled, cs.goalIter = 0, 0, false, 0
+	cs.goalBlocked, cs.goalIdle, cs.goalSettled, cs.goalIter, cs.goalHeld = 0, 0, false, 0, false
 	cs.mu.Unlock()
 	cs.publishGoal()
 	if engine == "native" {
@@ -486,15 +533,16 @@ func (cs *ConversationSession) UpdateGoal(ctx context.Context, change GoalChange
 				return cs.requestNativeGoalPause(ctx, control)
 			}
 			setGoalState(goal, "paused", "paused by the user", now)
-			pause = true
+			// Same lock as the pause, so a snapshot already on its way cannot undo it.
+			cs.goalHeld, pause = true, true
 		}
 	case "resume":
 		if goal.State != "active" {
 			setGoalState(goal, "active", "", now)
 			goal.LastReason = ""
-			cs.goalBlocked, cs.goalIdle, cs.userCancelled = 0, 0, false
+			cs.goalBlocked, cs.goalIdle, cs.userCancelled, cs.goalHeld = 0, 0, false, false
 			command = "/goal resume"
-			if !cs.nativeGoalPause && !cs.nativeGoalReports {
+			if !cs.canPauseGoal() {
 				// Pausing cleared it from an agent without /goal pause; set it again.
 				command = nativeGoalCommand(goal.Objective, goal.Checks)
 			}
@@ -508,6 +556,7 @@ func (cs *ConversationSession) UpdateGoal(ctx context.Context, change GoalChange
 				goal.Checks = *change.Checks
 			}
 			command = nativeGoalCommand(goal.Objective, goal.Checks)
+			cs.goalHeld = false
 		}
 		if change.Limits != nil {
 			goal.Limits = change.Limits
@@ -541,7 +590,9 @@ func (cs *ConversationSession) restoreGoal(saved *session.Goal) {
 		return
 	}
 	goal := *saved
-	if cs.nativeGoalAbsent && goal.Engine == "native" {
+	cs.goalHeld = parkedGoal(goal.State)
+	// A goal parked on an agent that cannot pause is absent there by design.
+	if cs.nativeGoalAbsent && goal.Engine == "native" && (!cs.goalHeld || cs.canPauseGoal()) {
 		setGoalState(&goal, "cleared", "", cs.clock().UnixMilli())
 		cs.goalCleared = &goal
 		cs.mu.Unlock()
@@ -560,9 +611,7 @@ func (cs *ConversationSession) ClearGoal(ctx context.Context) error {
 		cs.mu.Unlock()
 		return ErrNoGoal
 	}
-	cleared := *goal
-	setGoalState(&cleared, "cleared", "", cs.clock().UnixMilli())
-	cs.goal, cs.goalCleared = nil, &cleared
+	cs.dropGoal(cs.clock().UnixMilli())
 	native, closed := goal.Engine == "native", cs.closedErr() != nil
 	cs.mu.Unlock()
 	cs.publishGoal()

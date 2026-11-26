@@ -20,11 +20,20 @@ import (
 // queued slash command. Goal updates take the normal SDK notification path.
 type goalWireAgent struct {
 	*heldAgent
-	conn       *sdkacp.AgentSideConnection
-	actions    []string
-	loadStatus string // empty publishes goal: null when loading
-	pauseError error
-	cancelled  chan struct{}
+	conn        *sdkacp.AgentSideConnection
+	actions     []string
+	loadStatus  string // empty publishes goal: null when loading
+	pauseError  error
+	promptError error // what a prompt ends with
+	cancelled   chan struct{}
+}
+
+func (a *goalWireAgent) Prompt(ctx context.Context, request sdkacp.PromptRequest) (sdkacp.PromptResponse, error) {
+	response, err := a.heldAgent.Prompt(ctx, request)
+	if a.promptError != nil {
+		return sdkacp.PromptResponse{}, a.promptError
+	}
+	return response, err
 }
 
 func (a *goalWireAgent) Initialize(_ context.Context, req sdkacp.InitializeRequest) (sdkacp.InitializeResponse, error) {
@@ -215,7 +224,7 @@ func TestCodexGoalStaysActiveAfterETA(t *testing.T) {
 	if err := agent.goal(t.Context(), ""); err != nil {
 		t.Fatal(err)
 	}
-	events.goalUntil(t, func(goal *session.Goal) bool { return goal == nil })
+	events.goalUntil(t, noGoal)
 }
 
 func TestCodexGoalPauseAndStopUseNativeControl(t *testing.T) {
@@ -254,7 +263,7 @@ func TestCodexGoalPauseAndStopUseNativeControl(t *testing.T) {
 	if err := agent.goal(t.Context(), ""); err != nil {
 		t.Fatal(err)
 	}
-	events.goalUntil(t, func(goal *session.Goal) bool { return goal == nil })
+	events.goalUntil(t, noGoal)
 }
 
 func TestCodexGoalPauseErrorLeavesGoalActive(t *testing.T) {
@@ -280,13 +289,70 @@ func TestCodexGoalPauseFallsBackWhenActionIsAbsent(t *testing.T) {
 	agent.mu.Lock()
 	methods := slices.Clone(agent.methods)
 	agent.mu.Unlock()
-	if !slices.Equal(methods, []string{"session/prompt"}) || len(queuedIDs(conv)) != 1 {
-		t.Fatalf("expected a queued pause command: calls=%v queue=%v", methods, queuedIDs(conv))
+	// An agent that cannot pause gets /goal clear, steered into its turn, and the goal stays here.
+	if !slices.Equal(methods, []string{"session/prompt", "_session/steering"}) || len(queuedIDs(conv)) != 0 {
+		t.Fatalf("expected a steered clear command: calls=%v queue=%v", methods, queuedIDs(conv))
+	}
+	if err := agent.goal(t.Context(), ""); err != nil {
+		t.Fatal(err)
 	}
 	agent.release <- struct{}{}
+	waitConversationState(t, conv, "idle")
+	if goal := goalNow(conv); goal.State != "paused" {
+		t.Fatalf("goal = %+v", goal)
+	}
+}
+
+// A refused sign-in blocks an active goal, and the agent dropping that goal keeps it here. A
+// goal already met when the sign-in fails stays history.
+func TestSignInFailureBlocksAnActiveGoal(t *testing.T) {
+	agent := &goalWireAgent{actions: []string{"set", "clear"}, promptError: sdkacp.NewAuthRequired(nil)}
+	conv, events := connectGoalWire(t, acp.NewEventLog(0), agent, "")
+	beginGoalWireTurn(t, conv, agent)
+	agent.release <- struct{}{}
+	if goal := events.goalUntil(t, goalIn("blocked")); goal.LastReason != "sign-in required" {
+		t.Fatalf("goal = %+v", goal)
+	}
+	if err := agent.goal(t.Context(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if goal := goalNow(conv); goal.State != "blocked" {
+		t.Fatalf("goal = %+v", goal)
+	}
+}
+
+func TestSignInFailureLeavesAMetGoalAsHistory(t *testing.T) {
+	agent := &goalWireAgent{actions: []string{"set", "clear"}, promptError: sdkacp.NewAuthRequired(nil)}
+	conv, events := connectGoalWire(t, acp.NewEventLog(0), agent, "")
+	beginGoalWireTurn(t, conv, agent)
+	// Met in the same turn that is then refused: it stays met until the person's next prompt.
+	if err := agent.goal(t.Context(), "complete"); err != nil {
+		t.Fatal(err)
+	}
+	agent.release <- struct{}{}
+	events.goalUntil(t, goalIn("met"))
+	waitConversationState(t, conv, "idle")
+	waitReleased(conv)
+	if goal := goalNow(conv); goal.State != "met" {
+		t.Fatalf("goal = %+v", goal)
+	}
+	// That prompt retires it, so its own refusal has no goal to block.
+	if _, err := startPrompt(t.Context(), conv, acp.PromptInput{Text: "again"}, false); err != nil {
+		t.Fatal(err)
+	}
+	events.goalUntil(t, noGoal)
 	awaitGoalWireSignal(t, agent.received)
 	agent.release <- struct{}{}
 	waitConversationState(t, conv, "idle")
+	waitReleased(conv)
+	if err := agent.goal(t.Context(), "complete"); err != nil {
+		t.Fatal(err)
+	}
+	conv.mu.Lock()
+	defer conv.mu.Unlock()
+	if conv.goal != nil {
+		t.Fatalf("goal = %+v", conv.goal)
+	}
 }
 
 func TestCodexGoalLoadKeepsCurrentSnapshot(t *testing.T) {
@@ -299,7 +365,7 @@ func TestCodexGoalLoadKeepsCurrentSnapshot(t *testing.T) {
 			saved := &session.Goal{Objective: "ship it", Engine: "native", State: "met", LastReason: "the agent finished"}
 			conv.restoreGoal(saved)
 			if status == "" {
-				events.goalUntil(t, func(goal *session.Goal) bool { return goal == nil })
+				events.goalUntil(t, noGoal)
 			} else if goal := events.goalUntil(t, goalIn("active")); goal.LastReason != "" || goal.StartedAt != 1710000000000 {
 				t.Fatalf("snapshot did not replace old inferred state: %+v", goal)
 			}
