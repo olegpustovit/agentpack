@@ -175,7 +175,7 @@ test("USE-04 hides numbers on error with Retry, shows Partial offline notice, an
   await expect(page.getByText("No usage in this range")).toBeVisible()
 })
 
-test("USE-05 and USE-06 show disagreement banner, stale passed reset, remaining hero, 44px disclosure, and machine sign-in link", async ({ page }) => {
+test("USE-05 and USE-06 show disagreement banner, stale passed reset, remaining hero, 44px disclosure, and one sign-in link", async ({ page }) => {
   await page.clock.setFixedTime(NOW)
   await mockAPI(page)
   await page.route("**/api/nodes*", (route) => route.fulfill({
@@ -192,7 +192,7 @@ test("USE-05 and USE-06 show disagreement banner, stale passed reset, remaining 
           node_id: "gateway",
           harness: "codex",
           state: "available",
-          observed_at: "2026-11-17T12:00:00Z",
+          observed_at: "2026-11-18T14:10:00Z",
           windows: [{ id: "session", label: "5h window", remaining_percent: 75, reset_at: "2026-11-18T17:00:00Z", duration_seconds: 18000 }],
         },
         {
@@ -215,6 +215,14 @@ test("USE-05 and USE-06 show disagreement banner, stale passed reset, remaining 
           state: "error",
           error: "authentication required",
           observed_at: "2026-11-18T14:59:00Z",
+          windows: [],
+        },
+        {
+          node_id: "n3",
+          harness: "grok",
+          state: "error",
+          error: "authentication required",
+          observed_at: "2026-11-18T14:00:00Z",
           windows: [],
         },
       ],
@@ -240,8 +248,9 @@ test("USE-05 and USE-06 show disagreement banner, stale passed reset, remaining 
   const disclosure = page.getByRole("button", { name: "Other machines (1)" })
   expect((await disclosure.boundingBox())!.height).toBeGreaterThanOrEqual(44)
 
-  // Signed-out provider links to machine sign-in alongside copy command.
+  // A provider signed out everywhere is one row that links to Vault, with no disclosure.
+  await expect(page.locator('[data-provider="grok"]').getByRole("button")).toHaveCount(0)
   const signInLink = page.getByRole("link", { name: "Sign in on birch" })
   await expect(signInLink).toBeVisible()
-  await expect(signInLink).toHaveAttribute("href", "/machines/n2")
+  await expect(signInLink).toHaveAttribute("href", "/settings/connections")
 })

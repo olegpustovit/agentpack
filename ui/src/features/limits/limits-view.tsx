@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { getRouteApi, Link } from "@tanstack/react-router"
-import { Check, Copy, RefreshCw } from "lucide-react"
+import { RefreshCw } from "lucide-react"
 import { Meter, Section } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
@@ -12,10 +12,10 @@ import { usageQuery } from "@/features/usage/queries"
 import { api, LOCAL } from "@/lib/api"
 import type { LimitWindow } from "@/lib/api-types"
 import { harnessName, plural, relativeTime } from "@/lib/format"
-import { hud, useCopied } from "@/lib/hud"
+import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { limitsQuery } from "./queries"
-import { absoluteResetTime, disagreementSummary, isWindowStale, loginCommands, needsLogin, observedAt, paceText, remainingPercent, resetPassed, resetText, runsOutAt, tightestWindow, useLimitGroups, windowsOf, type LimitReport, type ProviderGroup } from "./model"
+import { absoluteResetTime, disagreementSummary, isWindowStale, needsLogin, observedAt, paceText, remainingPercent, resetPassed, resetText, runsOutAt, tightestWindow, useLimitGroups, windowsOf, type LimitReport, type ProviderGroup } from "./model"
 
 const limitsRoute = getRouteApi("/_app/usage/limits")
 
@@ -58,11 +58,11 @@ export function LimitsView() {
     const entry = queries.byMachine[machine.id]
     return entry?.data ? observedAt(entry.data, entry.updatedAt) : 0
   }))
-  const tightest = tightestWindow(groups)
+  const tightest = tightestWindow(groups, now)
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ToolbarTitle title="Limits" subtitle={[`Best report per provider · ${plural(machines.length, "machine")}`, latest > 0 && `updated ${relativeTime(new Date(latest), Math.max(now, latest))}`].filter(Boolean).join(" · ")} />
+      <ToolbarTitle title="Limits" subtitle={[`Newest reading per account · ${plural(machines.length, "machine")}`, latest > 0 && `updated ${relativeTime(new Date(latest), Math.max(now, latest))}`].filter(Boolean).join(" · ")} />
       <RefreshButton machines={machines} />
       {outdated.length > 0 && <Banner>{`${names(outdated)} ${outdated.length === 1 ? "needs" : "need"} an update to show limits.`}</Banner>}
       {machines.map((machine) => {
@@ -87,7 +87,7 @@ export function LimitsView() {
                 {pending.map((machine) => <RowSkeleton key={machine.id} lines={2} />)}
               </div>
             </Section>
-            <p className="mt-(--s3) text-(length:--fs-sm) text-(--fg2)">The best report per provider wins. One login can be shared by several machines.</p>
+            <p className="mt-(--s3) text-(length:--fs-sm) text-(--fg2)">Each account shows its newest reading. One login can be shared by several machines.</p>
           </div>
         </div>
       )}
@@ -162,6 +162,8 @@ function ProviderLimits({ group, now }: { group: ProviderGroup; now: number }) {
   const { selected } = group
   const observed = observedAt([selected.snapshot], 0)
   const disagreement = disagreementSummary(group, now)
+  // Machines that are all signed out say the same thing, and one sign-in fixes them all.
+  const sameLogin = !group.usable && [selected, ...group.others].every((report) => needsLogin(report.snapshot))
   return (
     <section
       aria-label={harnessName(group.provider)}
@@ -177,7 +179,7 @@ function ProviderLimits({ group, now }: { group: ProviderGroup; now: number }) {
       </header>
       {disagreement && <Banner tone="warn">{disagreement}</Banner>}
       <ReportBody report={selected} now={now} />
-      {group.others.length > 0 && (
+      {group.others.length > 0 && !sameLogin && (
         <button
           type="button"
           aria-expanded={open}
@@ -205,15 +207,16 @@ function ProviderLimits({ group, now }: { group: ProviderGroup; now: number }) {
 function ReportBody({ report, now }: { report: LimitReport; now: number }) {
   const { snapshot } = report
   if (needsLogin(snapshot)) {
-    const command = loginCommands[snapshot.harness]
+    // A Mac's message says why its own login can't be used and already says to sign in once, so nothing repeats it.
+    const keychain = snapshot.error?.includes("keychain")
     return (
       <div className="flex flex-wrap items-center gap-(--s3)">
-        <span className="text-(--fg) font-medium">Signed out</span>
-        <span className="text-(length:--fs-sm) text-(--fg2)">{`Limits need a login on ${report.name}.`}</span>
-        <Link to="/machines/$machine" params={{ machine: report.id }} className="text-(length:--fs-sm) text-(--accent) underline-offset-2 hover:underline">
-          {`Sign in on ${report.name}`}
+        <span className="text-(--fg) font-medium">Sign-in needed</span>
+        <span className="text-(length:--fs-sm) text-(--fg2)">{keychain ? snapshot.error : `Limits need a login on ${report.name}.`}</span>
+        <Link to="/settings/$pane" params={{ pane: "connections" }} className="text-(length:--fs-sm) text-(--accent) underline-offset-2 hover:underline">
+          {keychain ? "Open Vault" : `Sign in on ${report.name}`}
         </Link>
-        {command && <CopyCommand command={command} />}
+        {!keychain && snapshot.harness !== "omp" && <span className="text-(length:--fs-sm) text-(--fg2)">One sign-in covers every machine.</span>}
       </div>
     )
   }
@@ -237,7 +240,7 @@ function WindowMeter({ window, now, provider, observed = now, source }: { window
   const rawPace = expired
     ? { text: "Stale · reset passed", warn: false }
     : stale
-      ? { text: `As of ${relativeTime(new Date(observed), Math.max(now, observed))}`, warn: false }
+      ? { text: `As of ${relativeTime(new Date(observed), Math.max(now, observed))}${source ? ` on ${source}` : ""}`, warn: false }
       : paceText(window, now)
   const pace = !stale && rawPace.warn ? { ...rawPace, text: `Estimate · ${rawPace.text}` } : rawPace
   const provenance = source && observed > 0 && !stale ? `${source} · ${relativeTime(new Date(observed), Math.max(now, observed))}` : ""
@@ -268,32 +271,17 @@ export function LimitsSummary({ agent }: { agent?: string }) {
   return (
     <Section title="Limits" action={<Link to="/usage/limits" search={true} className="text-(length:--fs-sm) text-(--accent) hover:underline">Show All</Link>}>
       <div className="flex flex-col divide-y-[0.5px] divide-(--sep-soft)">
-        {shown.flatMap((group) =>
-          windowsOf(group.selected.snapshot).map((window) => (
+        {shown.flatMap((group) => {
+          const observed = observedAt([group.selected.snapshot], now)
+          return windowsOf(group.selected.snapshot).map((window) => (
             <div key={`${group.provider}:${window.id}`} className="py-(--s3) first:pt-0">
-              <WindowMeter window={window} now={now} provider={group.provider} observed={observedAt([group.selected.snapshot], now)} />
+              {/* The overview names the machine only when its reading is old. */}
+              <WindowMeter window={window} now={now} provider={group.provider} observed={observed} source={isWindowStale(window, observed, now) ? group.selected.name : undefined} />
             </div>
-          )),
-        )}
+          ))
+        })}
       </div>
     </Section>
-  )
-}
-
-// Shows the command the user runs on that machine; click copies it.
-function CopyCommand({ command }: { command: string }) {
-  const [copied, copy] = useCopied()
-  const Icon = copied ? Check : Copy
-  return (
-    <button
-      type="button"
-      aria-label={copied ? "Copied" : `Copy ${command}`}
-      onClick={() => copy(command, "Couldn't copy. Select the command and copy it manually.")}
-      className="flex min-w-0 items-center justify-between gap-(--s3) rounded-(--r-row) bg-(--track) px-(--s3) py-(--s1) text-left text-(--fg)"
-    >
-      <code className="min-w-0 truncate font-(family-name:--mono) text-(length:--fs-sm)">{command}</code>
-      <Icon aria-hidden className="size-(--fs) shrink-0 text-(--fg2)" />
-    </button>
   )
 }
 
