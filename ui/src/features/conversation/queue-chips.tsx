@@ -7,9 +7,14 @@ import { hud } from "@/lib/hud"
 import { promptText, type QueuedPrompt } from "./model"
 import { conversationErrorMessage, conversationNeedsUpdate } from "./queries"
 
+export const sendNowDismisses = "Send now dismisses the question and sends."
+
 // Queued messages live in the worker, so every viewer sees and can change the same queue.
-export function QueueChips({ queue, machine, sessionId, readOnly, steering, steerJoins, onSteer }: {
-  queue: QueuedPrompt[]; machine: string; sessionId: string; readOnly?: boolean; steering?: string; steerJoins?: boolean; onSteer: (id: string) => void
+export function QueueChips({ queue, machine, sessionId, readOnly, steering, steerJoins, held, onSteer }: {
+  queue: QueuedPrompt[]; machine: string; sessionId: string; readOnly?: boolean; steering?: string; steerJoins?: boolean
+  /** A permission or question is open, so Send now dismisses it. */
+  held?: boolean
+  onSteer: (id: string) => void
 }) {
   const [editing, setEditing] = useState<{ id: string; text: string }>()
   const sendDescription = useId()
@@ -33,7 +38,7 @@ export function QueueChips({ queue, machine, sessionId, readOnly, steering, stee
     <ul data-slot="prompt-queue" aria-label="Queued messages" className="flex flex-col gap-(--s2)">
       {!readOnly && queue.some((item) => !item.steer && !item.delivered) && (
         <li id={sendDescription} className="px-(--s2) text-(length:--fs-xs) text-(--fg2)">
-          {steerJoins ? "Send now adds the queued message to the current turn." : "Send now interrupts the current turn and sends the queued message."}
+          {held ? sendNowDismisses : steerJoins ? "Send now adds the queued message to the current turn." : "Send now interrupts the current turn and sends the queued message."}
         </li>
       )}
       {queue.map((item) => {
@@ -77,7 +82,7 @@ export function QueueChips({ queue, machine, sessionId, readOnly, steering, stee
             {!readOnly && !isEditing && !item.delivered && (
               <>
                 {!isSteering && (
-                  <Button type="button" size="sm" variant="ghost" aria-describedby={sendDescription} disabled={change.isPending || steering !== undefined} onClick={() => onSteer(item.queueId)}>
+                  <Button type="button" size="sm" variant="ghost" aria-describedby={sendDescription} title={held ? sendNowDismisses : undefined} disabled={change.isPending || steering !== undefined} onClick={() => onSteer(item.queueId)}>
                     <Send aria-hidden /> Send now
                   </Button>
                 )}

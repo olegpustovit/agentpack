@@ -46,17 +46,30 @@ export function parseGoalCommand(text: string): { kind: "sheet" } | { kind: "act
 
 type PlanEntry = { id?: string; status?: string; content?: string }
 
+function goalTitle(goal: GoalState): string {
+  const words = goalStateWords[goal.state]
+  return goal.state === "blocked" && goal.last_reason === "sign-in required" ? `${words} · ${goal.last_reason}` : words
+}
+
+// A disabled Button ignores the pointer, which would hide the title that says why.
+export function resumeGate(goal: GoalState, signInOpen?: boolean) {
+  return goal.state === "blocked" && signInOpen ? { disabled: true, title: "Sign in first", className: "disabled:pointer-events-auto" } : {}
+}
+
 // The goal takes the plan pill's slot and absorbs it: plan steps open from the pill.
 export function GoalPill({
   goal,
   plan,
   readOnly,
+  signInOpen,
   onEdit,
   onAction,
 }: {
   goal?: GoalState
   plan: PlanEntry[]
   readOnly?: boolean
+  /** The agent waits for a sign-in, so a blocked goal cannot resume yet. */
+  signInOpen?: boolean
   onEdit: () => void
   onAction: (action: GoalAction) => void
 }) {
@@ -70,7 +83,7 @@ export function GoalPill({
         {goal ? (
           <>
             <Flag aria-hidden className={`size-(--s4) shrink-0 ${goal.state === "active" ? "text-(--accent)" : goal.state === "met" ? "text-(--ok-word)" : "text-(--fg3)"}`} />
-            <span className="shrink-0 font-medium">{goalStateWords[goal.state]}</span>
+            <span className="shrink-0 font-medium">{goalTitle(goal)}</span>
             <span className="shrink-0 tabular-nums text-(--fg2)">{clock(goalElapsedMs(goal, now))}</span>
             <span className="min-w-0 flex-1 truncate text-(--fg2)">{goal.objective}</span>
             {plan.length > 0 && <span className="shrink-0 text-(--fg3)">{done} of {plan.length}</span>}
@@ -92,7 +105,7 @@ export function GoalPill({
               {goal.state === "active" ? (
                 <Button type="button" size="sm" onClick={() => onAction("pause")}><Pause aria-hidden /> Pause</Button>
               ) : goal.state !== "met" ? (
-                <Button type="button" size="sm" onClick={() => onAction("resume")}><Play aria-hidden /> Resume</Button>
+                <Button type="button" size="sm" {...resumeGate(goal, signInOpen)} onClick={() => onAction("resume")}><Play aria-hidden /> Resume</Button>
               ) : null}
               <Button type="button" size="sm" onClick={onEdit}><Pencil aria-hidden /> Edit</Button>
               <Button type="button" size="sm" variant="ghost" onClick={() => onAction("clear")}><X aria-hidden /> Clear</Button>

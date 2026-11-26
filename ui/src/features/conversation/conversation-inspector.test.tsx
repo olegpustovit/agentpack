@@ -1,7 +1,7 @@
 import { act } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot, type Root } from "react-dom/client"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { SessionInfo } from "@/lib/api-types"
 import type { ThreadState } from "./model"
 import { ConversationInspector } from "./conversation-inspector"
@@ -91,5 +91,23 @@ describe("conversation inspector", () => {
     expect(container.querySelector("[role=switch]")?.getAttribute("aria-checked")).toBe("true")
     expect(container.textContent).toContain("It can never approve permissions.")
     expect(container.textContent).toContain("Started byClaude")
+  })
+
+  it("compacts without passing the click event on", () => {
+    const compact = vi.fn()
+    act(() => root.render(<QueryClientProvider client={client}><ConversationInspector thread={{ ...thread, context_tokens: 90, context_limit: 100 }} info={info} machine="local" open compact={compact} /></QueryClientProvider>))
+    const button = [...container.querySelectorAll("button")].find((item) => item.textContent === "Compact")!
+    act(() => button.click())
+    expect(compact.mock.calls).toEqual([[]])
+  })
+
+  it("holds Resume on a blocked goal until the sign-in is done", () => {
+    const goal = { objective: "Ship it", state: "blocked" as const, last_reason: "sign-in required" }
+    const render = (signInOpen: boolean) => act(() => root.render(<QueryClientProvider client={client}><ConversationInspector thread={thread} info={info} machine="local" open goal={goal} signInOpen={signInOpen} /></QueryClientProvider>))
+    const resume = () => [...container.querySelectorAll("button")].find((item) => item.textContent === "Resume")!
+    render(true)
+    expect([resume().disabled, resume().title]).toEqual([true, "Sign in first"])
+    render(false)
+    expect(resume().disabled).toBe(false)
   })
 })

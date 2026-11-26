@@ -164,6 +164,8 @@ function RichCard({ data, machine, sessionId }: { data: unknown; machine: string
 
 // Agent errors arrive as JSON-RPC error objects; show their words, not the JSON.
 export function noticeText(description: string): string {
+  // agy refuses a steer while it waits for an answer; its own words name a session ID and a protocol method.
+  if (description.includes("waiting for a permission or question answer")) return "This message wasn't delivered because the agent was waiting for your answer. Send it again."
   try {
     const error = JSON.parse(description) as { message?: unknown; data?: { error?: unknown; details?: unknown } }
     const detail = error.data?.details ?? error.data?.error

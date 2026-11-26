@@ -67,6 +67,8 @@ export type SessionInfo = {
   agent_session_id?: string
   agent_capabilities?: AgentCapabilities
   conversation_state?: string
+  // The gateway will resume this stopped chat once sign-ins have synced; older peers omit it.
+  resume_pending?: boolean
   started_at?: string
   started_by?: Actor
   last_used?: string
