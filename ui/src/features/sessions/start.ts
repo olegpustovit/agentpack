@@ -6,14 +6,14 @@ import { hud } from "@/lib/hud"
 import type { SessionInfo } from "@/lib/api-types"
 import { saveStartChoices } from "./choices"
 import { sessionRowQuery, sessionsQuery } from "./queries"
-import { reusesOperationId, startSessionBody, type SessionView } from "./rules"
+import { needsImagesUpdate, reusesOperationId, startSessionBody, type FirstImage, type SessionView } from "./rules"
 import { onSignOut } from "@/lib/persist"
 import { search } from "@/lib/search"
 
 // `prompt` is the new chat's first queued message.
 // `worktree` is "new", an existing worktree of directory, or "" for the folder itself (remembered as the
 // choice); a new worktree's branch is named from the prompt.
-export type StartInput = { machine: string; directory: string; harness: string; mode: string; view: SessionView; agentSessionId?: string; prompt?: string; sendOnResume?: boolean; model?: string; effort?: string; worktree?: string; carry?: boolean; forkFrom?: string; switchFrom?: string }
+export type StartInput = { machine: string; directory: string; harness: string; mode: string; view: SessionView; agentSessionId?: string; prompt?: string; sendOnResume?: boolean; images?: FirstImage[]; model?: string; effort?: string; worktree?: string; carry?: boolean; forkFrom?: string; switchFrom?: string }
 
 const chatClaims = new Map<string, Promise<SessionInfo>>()
 const sessionSearch = search({ q: "text", group: "text", tab: "text" })
@@ -134,6 +134,7 @@ export function useStartSession(review?: { onAccepted?: (input: StartInput) => v
   return {
     ...start,
     needsTerminalUpdate,
+    needsImagesUpdate: Boolean(review && needsImagesUpdate(start.error, Boolean(start.input?.images?.length))),
     outcomeUnknown: Boolean(start.error && (reusesOperationId(start.error) || (start.error instanceof ApiError && start.error.status === 408))),
     check: async () => {
       if (!start.variables || !claimID) return false

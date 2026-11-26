@@ -1,6 +1,6 @@
 import type { ProjectRow, SessionInfo } from "@/lib/api-types"
 import { basename } from "@/lib/format"
-import { ApiError } from "@/lib/api"
+import { ApiError, routeMissing } from "@/lib/api"
 import type { ListedSession } from "./group"
 import type { StartChoices } from "./choices"
 import { projectDirectory } from "./git"
@@ -41,7 +41,16 @@ export function reusesOperationId(error: unknown): boolean {
   return !(error instanceof ApiError && error.status >= 400 && error.status < 500)
 }
 
+// An older gateway refuses the unknown first_images field, also through a peer proxy and whatever the size.
+// Never a 502: that is also an offline peer or a lost reply, where the chat may have started.
+export function needsImagesUpdate(error: unknown, images: boolean): boolean {
+  return images && (routeMissing(error) || (error instanceof ApiError && error.status === 400 && error.message === "invalid request"))
+}
+
 export type SessionView = "chat" | "terminal"
+
+// `data` is the image's base64 bytes.
+export type FirstImage = { name: string; width: number; height: number; data: string }
 
 export function startSessionBody(input: {
   directory: string
@@ -51,6 +60,7 @@ export function startSessionBody(input: {
   agentSessionId?: string
   prompt?: string
   sendOnResume?: boolean
+  images?: FirstImage[]
   model?: string
   effort?: string
   // "new" or the path of an existing worktree of directory; absent runs in the folder itself.
@@ -58,7 +68,9 @@ export function startSessionBody(input: {
   worktreeName?: string
   carry?: boolean
 }) {
-  const message = input.view === "chat" && (!input.agentSessionId || input.sendOnResume) ? input.prompt?.trim() : undefined
+  // Whether this start carries a first message: its text and its images travel together.
+  const sending = input.view === "chat" && (!input.agentSessionId || input.sendOnResume)
+  const message = sending ? input.prompt?.trim() : undefined
   const model = input.view === "chat" ? input.model?.trim() : undefined
   const effort = input.view === "chat" ? input.effort?.trim() : undefined
   return {
@@ -68,6 +80,7 @@ export function startSessionBody(input: {
     transport: input.view === "chat" ? "acp" : "terminal",
     ...(input.agentSessionId ? { agent_session_id: input.agentSessionId } : {}),
     ...(message ? { first_message: message } : {}),
+    ...(sending && input.images?.length ? { first_images: input.images } : {}),
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
     ...(input.worktree ? { worktree: input.worktree, ...(input.worktreeName ? { worktree_name: input.worktreeName } : {}), ...(input.carry ? { carry: true } : {}) } : {}),

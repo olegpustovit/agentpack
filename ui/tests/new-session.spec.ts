@@ -256,6 +256,72 @@ test("composer offers snapshot model, reasoning, and agent slash commands while 
   })
 })
 
+test("the footer keeps Commands and Chat|Terminal on one line, desktop and phone width", async ({ page }) => {
+  await page.route("**/api/projects", (route) => route.fulfill({
+    json: [projectRow("/work/previous", [{ harness: "codex" }], { git: { branch: "main", head: "abc", dirty: 0 }, modes: [{ name: "default" }, { name: "review" }] })],
+  }))
+  await page.route("**/api/worktrees", (route) => route.fulfill({ json: { git: true, worktrees: [] } }))
+  const option = (category: string, name: string) => ({ type: "select", id: category, name, category, currentValue: "a", options: [{ value: "a", name: "A" }] })
+  await page.route("**/api/agent-snapshot**", (route) => route.fulfill({
+    json: {
+      config: { configOptions: [option("model", "Model"), option("thought_level", "Reasoning")] },
+      commands: { availableCommands: [{ name: "review", description: "Review changes" }] },
+    },
+  }))
+  await page.goto("/sessions?new=1")
+  const sheet = page.getByRole("dialog", { name: "New session" })
+  const commands = sheet.getByRole("button", { name: "Commands", exact: true })
+  const views = sheet.getByRole("group", { name: "Open as" })
+  await expect(sheet.getByRole("combobox", { name: "Reasoning" })).toBeVisible()
+  // The innermost block holding both the message and the toolbar.
+  const card = sheet.locator("div").filter({ has: page.getByRole("textbox", { name: "First message" }) }).filter({ has: page.getByRole("group", { name: "Open as" }) }).last()
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 800 })
+    // Retried: the sheet takes a moment to settle at a new width.
+    await expect(async () => {
+      const [button, group, outer, workspace] = await Promise.all([commands, views, card, sheet.getByRole("combobox", { name: "Workspace" })].map((item) => item.boundingBox()))
+      // The toolbar is its own row, under the run options.
+      expect(button!.y).toBeGreaterThanOrEqual(workspace!.y + workspace!.height)
+      expect(Math.abs(button!.y + button!.height / 2 - (group!.y + group!.height / 2))).toBeLessThanOrEqual(2)
+      expect(group!.x + group!.width).toBeLessThanOrEqual(Math.min(outer!.x + outer!.width, width))
+    }).toPass({ timeout: 3_000 })
+  }
+})
+
+test("images attach to the first message, and an older machine says Needs update", async ({ page }) => {
+  const starts: { first_images?: Record<string, unknown>[] }[] = []
+  let answer = { status: 400, body: "invalid request" }
+  await page.route(/\/api\/sessions(\?.*)?$/, (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    starts.push(route.request().postDataJSON())
+    return route.fulfill(answer)
+  })
+  await page.goto("/sessions?new=1")
+  const sheet = page.getByRole("dialog", { name: "New session" })
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64")
+  const attach = () => sheet.locator('input[type="file"]').setInputFiles({ name: "shot.png", mimeType: "image/png", buffer: png })
+  const row = sheet.getByText("Image attached · shot.png")
+  const send = sheet.getByRole("button", { name: "Start and send" })
+  await expect(sheet.getByRole("button", { name: "Attach image" })).toBeEnabled()
+  await attach()
+  await expect(row).toBeVisible()
+  await expect(sheet.locator("img[src^='blob:']")).toBeVisible()
+  await send.click()
+  await expect(sheet.getByText(/^Needs update · Install a newer Agentpack on .* to attach images, or remove them\.$/)).toBeVisible()
+  expect(starts[0]?.first_images).toEqual([{ name: "shot.png", width: 1, height: 1, data: png.toString("base64") }])
+  await expect(row).toBeVisible()
+  await sheet.getByRole("button", { name: "Remove shot.png" }).click()
+  await expect(row).toHaveCount(0)
+
+  // A 502 may have started the chat: no Needs update, and nothing to press a second time.
+  answer = { status: 502, body: "remote node connection failed" }
+  await attach()
+  await send.click()
+  await expect(sheet.getByText("Launch outcome unknown. The session may have started.")).toBeVisible()
+  await expect(send).toHaveCount(0)
+  expect(starts).toHaveLength(2)
+})
+
 test("model and reasoning options stay scoped to machine, project, agent, and mode, and hide in terminal", async ({ page }) => {
   const starts: unknown[] = []
   await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "birch", name: "Birch", online: true }] }))

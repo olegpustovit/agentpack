@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { ApiError } from "@/lib/api"
 import { type ListedSession } from "./group"
-import { canStart, mergeProjects, modeChoices, modeEffect, placeLabel, projectGroups, projectLocation, reusesOperationId, sessionRules, startSessionBody } from "./rules"
+import { canStart, mergeProjects, modeChoices, modeEffect, needsImagesUpdate, placeLabel, projectGroups, projectLocation, reusesOperationId, sessionRules, startSessionBody } from "./rules"
 
 function session(overrides: Partial<ListedSession> & { interactive?: boolean; running?: boolean } = {}): ListedSession {
   const { interactive = true, running = true, ...rest } = overrides
@@ -89,6 +89,29 @@ describe("startSessionBody", () => {
     expect(terminal).toMatchObject({ transport: "terminal" })
     expect(terminal).not.toHaveProperty("model")
     expect(terminal).not.toHaveProperty("effort")
+  })
+})
+
+describe("first images", () => {
+  const images = [{ name: "a.png", width: 1, height: 1, data: "AA==" }]
+  const body = (extra: object) => startSessionBody({ directory: "/w", harness: "claude", mode: "default", view: "chat", images, ...extra })
+
+  it("travel with a chat start or a send-on-resume only", () => {
+    expect(body({}).first_images).toEqual(images)
+    expect(body({ agentSessionId: "c", sendOnResume: true }).first_images).toEqual(images)
+    expect(body({ view: "terminal" })).not.toHaveProperty("first_images")
+    expect(body({ agentSessionId: "c" })).not.toHaveProperty("first_images")
+    expect(body({ images: [] })).not.toHaveProperty("first_images")
+  })
+
+  it("recognise only a definitive older-gateway refusal", () => {
+    expect(needsImagesUpdate(new ApiError("invalid request", 400), true)).toBe(true)
+    expect(needsImagesUpdate(new ApiError("not found", 404), true)).toBe(true)
+    // The chat may have started, or the new gateway refused the images themselves.
+    expect(needsImagesUpdate(new ApiError("bad gateway", 502), true)).toBe(false)
+    expect(needsImagesUpdate(new ApiError("session not found", 404), true)).toBe(false)
+    expect(needsImagesUpdate(new ApiError("first_images are invalid", 400), true)).toBe(false)
+    expect(needsImagesUpdate(new ApiError("invalid request", 400), false)).toBe(false)
   })
 })
 

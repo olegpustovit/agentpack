@@ -8,7 +8,7 @@ import { Kbd, Spinner } from "@/components/kit/feedback"
 import { FilterButton, FilterChip, FilterFacet, FilterToken } from "@/components/kit/filters"
 import { GroupHeader, SegmentedControl, SegmentedControlItem, SourceList, SourceRow } from "@/components/kit/list"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { ChevronRight, FolderSearch, History, Slash } from "lucide-react"
+import { ChevronRight, FolderSearch, History, Plus, SquareSlash } from "lucide-react"
 import { isFolderPath } from "./folder-path"
 import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { Button, buttonVariants } from "@/components/ui/button"
@@ -18,12 +18,15 @@ import { applyHint, atQuery, commandSpans, filterAtHints, filterSlashHints, move
 import { ComposerHintsMenu } from "@/features/conversation/composer-hints-menu"
 import { configRole, parseConfigOptions, type ConfigOption } from "@/features/conversation/config-options"
 import { agentSnapshotQuery } from "@/features/conversation/queries"
+import { AttachmentRow } from "@/features/conversation/attachment-row"
+import { imageFilesFromClipboard, imageFilesFromList } from "@/features/conversation/composer-attach"
+import { loadImageSize, revokePreview } from "@/features/conversation/upload-blob"
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { api, ApiError, errorText, LOCAL, routeMissing } from "@/lib/api"
 import type { AgentSession, ProjectRow } from "@/lib/api-types"
 import { harnessName, plural, shortAge } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { agentIds, canStart, defaultAgent, mergeProjects, modeChoices, modeEffect, offlineProjects, placeKey, placeLabel, projectGroups, projectLocation, stubRow, type MergedProject, type SessionView } from "./rules"
+import { agentIds, canStart, defaultAgent, mergeProjects, modeChoices, modeEffect, offlineProjects, placeKey, placeLabel, projectGroups, projectLocation, stubRow, type FirstImage, type MergedProject, type SessionView } from "./rules"
 import { useStartSession, type StartInput } from "./start"
 import { useEventsConnected } from "@/features/events/use-events"
 import { LoginGlyph } from "@/features/library/mcp-inspector"
@@ -39,6 +42,26 @@ import { RowSheet, type SheetState } from "./session-sheets"
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
 const AgentSignIn = lazy(() => import("@/features/agents/sign-in").then((module) => ({ default: module.SignIn })))
 const automaticChoice = "\0"
+// The gateway's limits on a first message.
+const maxImages = 32
+const maxImageBytes = 20 * 1024 * 1024
+
+type SheetImage = FirstImage & { size: number; previewUrl: string }
+
+function readBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "")
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
+async function readImage(file: File): Promise<SheetImage> {
+  const [{ width, height }, data] = await Promise.all([loadImageSize(file), readBase64(file)])
+  // A blob: preview, because the gateway's CSP refuses data: images.
+  return { name: file.name, width, height, data, size: file.size, previewUrl: URL.createObjectURL(file) }
+}
 
 function launchChoices(option: Extract<ConfigOption, { type: "select" }>, label: string) {
   const last = option.items.find((item) => item.value === option.value)?.label
@@ -118,6 +141,14 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
   const [resume, setResume] = useState(false)
   const [resumeId, setResumeId] = useState("")
   const [prompt, setPrompt] = useState(initialPrompt ?? "")
+  // Closing the sheet discards these, as it discards the typed text.
+  const [images, setImages] = useState<SheetImage[]>([])
+  const [imageError, setImageError] = useState<string>()
+  const [reading, setReading] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const imagesRef = useRef(images)
+  useEffect(() => { imagesRef.current = images }, [images])
+  useEffect(() => () => { for (const image of imagesRef.current) revokePreview(image.previewUrl) }, [])
   const [query, setQuery] = useState("")
   const [folderPath, setFolderPath] = useState("~/")
   const [browseFolders, setBrowseFolders] = useState(false)
@@ -368,8 +399,35 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
     })
   }
 
+  async function attachImages(files: File[]) {
+    if (history || view !== "chat" || showProjectPicker || !row || !mutable || reading || files.length === 0) return
+    const allowed = imageFilesFromList(files)
+    start.reset()
+    setImageError(allowed.length < files.length ? "Only PNG, JPEG, GIF and WebP images can be attached." : undefined)
+    const bytes = [...images, ...allowed].reduce((sum, item) => sum + item.size, 0)
+    if (images.length + allowed.length > maxImages || bytes > maxImageBytes) {
+      setImageError("Attach up to 32 images, 20 MiB in total.")
+      return
+    }
+    setReading(true)
+    for (const file of allowed) {
+      await readImage(file).then(
+        (image) => setImages((current) => [...current, image]),
+        () => setImageError(`Couldn't read ${file.name}.`),
+      )
+    }
+    setReading(false)
+  }
+
+  function removeImage(image: SheetImage) {
+    revokePreview(image.previewUrl)
+    setImages((current) => current.filter((item) => item !== image))
+    setImageError(undefined)
+    start.reset()
+  }
+
   function launch(sendOnResume = false) {
-    if (!history && place && row && !blocked && (!sendOnResume || (resumeConversation && prompt.trim()))) {
+    if (!history && place && row && !blocked && (!sendOnResume || (resumeConversation && hasMessage))) {
       start.mutate({
         machine: place.machine,
         directory: resumeConversation?.cwd || row.directory,
@@ -378,6 +436,7 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
         view,
         agentSessionId: resumeConversation?.id,
         prompt: view === "chat" ? prompt : undefined,
+        images: view === "chat" && images.length > 0 ? images.map(({ name, width, height, data }) => ({ name, width, height, data })) : undefined,
         sendOnResume,
         model: view === "chat" ? chosenModel : undefined,
         effort: view === "chat" ? chosenEffort : undefined,
@@ -390,7 +449,7 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
   // With a message typed, resuming sends it; "Resume only" keeps it as a draft.
   function submit(event: FormEvent) {
     event.preventDefault()
-    launch(resuming && Boolean(prompt.trim()))
+    launch(resuming && hasMessage)
   }
 
   function submitShortcut(event: KeyboardEvent<HTMLFormElement>) {
@@ -413,7 +472,8 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
   else if (unavailable) hint = `${harnessName(harnessId)} is not installed on ${machineName}. Choose an installed agent.`
   else if (chatUnavailableHint) hint = chatUnavailableHint
   else if (view === "chat" && pastSessions.error && !signInError(pastSessions.error)) hint = `Couldn't load conversations: ${(pastSessions.error as Error).message}`
-  const blocked = !mutable || browser.creation.isPending || showProjectPicker || !startable || accounts.isLoading || unavailable ||
+  const hasMessage = prompt.trim() !== "" || images.length > 0
+  const blocked = !mutable || reading || browser.creation.isPending || showProjectPicker || !startable || accounts.isLoading || unavailable ||
     (browsing && !picked?.browsed) || (resuming && !resumeConversation) || (view === "chat" && Boolean(chatUnavailableHint))
   const failedMachines = machines.filter((machine) => machine.online && projectQueries.byMachine[machine.id]?.error)
 
@@ -466,7 +526,17 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
   }
 
   return <>
-    <form onSubmit={submit} onKeyDown={submitShortcut} className="contents">
+    <form
+      onSubmit={submit}
+      onKeyDown={submitShortcut}
+      onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) event.preventDefault() }}
+      onDrop={(event) => {
+        if (!event.dataTransfer.types.includes("Files")) return
+        event.preventDefault()
+        void attachImages(Array.from(event.dataTransfer.files))
+      }}
+      className="contents"
+    >
       <header className="flex min-w-0 items-center justify-between gap-(--s3) border-b-[0.5px] border-(--sep) px-(--dlg-pad) py-(--s5)">
         <div className="min-w-0 flex-1">
           <SheetTitle>{history ? "Project history" : "New session"}</SheetTitle>
@@ -629,6 +699,13 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
                         onScroll={(event) => { if (backdropRef.current) backdropRef.current.scrollTop = event.currentTarget.scrollTop }}
                         onSelect={(event) => setCaret({ draft: event.currentTarget.value, at: event.currentTarget.selectionStart })}
                         onBlur={() => setHintsClosed(true)}
+                        onPaste={(event) => {
+                          const files = imageFilesFromClipboard(event.clipboardData)
+                          if (files.length > 0) {
+                            event.preventDefault()
+                            void attachImages(files)
+                          }
+                        }}
                         onChange={(event) => {
                           setPrompt(event.currentTarget.value)
                           setCaret({ draft: event.currentTarget.value, at: event.currentTarget.selectionStart })
@@ -664,8 +741,16 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
                   ) : (
                     <p className="px-(--s5) pt-(--s4) pb-(--s2) text-(length:--fs-sm) text-(--fg2)">{`Opens ${harnessName(harnessId)} in an interactive terminal. Nothing is sent.`}</p>
                   )}
+                  {view === "chat" && images.length > 0 && (
+                    <div className="flex max-h-[30dvh] min-w-0 flex-col gap-(--s2) overflow-y-auto px-(--s3) pt-(--s2)">
+                      {images.map((image) => (
+                        <AttachmentRow key={image.previewUrl} name={image.name} previewUrl={image.previewUrl} disabled={!mutable} onRemove={() => removeImage(image)} />
+                      ))}
+                    </div>
+                  )}
+                  {view === "chat" && imageError && <FieldError className="px-(--s5) pt-(--s2)">{imageError}</FieldError>}
                   {/* How it runs: macOS pop-up buttons, one per decision, with remembered defaults. */}
-                  <div className="flex min-w-0 flex-wrap items-center gap-(--s2) px-(--s3) pt-(--s2) pb-(--s3)">
+                  <div className="flex min-w-0 flex-wrap items-center gap-(--s2) px-(--s3) pt-(--s2) pb-(--s2)">
                     <PopupSelect label="Agent" value={harnessId} onValueChange={(id) => { setHarness(id); setResumeId("") }}
                       items={agentIds.map((id) => {
                         const used = row.launches.find((launch) => launch.harness === id)
@@ -710,6 +795,28 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
                           ]} />
                       </div>
                     )}
+                  </div>
+                  {/* The composer toolbar: one line that never wraps. */}
+                  <div className="flex items-center gap-(--s1) px-(--s3) pb-(--s3)">
+                    {view === "chat" && (
+                      <>
+                        <input
+                          ref={fileRef}
+                          type="file"
+                          accept="image/png,image/jpeg,image/gif,image/webp"
+                          multiple
+                          className="hidden"
+                          onChange={(event) => {
+                            const files = Array.from(event.currentTarget.files ?? [])
+                            event.currentTarget.value = ""
+                            void attachImages(files)
+                          }}
+                        />
+                        <Button type="button" size="icon" variant="ghost" aria-label="Attach image" title="Attach images" disabled={reading} onClick={() => fileRef.current?.click()}>
+                          <Plus aria-hidden />
+                        </Button>
+                      </>
+                    )}
                     {view === "chat" && hasAgentCommands && (
                       <Button
                         type="button"
@@ -720,7 +827,7 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={openSlashHints}
                       >
-                        <Slash aria-hidden />
+                        <SquareSlash aria-hidden />
                       </Button>
                     )}
                     <SegmentedControl value={[view]} onValueChange={chooseView} aria-label="Open as" className="ms-auto">
@@ -838,13 +945,18 @@ function NewSessionForm({ initialMachine, initialDirectory, initialPrompt, start
             {place && hint && <p className="wrap-anywhere text-(length:--fs-sm) text-(--fg2)">{hint}</p>}
             {start.error && !worktreeError && <FieldError>{start.needsTerminalUpdate
               ? `Needs update · Install a newer Agentpack on ${machineName} to launch a terminal.`
-              : start.error.message}</FieldError>}
+              : start.needsImagesUpdate
+                ? `Needs update · Install a newer Agentpack on ${machineName} to attach images, or remove them.`
+                : start.error.message}</FieldError>}
             <SheetActions pinned={false}>
               {!showProjectPicker && (
                 <>
-                  {resuming && prompt.trim() && <Button type="button" disabled={blocked} onClick={() => launch()}>Resume only</Button>}
+                  {resuming && hasMessage && (
+                    <Button type="button" disabled={blocked || images.length > 0} title={images.length > 0 ? "Remove images to resume without sending" : undefined}
+                      className="disabled:pointer-events-auto" onClick={() => launch()}>Resume only</Button>
+                  )}
                   <Button type="submit" variant="primary" disabled={blocked}>
-                    {resuming ? prompt.trim() ? "Resume and send" : "Resume" : view === "terminal" ? "Open terminal" : prompt.trim() ? "Start and send" : "Start chat"}
+                    {resuming ? hasMessage ? "Resume and send" : "Resume" : view === "terminal" ? "Open terminal" : hasMessage ? "Start and send" : "Start chat"}
                     <Kbd aria-hidden className="text-current opacity-70">{isMac ? "⌘↵" : "Ctrl+↵"}</Kbd>
                   </Button>
                 </>
