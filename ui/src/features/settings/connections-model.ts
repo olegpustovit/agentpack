@@ -43,7 +43,7 @@ export const connectionsQuery = (live: boolean) => queryOptions({
   refetchInterval: live ? false : 30_000,
 })
 
-// Sign-in leaves for the authorization server and comes back through the gateway to return_to (Settings → Connections by default).
+// Sign-in leaves for the authorization server and comes back through the gateway to return_to (Settings → Vault by default).
 type SignInInput = { url: string; label?: string; client_id?: string; client_secret?: string; return_to?: string }
 type SignInOutcome = { status: "pending" | "connected" | "failed"; credential_id?: string; error?: string }
 
