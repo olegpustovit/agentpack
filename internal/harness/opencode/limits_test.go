@@ -1,7 +1,10 @@
 package opencode
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -24,5 +27,18 @@ func TestMeterWindowKeepsSourceFactsOnly(t *testing.T) {
 	weekly := meterWindow("go/weekly", "Go weekly", usage.Data.Go.Weekly)
 	if *weekly.UsedPercent != 0 || weekly.ResetAt == nil {
 		t.Fatalf("measured zero must survive: %+v", weekly)
+	}
+}
+
+func TestReadLimitsHidesTheProbeError(t *testing.T) {
+	// A file that cannot be executed makes the probe fail with a raw OS error.
+	broken := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(broken, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENCODE_PATH", broken)
+	got := ReadLimits(context.Background())
+	if got.State != "error" || got.Error != "OpenCode could not report usage limits." {
+		t.Fatalf("snapshot = %+v", got)
 	}
 }

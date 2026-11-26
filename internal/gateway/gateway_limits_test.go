@@ -64,7 +64,8 @@ func TestLimitsPersistPerNodeAndReplaceOnlyTheirOwnRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	probe := func(context.Context) []harness.LimitSnapshot {
-		return []harness.LimitSnapshot{{Harness: "codex"}, {Harness: "claude"}}
+		// A window that has not started has no reset time.
+		return []harness.LimitSnapshot{{Harness: "codex", Windows: []harness.LimitWindow{{ID: "untouched", UsedPercent: new(0.0), ResetText: "starts on first use"}}}, {Harness: "claude"}}
 	}
 	a, err := newLimitsCache(store, "node-a", probe)
 	if err != nil {
@@ -76,6 +77,10 @@ func TestLimitsPersistPerNodeAndReplaceOnlyTheirOwnRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.collect(context.Background(), limitsCacheTTL)
+	var reset int64
+	if err := store.Reader.QueryRow("SELECT reset_at FROM limit_samples WHERE node_id='node-b' AND window_id='untouched'").Scan(&reset); err != nil || reset != 0 {
+		t.Fatalf("untouched sample reset_at=%d err=%v", reset, err)
+	}
 	if err := a.save(savedLimits{At: time.Now(), Snapshots: []harness.LimitSnapshot{{Harness: "claude"}}}); err != nil {
 		t.Fatal(err)
 	}

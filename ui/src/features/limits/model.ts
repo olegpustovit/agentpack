@@ -87,6 +87,8 @@ export function disagreementSummary(group: ProviderGroup, now: number): string |
   for (const other of group.others) {
     if (!usable(other.snapshot)) continue
     const otherObserved = observedAt([other.snapshot], 0)
+    // Usage moves with time: only readings taken close together can disagree.
+    if (Math.abs(selectedObserved - otherObserved) > STALE_LIMIT_MS) continue
     for (const selWin of selectedWindows) {
       const otherWin = windowsOf(other.snapshot).find((candidate) => candidate.id === selWin.id)
       if (!otherWin) continue
@@ -144,18 +146,14 @@ export function needsLogin(snapshot: LimitSnapshot): boolean {
   return snapshot.state === "error" && loginError.test(snapshot.error ?? "")
 }
 
-// Only the sign-in commands agentpack ships; other providers show the message alone.
-export const loginCommands: Record<string, string | undefined> = {
-  codex: "agentpack codex login",
-  grok: "agentpack grok login",
-}
-
 // The usable window with the least left across providers, which the sidebar and the Limits hero lead with.
-export function tightestWindow(groups: ProviderGroup[]): { group: ProviderGroup; window: LimitWindow; left: number } | undefined {
+export function tightestWindow(groups: ProviderGroup[], now = Date.now()): { group: ProviderGroup; window: LimitWindow; left: number } | undefined {
   let best: { group: ProviderGroup; window: LimitWindow; left: number } | undefined
   for (const group of groups) {
     if (!group.usable) continue
     for (const window of windowsOf(group.selected.snapshot)) {
+      // A window whose reset passed no longer limits anything.
+      if (resetPassed(window, now)) continue
       const left = remainingPercent(window)
       if (left !== undefined && (!best || left < best.left)) best = { group, window, left }
     }

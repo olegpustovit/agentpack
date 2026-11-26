@@ -24,6 +24,24 @@ func TestParseReportKeepsModelFamiliesApart(t *testing.T) {
 	}
 }
 
+func TestParseReportGivesUntouchedBucketsNoResetDate(t *testing.T) {
+	windows, err := parseReport(`{"status":"SUCCESS","command":{"data":{"groups":[{"name":"Gemini Models","buckets":[
+		{"id":"full","remaining_fraction":1,"reset_time":"2026-10-30T18:26:43Z"},
+		{"id":"touched","remaining_fraction":0.9999,"reset_time":"2026-10-30T18:26:43Z"},
+		{"id":"empty","remaining_fraction":0,"reset_time":"2026-10-30T18:26:43Z"}]}]}}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if windows[0].ResetAt != nil || windows[0].ResetText != "starts on first use" {
+		t.Fatalf("untouched = %+v", windows[0])
+	}
+	for _, window := range windows[1:] {
+		if window.ResetAt == nil || window.ResetText != "" {
+			t.Fatalf("touched = %+v", window)
+		}
+	}
+}
+
 func TestParseReportRejectsFailedStatus(t *testing.T) {
 	if _, err := parseReport(`{"status":"ERROR"}`); err == nil {
 		t.Fatal("want error for non-success status")

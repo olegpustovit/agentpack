@@ -96,7 +96,7 @@ test("limits view shows each harness with partial failures and no raw CLI output
   const grid = page.getByRole("region", { name: "Provider limits" })
   await expect(grid).toBeVisible()
   await expect(page.getByRole("meter", { name: "Codex 5h remaining" })).toHaveAttribute("value", "72")
-  await expect(grid.locator('[data-provider="grok"]')).toContainText("Signed out")
+  await expect(grid.locator('[data-provider="grok"]')).toContainText("Sign-in needed")
   await expect(grid.locator('[data-provider="codex"]')).toContainText("Codex")
 })
 

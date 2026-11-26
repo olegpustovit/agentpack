@@ -101,13 +101,23 @@ test("returning to Limits within a minute makes no request and shows no loader",
   expect(requests).not.toContain("n4")
 })
 
-test("unavailable providers sit in a dim card below the usable ones, and a missing login offers its command", async ({ page }) => {
+test("unavailable providers sit in a dim card below the usable ones, and a missing login links to Vault", async ({ page }) => {
+  limits.local!.push({ harness: "cursor", state: "error", error: "Cursor's keychain login can't be read. Sign in once from Vault to show limits.", windows: [] })
   await page.goto("/usage/limits")
-  await expect(grid(page).getByText("Signed out", { exact: true })).toBeVisible()
-  await expect(grid(page).getByRole("button", { name: "Copy agentpack grok login" })).toBeVisible()
+  const grok = grid(page).locator('[data-provider="grok"]')
+  await expect(grok.getByText("Sign-in needed", { exact: true })).toBeVisible()
+  await expect(grok).toContainText("Limits need a login on host-a.")
+  await expect(grok).toContainText("One sign-in covers every machine.")
+  await expect(grok.getByRole("link", { name: "Sign in on host-a" })).toHaveAttribute("href", "/settings/connections")
+  await expect(grok.getByRole("button")).toHaveCount(0)
+
+  // A Mac's keychain message already says to sign in, so the row does not repeat it.
+  const cursor = grid(page).locator('[data-provider="cursor"]')
+  await expect(cursor.getByRole("link", { name: "Open Vault" })).toHaveAttribute("href", "/settings/connections")
+  await expect(cursor.getByText(/sign.in/i)).toHaveText(["Sign-in needed", /^Cursor's keychain login/])
 
   const providers = await grid(page).locator("[data-provider]").evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.provider))
-  expect(providers).toEqual(["codex", "claude", "grok"])
+  expect(providers).toEqual(["codex", "claude", "grok", "cursor"])
 
   const colors = await grid(page)
     .locator("[data-provider]")
@@ -158,4 +168,12 @@ test("a phone shows limits as one full-width card, with nothing wider than the s
   await card.getByRole("button", { name: "Other machines (1)" }).click()
   await expect(card).toContainText("40% left")
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
+test("an old reading says which machine it is from", async ({ page }) => {
+  const now = new Date()
+  await page.clock.setFixedTime(now)
+  limits = { local: [{ ...codex(72), observed_at: new Date(now.getTime() - 9 * 3_600_000).toISOString() }] }
+  await page.goto("/usage/limits")
+  await expect(grid(page).getByText("As of 9 hours ago on host-a")).toBeVisible()
 })

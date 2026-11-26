@@ -3,10 +3,10 @@ package opencode
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	base "github.com/olegpustovit/agentpack/internal/harness"
+	"github.com/olegpustovit/agentpack/internal/obs"
 )
 
 const limitsSource = "opencode api experimental.usage.limits"
@@ -43,11 +43,10 @@ func ReadLimits(ctx context.Context) base.LimitSnapshot {
 		WriteScope: "none",
 	})
 	if err != nil {
-		snapshot.Error = err.Error()
-		return snapshot
-	}
-	if result.ExitCode != 0 {
-		snapshot.Error = fmt.Sprintf("opencode exited with code %d", result.ExitCode)
+		_, event := obs.Start(obs.ProcessTrace(ctx), "harness", "read OpenCode limits")
+		event.Fail(err)
+		event.End()
+		snapshot.Error = "OpenCode could not report usage limits."
 		return snapshot
 	}
 	var usage usageLimitsResponse

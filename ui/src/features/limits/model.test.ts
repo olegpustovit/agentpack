@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { LimitSnapshot, LimitWindow } from "@/lib/api-types"
-import { absoluteResetTime, disagreementSummary, isWindowStale, needsLogin, observedAt, paceText, providerGroups, remainingPercent, resetText, runsOutAt, selectReport, untilText, type LimitReport } from "./model"
+import { absoluteResetTime, disagreementSummary, isWindowStale, needsLogin, observedAt, paceText, providerGroups, remainingPercent, resetPassed, resetText, runsOutAt, selectReport, tightestWindow, untilText, type LimitReport } from "./model"
 
 const snapshot = (over: Partial<LimitSnapshot>): LimitSnapshot => ({
   harness: "codex",
@@ -106,7 +106,14 @@ describe("needsLogin", () => {
     expect(needsLogin(snapshot({ state: "error", error: "Grok login expired. Sign in with agentpack grok login." }))).toBe(true)
   })
 
+  it("is true for both Cursor sign-in messages", () => {
+    for (const error of ["No Cursor sign-in on this machine. Sign in from Vault.", "Cursor's keychain login can't be read. Sign in once from Vault to show limits."]) {
+      expect(needsLogin(snapshot({ state: "error", error }))).toBe(true)
+    }
+  })
+
   it("is false for other errors and for available providers", () => {
+    expect(needsLogin(snapshot({ state: "error", error: "OpenCode could not report usage limits." }))).toBe(false)
     expect(needsLogin(snapshot({ state: "error", error: "codex reported no rate-limit windows" }))).toBe(false)
     expect(needsLogin(snapshot({ state: "unsupported", error: "codex CLI not found" }))).toBe(false)
     expect(needsLogin(snapshot({ state: "available" }))).toBe(false)
@@ -176,7 +183,7 @@ describe("staleness, disagreement, and absolute reset time", () => {
 
   it("summarizes material disagreement between machines", () => {
     const stale = report("atlas", {
-      observed_at: "2026-10-29T12:00:00Z",
+      observed_at: "2026-10-30T11:10:00Z",
       windows: [window({ id: "w", remaining_percent: 75, reset_at: "2026-10-30T15:00:00Z" })],
     })
     const fresh = report("birch", {
@@ -186,6 +193,26 @@ describe("staleness, disagreement, and absolute reset time", () => {
     const [group] = providerGroups([stale, fresh], now)
     expect(disagreementSummary(group!, now)).toContain("birch reports 4% left")
     expect(disagreementSummary(group!, now)).toContain("atlas reported 75%")
+  })
+
+  it("does not compare readings more than an hour apart", () => {
+    const reading = (id: string, observed_at: string, remaining_percent: number) => report(id, { observed_at, windows: [window({ remaining_percent })] })
+    const [group] = providerGroups([reading("atlas", "2026-10-29T12:00:00Z", 75), reading("birch", "2026-10-30T11:59:00Z", 4)], now)
+    expect(disagreementSummary(group!, now)).toBeUndefined()
+  })
+
+  it("skips a passed window when picking the tightest one", () => {
+    const windows = [
+      window({ id: "short", remaining_percent: 0, reset_at: "2026-10-30T11:00:00Z" }),
+      window({ id: "week", remaining_percent: 36, reset_at: "2026-11-02T12:00:00Z" }),
+    ]
+    expect(tightestWindow(providerGroups([report("atlas", { windows })], now), now)?.window.id).toBe("week")
+  })
+
+  it("never reads an untouched window as reset passed", () => {
+    const untouched = window({ remaining_percent: 100, reset_text: "starts on first use" })
+    expect(resetPassed(untouched, now)).toBe(false)
+    expect(resetText(untouched, now)).toEqual({ text: "starts on first use", refreshing: false })
   })
 
   it("formats an absolute reset time only for future resets", () => {

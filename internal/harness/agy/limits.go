@@ -84,7 +84,10 @@ func parseReport(stdout string) ([]base.LimitWindow, error) {
 				UsedPercent:      &used,
 				RemainingPercent: &remaining,
 			}
-			if resetAt, err := time.Parse(time.RFC3339, bucket.ResetTime); err == nil {
+			// An untouched bucket reports now + window, which slides on every probe.
+			if *bucket.RemainingFraction >= 1 {
+				window.ResetText = "starts on first use"
+			} else if resetAt, err := time.Parse(time.RFC3339, bucket.ResetTime); err == nil {
 				window.ResetAt = &resetAt
 			}
 			windows = append(windows, window)
