@@ -619,7 +619,12 @@ func RandomToken() string {
 }
 
 func ReadJSON(w http.ResponseWriter, r *http.Request, value any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	return ReadJSONLimit(w, r, value, 1<<20)
+}
+
+// ReadJSONLimit is ReadJSON for a route whose body may be larger than 1 MiB.
+func ReadJSONLimit(w http.ResponseWriter, r *http.Request, value any, limit int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(value); err != nil {

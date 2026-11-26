@@ -1,11 +1,11 @@
 package gateway
 
 import (
-	gatewaymcp "github.com/olegpustovit/agentpack/internal/gateway/mcp"
-
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/acp"
+	gatewaymcp "github.com/olegpustovit/agentpack/internal/gateway/mcp"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/session"
 	"github.com/olegpustovit/agentpack/internal/state"
@@ -537,6 +539,133 @@ func TestStartingChatAcceptsImagesBeforeWorkerExists(t *testing.T) {
 	prompt, err := network.PromptInputFromLog(entries[0].Payload)
 	if err != nil || len(prompt.Images) != 1 || prompt.Images[0].Sha != result.SHA {
 		t.Fatalf("queued image: %+v %v", prompt.Images, err)
+	}
+}
+
+func TestSessionStartFirstImages(t *testing.T) {
+	home := t.TempDir()
+	dir := seedFolder(t, home)
+	release := make(chan struct{})
+	g, origin := identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
+		<-release
+		return info.ID, nil
+	})
+	defer g.starting.Wait()
+	defer close(release)
+	actor := session.BrowserActor(testBrowserEmail)
+	png := func(fill byte, size int) []byte {
+		return append([]byte{0x89, 'P', 'N', 'G', 13, 10, 26, 10}, bytes.Repeat([]byte{fill}, size)...)
+	}
+	// The first image alone is past the 1 MiB that other routes read.
+	big, small := png(1, 1<<20), png(2, 1)
+	two := []firstImage{{Name: "dir/a.png", Width: 3, Height: 4, Data: big}, {Name: "b.png", Data: small}}
+	start := func(id, transport, message string, images []firstImage) *httptest.ResponseRecorder {
+		t.Helper()
+		body := network.MustRawJSON(chatStartRequest{ID: id, Directory: dir, Harness: "claude", Mode: "default",
+			Transport: transport, FirstMessage: message, FirstImages: images})
+		r := httptest.NewRequest(http.MethodPost, origin.String()+"/api/sessions", bytes.NewReader(body))
+		r.Header.Set("Authorization", "Bearer "+g.local.Secret)
+		r = r.WithContext(session.WithActor(r.Context(), actor))
+		w := httptest.NewRecorder()
+		g.Handler().ServeHTTP(w, r)
+		return w
+	}
+	queued := func(id string) []acp.PromptInput {
+		t.Helper()
+		entries, _, _, err := network.StoredConversationTail(t.Context(), g.store.Reader, id, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var prompts []acp.PromptInput
+		for _, entry := range entries {
+			if entry.Kind != "queued_prompt" {
+				continue
+			}
+			prompt, err := network.PromptInputFromLog(entry.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prompts = append(prompts, prompt)
+		}
+		return prompts
+	}
+	stored := func(id string, data []byte) bool {
+		t.Helper()
+		sessionDir, err := sessionBlobDir(home, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(data)
+		got, err := network.ReadSessionBlob(sessionDir, hex.EncodeToString(sum[:]))
+		return err == nil && bytes.Equal(got, data)
+	}
+
+	const withText = "session-11111111111111111111111111111111"
+	for range 2 { // the replay answers with the same row and queues nothing more
+		w := start(withText, "acp", "look", two)
+		var info session.SessionInfo
+		if err := json.Unmarshal(w.Body.Bytes(), &info); w.Code != http.StatusOK || err != nil || info.ID != withText {
+			t.Fatalf("start = %d %s", w.Code, w.Body.String())
+		}
+	}
+	prompts := queued(withText)
+	if len(prompts) != 1 || prompts[0].Text != "look" || len(prompts[0].Images) != 2 {
+		t.Fatalf("queued prompts = %+v", prompts)
+	}
+	if first := prompts[0].Images[0]; first.Name != "a.png" || first.Width != 3 || first.Height != 4 {
+		t.Fatalf("first image = %+v", first)
+	}
+	if !stored(withText, big) || !stored(withText, small) {
+		t.Fatal("images are not in the session's blob store")
+	}
+
+	const imagesOnly = "session-22222222222222222222222222222222"
+	if w := start(imagesOnly, "acp", "", two[1:]); w.Code != http.StatusOK {
+		t.Fatalf("images only = %d %s", w.Code, w.Body.String())
+	}
+	if prompts := queued(imagesOnly); len(prompts) != 1 || prompts[0].Text != "" || len(prompts[0].Images) != 1 {
+		t.Fatalf("images-only prompt = %+v", prompts)
+	}
+
+	// A taken ID is refused before any byte is written.
+	other := png(3, 1)
+	if w := start(withText, "acp", "look", []firstImage{{Data: other}}); w.Code != http.StatusConflict || stored(withText, other) {
+		t.Fatalf("taken ID = %d %s", w.Code, w.Body.String())
+	}
+
+	const refused = "session-33333333333333333333333333333333"
+	for name, tc := range map[string]struct {
+		transport string
+		images    []firstImage
+	}{
+		"terminal":     {"terminal", two[1:]},
+		"not an image": {"acp", []firstImage{{Data: []byte("plain text")}}},
+		"negative":     {"acp", []firstImage{{Width: -1, Data: small}}},
+		"33 images":    {"acp", slices.Repeat(two[1:], network.MaxPromptImages+1)},
+		"over 20 MiB":  {"acp", []firstImage{{Data: png(4, network.MaxBlobBytes)}}},
+	} {
+		// "invalid request" would read as an older gateway in the web UI.
+		if w := start(refused, tc.transport, "look", tc.images); w.Code != http.StatusBadRequest || strings.Contains(w.Body.String(), "invalid request") {
+			t.Fatalf("%s = %d %s", name, w.Code, w.Body.String())
+		}
+	}
+	if _, err := session.StoredSession(t.Context(), g.store.Reader, refused); !errors.Is(err, session.ErrSessionNotFound) {
+		t.Fatalf("refused start left a row: %v", err)
+	}
+
+	const unwritable = "session-44444444444444444444444444444444"
+	sessionDir := filepath.Join(home, "network", "sessions", unwritable)
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "blobs"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if w := start(unwritable, "acp", "look", two[1:]); w.Code != http.StatusOK {
+		t.Fatalf("unwritable blobs = %d %s", w.Code, w.Body.String())
+	}
+	if info, err := session.StoredSession(t.Context(), g.store.Reader, unwritable); err != nil || info.EndedAt.IsZero() {
+		t.Fatalf("failed blob write did not fail the start: %+v %v", info, err)
 	}
 }
 

@@ -19,7 +19,7 @@ import (
 	"github.com/olegpustovit/agentpack/internal/acp"
 )
 
-const maxPromptImages = 32
+const MaxPromptImages = 32
 
 func PromptLogPayload(input acp.PromptInput) json.RawMessage {
 	return MustRawJSON(promptLogFields(input))
@@ -73,7 +73,7 @@ func promptLogFields(input acp.PromptInput) map[string]any {
 	return body
 }
 
-func sanitizePromptImageName(name string) string {
+func SanitizePromptImageName(name string) string {
 	name = strings.TrimSpace(acp.StripControls(path.Base(strings.ReplaceAll(name, "\\", "/"))))
 	if name == "" || name == "." || name == ".." || name == "/" {
 		return "image"
@@ -91,7 +91,7 @@ func promptContentBlocks(sessionDir string, input acp.PromptInput, imageCapable 
 		blocks = append(blocks, sdkacp.TextBlock(input.Text))
 	}
 	if len(input.Images) > 0 {
-		if len(input.Images) > maxPromptImages {
+		if len(input.Images) > MaxPromptImages {
 			return nil, input, errors.New("too many prompt images")
 		}
 		if sessionDir == "" {
@@ -116,7 +116,7 @@ func promptContentBlocks(sessionDir string, input acp.PromptInput, imageCapable 
 			if mime == "" {
 				return nil, input, errors.New("unsupported blob type")
 			}
-			image.Sha, image.Mime, image.Name = sha, mime, sanitizePromptImageName(image.Name)
+			image.Sha, image.Mime, image.Name = sha, mime, SanitizePromptImageName(image.Name)
 			if imageCapable {
 				image.Kind = "image"
 				normalized = append(normalized, image)
