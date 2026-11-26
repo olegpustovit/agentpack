@@ -1,9 +1,10 @@
-import { useState } from "react"
+import { lazy, Suspense, useRef, useState, type ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Link, useNavigate } from "@tanstack/react-router"
+import { getRouteApi, Link, useNavigate } from "@tanstack/react-router"
 import { ChevronLeft, ChevronRight, Folder, Server, Cpu, X } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, KeyValue, Meter, Section } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
+import { FilterButton, FilterToken } from "@/components/kit/filters"
 import { PopupSelect } from "@/components/kit/forms"
 import { SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
 import { Button } from "@/components/ui/button"
@@ -46,7 +47,14 @@ import { UsageChart } from "./usage-chart"
 import { TokenMix, UsageHeatmap } from "./usage-heatmap"
 import { seriesColor, useNames, useUsage, type Names } from "./use-usage"
 
+// Loaded on first open, so Popover stays out of the route bundle.
+const UsageFilters = lazy(() => import("./usage-filters"))
+const usageRoute = getRouteApi("/_app/usage")
+
 type Dimension = "project" | "agent" | "machine" | "model"
+const dimensions: Dimension[] = ["project", "agent", "machine", "model"]
+const filterDimensions = ["project", "machine", "agent"] as const
+const filterLabels = { project: "Project", machine: "Machine", agent: "Agent" }
 
 const dimensionKey: Record<Dimension, (row: UsageHour) => string> = {
   project: (row) => row.folder_id,
@@ -55,7 +63,6 @@ const dimensionKey: Record<Dimension, (row: UsageHour) => string> = {
   model: (row) => row.model,
 }
 const dimensionTitle: Record<Dimension, string> = { project: "Projects", agent: "Agents", machine: "Machines", model: "Models" }
-const subtitle: Record<View["kind"], string> = { overview: "All machines", project: "Project", machine: "Machine", agent: "Agent" }
 
 const rangeItems: { value: Range; label: string }[] = [
   { value: "day", label: "Day" },
@@ -68,13 +75,18 @@ const metricItems: { value: Metric; label: string }[] = (Object.entries(metrics)
   label: entry.label,
 }))
 
-export function UsageView({ view }: { view: View }) {
+export function UsageView() {
+  const { project, machine, agent } = usageRoute.useSearch()
+  const view: View = { project, machine, agent }
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [filtersLoaded, setFiltersLoaded] = useState(false)
+  const filterButton = useRef<HTMLButtonElement>(null)
   const isPhone = useIsPhone()
   const live = useEventsConnected()
   const machines = useMachines()
   const usage = useUsage()
   const { metric, win, previous, query, now } = usage
-  const names = useNames(query.data)
+  const names = useNames()
   const coverage = query.data?.coverage
   const topology = useQuery({ ...topologyQuery(live), enabled: query.isSuccess && !coverage }).data
   const [hover, setHover] = useState<number | null>(null)
@@ -90,14 +102,16 @@ export function UsageView({ view }: { view: View }) {
   const rows = usage.rows.filter((row) => inView(row, view))
   const previousRows = usage.previousRows.filter((row) => inView(row, view))
   const previousTotal = previousRows.reduce((sum, row) => sum + metrics[metric].value(row), 0)
-  const byAgent = view.kind !== "agent"
+  const byAgent = !view.agent
   const stack = byAgent ? dimensionKey.agent : dimensionKey.model
   const { totals, series } = bucketize(rows, win, metric, stack)
   const average = averageOf(totals, win, now)
   const total = totals.reduce((sum, value) => sum + value, 0)
   const color = (key: string, index: number) => seriesColor(key, index, byAgent)
   const sessions = (query.data?.sessions ?? []).filter((session) => inView(session, view) && activeIn(session, win.starts[0]!, win.end))
-  const title = view.kind === "overview" || !view.id ? "Usage" : names.of(view.kind as Dimension, view.id)
+  const active = filterDimensions.flatMap((key) => (view[key] === undefined ? [] : [{ key, value: names.of(key, view[key]) }]))
+  const filtered = active.length > 0
+  const title = active.length === 1 ? active[0]!.value : "Usage"
   const period = rangeName(win)
   const exactRange = exactRangeLabel(win)
   const compareWindow = comparisonWindowLabel(previous)
@@ -108,7 +122,7 @@ export function UsageView({ view }: { view: View }) {
     ? "Not reported"
     : fmt(index === null ? total : totals[index]!, unit)
 
-  const inScope = (id: string) => view.kind !== "machine" || !view.id || names.machineId(view.id) === names.machineId(id)
+  const inScope = (id: string) => view.machine === undefined || names.machineId(view.machine) === names.machineId(id)
   const shortDate = (date: string) => new Date(date).toLocaleDateString(undefined, { month: "short", day: "numeric" })
   const incomplete = coverage
     ? coverage.filter((entry) => entry.state !== "current" && inScope(entry.node_id)).map((entry) => {
@@ -122,7 +136,7 @@ export function UsageView({ view }: { view: View }) {
       })
   const dataState = usageDataState({ pending: query.isPending, error: Boolean(query.error), hasData: rows.length > 0 || sessions.length > 0, incompleteCount: incomplete.length })
 
-  const hasFilters = view.kind !== "overview" || usage.range !== "week" || usage.back > 0 || metric !== "out" || pinned !== null
+  const canReset = filtered || usage.range !== "week" || usage.back > 0 || metric !== "out" || pinned !== null
   const updateSearch = (patch: { range?: Range; back?: number; metric?: Metric }) =>
     void navigate({
       to: ".",
@@ -135,50 +149,47 @@ export function UsageView({ view }: { view: View }) {
       replace: true,
     })
 
+  const setFilter = (patch: View) =>
+    void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, ...patch }), replace: true })
+  const clearFilters = () => setFilter({ project: undefined, machine: undefined, agent: undefined })
+
   const resetAll = () => {
     setPinned(null)
-    void navigate({ to: "/usage", search: { range: undefined, back: undefined, metric: undefined }, replace: true })
+    void navigate({ to: "/usage", search: {}, replace: true })
   }
+
+  function openFilters(open: boolean) {
+    if (open) setFiltersLoaded(true)
+    setFiltersOpen(open)
+  }
+
+  const filterName = filtered ? `Filters, ${active.length} on` : "Filters"
+  const filterTrigger = (
+    <FilterButton ref={filterButton} active={filtered} aria-label={filterName} title={filterName} aria-expanded={filtersOpen} onClick={() => openFilters(!filtersOpen)} />
+  )
 
   const bucketItems = [
     { value: "all", label: win.range === "day" ? "All hours" : "All days" },
     ...win.starts.map((_, index) => ({ value: String(index), label: bucketLabel(win, index, true) })),
   ]
 
-  const scopeValue = view.kind === "overview" || !view.id ? "overview" : `${view.kind}:${view.id}`
-  const scopeItems = [
-    { value: "overview", label: "Overview" },
-    { value: "limits", label: "Limits" },
-    ...[...totalsBy(usage.rows, metric, dimensionKey.project)].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => ({ value: `project:${id}`, label: `Project · ${names.project(id)}` })),
-    ...[...totalsBy(usage.rows, metric, dimensionKey.machine)].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => ({ value: `machine:${id}`, label: `Machine · ${names.machine(id)}` })),
-    ...[...totalsBy(usage.rows, metric, dimensionKey.agent)].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([id]) => ({ value: `agent:${id}`, label: `Agent · ${names.agent(id)}` })),
-  ]
-  if (view.kind !== "overview" && view.id && !scopeItems.some((item) => item.value === scopeValue)) {
-    scopeItems.splice(2, 0, { value: scopeValue, label: `${subtitle[view.kind]} · ${title}` })
-  }
-
-  function chooseScope(next: string) {
-    if (next === "overview") {
-      void navigate({ to: "/usage", search: true })
-      return
-    }
-    if (next === "limits") {
-      void navigate({ to: "/usage/limits", search: true })
-      return
-    }
-    const colon = next.indexOf(":")
-    if (colon <= 0) return
-    const kind = next.slice(0, colon) as "project" | "machine" | "agent"
-    const id = next.slice(colon + 1)
-    void navigate({ to: "/usage/$kind/$id", params: { kind, id }, search: true })
-  }
-
   const emptyRange = rows.length === 0 && sessions.length === 0
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ToolbarTitle title={title} subtitle={`${subtitle[view.kind]} · ${period}`} />
-      {!isPhone && <RangeControls range={usage.range} back={usage.back} period={period} />}
+      <ToolbarTitle title={title} subtitle={period} />
+      {!isPhone && <RangeControls range={usage.range} back={usage.back} period={period}>{filterTrigger}</RangeControls>}
+      {filtersLoaded && (
+        <Suspense fallback={null}>
+          <UsageFilters anchor={filterButton} open={filtersOpen} onOpenChange={openFilters} view={view} rows={usage.rows} metric={metric} names={names} onFilter={setFilter} />
+        </Suspense>
+      )}
+      {filtered && (
+        <div role="group" aria-label="Active filters" className="flex shrink-0 flex-wrap items-center gap-(--s2) border-b-[0.5px] border-(--sep) px-(--s6) py-(--s3) max-[760px]:px-(--s4)">
+          {active.map(({ key, value }) => <FilterToken key={key} label={filterLabels[key]} value={value} onOpen={() => openFilters(true)} onRemove={() => setFilter({ [key]: undefined })} />)}
+          <button type="button" onClick={clearFilters} className="ms-auto rounded-(--r-xs) text-(length:--fs-xs) font-medium text-(--accent) hover:underline">Clear</button>
+        </div>
+      )}
       {routeMissing(query.error) ? (
         <Banner tone="warn">This gateway needs an update to show usage.</Banner>
       ) : (
@@ -192,7 +203,7 @@ export function UsageView({ view }: { view: View }) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-295 px-(--s7) py-(--s6) max-[760px]:p-(--s4)">
           {isPhone && (
-            <div aria-label="Usage filters" className="mb-(--s4) flex flex-wrap items-center gap-(--s2)">
+            <div className="mb-(--s4) flex flex-wrap items-center gap-(--s2)">
               <div className="flex items-center gap-(--s1)">
                 <Button variant="ghost" size="icon" aria-label="Previous period" onClick={() => updateSearch({ back: usage.back + 1 })}>
                   <ChevronLeft />
@@ -204,8 +215,8 @@ export function UsageView({ view }: { view: View }) {
               </div>
               <PopupSelect label="Range" value={usage.range} items={rangeItems} onValueChange={(value) => updateSearch({ range: value as Range, back: 0 })} />
               <PopupSelect label="Metric" value={metric} items={metricItems} onValueChange={(value) => updateSearch({ metric: value as Metric })} />
-              <PopupSelect label="Scope" value={scopeValue} items={scopeItems} onValueChange={chooseScope} />
-              {hasFilters && (
+              {filterTrigger}
+              {canReset && (
                 <Button type="button" size="sm" variant="ghost" onClick={resetAll}>
                   Reset
                 </Button>
@@ -218,6 +229,10 @@ export function UsageView({ view }: { view: View }) {
               <p className="text-(length:--fs-sm) text-(--fg2)">Loading…</p>
               <RowSkeleton lines={2} className="h-[190px]" />
             </div>
+          ) : emptyRange && filtered ? (
+            <Empty title="No usage matches these filters">
+              <Button type="button" size="sm" onClick={clearFilters}>Clear filters</Button>
+            </Empty>
           ) : emptyRange ? (
             <div className="flex flex-col gap-(--s6)">
               <div data-slot="usage-hero" className="min-w-0 flex-1" aria-live="polite">
@@ -227,11 +242,9 @@ export function UsageView({ view }: { view: View }) {
               <Empty title={dataState === "partial" ? "No synced usage in this range" : "No usage in this range"}>
                 {dataState === "partial" ? "Waiting for usage from the remaining machines." : `No recorded activity for ${exactRange}.`}
               </Empty>
-              {(view.kind === "overview" || view.kind === "agent") && (
-                <div className="grid gap-x-(--s7) gap-y-(--s6) min-[1100px]:grid-cols-2">
-                  <LimitsSummary agent={view.kind === "agent" ? view.id : undefined} />
-                </div>
-              )}
+              <div className="grid gap-x-(--s7) gap-y-(--s6) min-[1100px]:grid-cols-2">
+                <LimitsSummary />
+              </div>
             </div>
           ) : (
             <>
@@ -322,7 +335,7 @@ export function UsageView({ view }: { view: View }) {
                 <ul aria-label="Legend" className="mt-(--s4) flex flex-wrap gap-x-(--s6) gap-y-(--s2)">
                   {series.map((entry, index) => (
                     <li key={entry.key}>
-                      <Legend entry={entry} color={color(entry.key, index)} unit={unit} name={byAgent ? names.agent(entry.key) : names.model(entry.key)} link={byAgent ? entry.key : undefined} />
+                      <Legend entry={entry} color={color(entry.key, index)} unit={unit} name={byAgent ? names.agent(entry.key) : names.model(entry.key)} onPick={byAgent ? () => setFilter({ agent: entry.key }) : undefined} />
                     </li>
                   ))}
                 </ul>
@@ -333,9 +346,9 @@ export function UsageView({ view }: { view: View }) {
               </div>
 
               <div className="mt-(--s7) grid gap-x-(--s7) gap-y-(--s6) min-[1100px]:grid-cols-2">
-                {view.kind === "overview" ? <LimitsSummary /> : <Summary rows={rows} sessions={sessions} view={view} names={names} />}
-                <MostUsed rows={rows} view={view} metric={metric} names={names} />
-                {view.kind === "agent" && <LimitsSummary agent={view.id} />}
+                {!filtered ? <LimitsSummary /> : <Summary rows={rows} sessions={sessions} view={view} names={names} />}
+                <MostUsed rows={rows} view={view} metric={metric} names={names} onFilter={setFilter} />
+                {view.agent !== undefined && <LimitsSummary agent={view.agent} />}
                 <TokenMix rows={rows} />
                 <Efficiency rows={rows} sessions={sessions} />
               </div>
@@ -371,12 +384,13 @@ function bucketDetail(value: number, total: number, period: string, count: numbe
 }
 
 // The toolbar's trailing tools: ‹ This Week › and Day · Week · Month.
-function RangeControls({ range, back, period }: { range: Range; back: number; period: string }) {
+function RangeControls({ range, back, period, children }: { range: Range; back: number; period: string; children: ReactNode }) {
   const navigate = useNavigate()
   const go = (next: { range?: Range; back?: number }) =>
     void navigate({ to: ".", search: (prev: Record<string, unknown>) => ({ ...prev, range: next.range === "week" ? undefined : (next.range ?? prev.range), back: next.back || undefined }), replace: true })
   return (
     <ToolbarSlot>
+      {children}
       <Button variant="ghost" size="icon" aria-label="Previous period" onClick={() => go({ back: back + 1 })}>
         <ChevronLeft />
       </Button>
@@ -393,8 +407,8 @@ function RangeControls({ range, back, period }: { range: Range; back: number; pe
   )
 }
 
-// The legend doubles as totals and drills into an agent.
-function Legend({ entry, color, unit, name, link }: { entry: { key: string; total: number }; color: string; unit: Kind; name: string; link?: string }) {
+// The legend doubles as totals and filters to an agent.
+function Legend({ entry, color, unit, name, onPick }: { entry: { key: string; total: number }; color: string; unit: Kind; name: string; onPick?: () => void }) {
   const body = (
     <>
       <span className="flex items-center gap-(--s3) text-(length:--fs-sm) text-(--fg2)">
@@ -405,10 +419,10 @@ function Legend({ entry, color, unit, name, link }: { entry: { key: string; tota
     </>
   )
   const className = "-mx-(--s3) -my-(--s2) flex flex-col gap-px rounded-(--r-row) px-(--s3) py-(--s2)"
-  return link ? (
-    <Link to="/usage/$kind/$id" params={{ kind: "agent", id: link }} search={true} className={cn(className, "hover:bg-(--hover)")}>
+  return onPick ? (
+    <button type="button" onClick={onPick} className={cn(className, "items-start text-start hover:bg-(--hover)")}>
       {body}
-    </Link>
+    </button>
   ) : (
     <div className={className}>{body}</div>
   )
@@ -418,7 +432,7 @@ function Summary({ rows, sessions, view, names }: { rows: UsageHour[]; sessions:
   const sum = (value: (row: UsageHour) => number) => rows.reduce((total, row) => total + value(row), 0)
   const reported = sessions.some((session) => session.cost_micros >= 0)
   const top = (dimension: Dimension) => [...totalsBy(rows, "out", dimensionKey[dimension])].sort((a, b) => b[1] - a[1])[0]?.[0]
-  const other: Dimension = view.kind === "agent" ? "project" : "agent"
+  const other: Dimension = view.agent === undefined ? "agent" : "project"
   const leader = top(other)
   const last = Math.max(0, ...sessions.map((session) => session.last_event_ms))
   return (
@@ -437,17 +451,11 @@ function Summary({ rows, sessions, view, names }: { rows: UsageHour[]; sessions:
   )
 }
 
-const mostUsedDimensions: Record<View["kind"], Dimension[]> = {
-  overview: ["project", "agent", "machine", "model"],
-  project: ["agent", "machine", "model"],
-  machine: ["project", "agent", "model"],
-  agent: ["project", "machine", "model"],
-}
-
-function MostUsed({ rows, view, metric, names }: { rows: UsageHour[]; view: View; metric: Metric; names: Names }) {
-  const dimensions = mostUsedDimensions[view.kind]
-  const [chosen, setChosen] = useState<Dimension>(dimensions[0]!)
-  const dimension = dimensions.includes(chosen) ? chosen : dimensions[0]!
+function MostUsed({ rows, view, metric, names, onFilter }: { rows: UsageHour[]; view: View; metric: Metric; names: Names; onFilter: (patch: View) => void }) {
+  // A filtered dimension has one row left, so it is not offered.
+  const offered = dimensions.filter((dimension) => dimension === "model" || view[dimension] === undefined)
+  const [chosen, setChosen] = useState<Dimension>("project")
+  const dimension = offered.includes(chosen) ? chosen : offered[0]!
   const entries = [...totalsBy(rows, metric, dimensionKey[dimension])].filter(([, value]) => value > 0).sort((a, b) => b[1] - a[1]).slice(0, 5)
   const most = entries[0]?.[1] || 1
   return (
@@ -455,7 +463,7 @@ function MostUsed({ rows, view, metric, names }: { rows: UsageHour[]; view: View
       title="Most used"
       action={
         <SegmentedControl aria-label="Most used by" value={[dimension]} onValueChange={(value) => value[0] && setChosen(value[0] as Dimension)}>
-          {dimensions.map((entry) => <SegmentedControlItem key={entry} value={entry}>{dimensionTitle[entry]}</SegmentedControlItem>)}
+          {offered.map((entry) => <SegmentedControlItem key={entry} value={entry}>{dimensionTitle[entry]}</SegmentedControlItem>)}
         </SegmentedControl>
       }
     >
@@ -472,7 +480,6 @@ function MostUsed({ rows, view, metric, names }: { rows: UsageHour[]; view: View
                   <span className="block h-full rounded-full bg-(--accent)" style={{ width: `${Math.max(2, (value / most) * 100)}%` }} />
                 </span>
                 <span className="w-14 shrink-0 text-right text-(length:--fs-sm) text-(--fg2) tabular-nums">{fmt(value, metrics[metric].kind)}</span>
-                {dimension !== "model" && <ChevronRight aria-hidden className="size-3 shrink-0 text-(--fg3)" />}
               </>
             )
             const className = "flex h-(--row-h-2) min-w-0 items-center gap-(--s4) rounded-(--r-row) px-(--s3)"
@@ -481,9 +488,9 @@ function MostUsed({ rows, view, metric, names }: { rows: UsageHour[]; view: View
                 {dimension === "model" ? (
                   <div className={className}>{row}</div>
                 ) : (
-                  <Link to="/usage/$kind/$id" params={{ kind: dimension, id }} search={true} className={cn(className, "hover:bg-(--hover)")}>
+                  <button type="button" onClick={() => onFilter({ [dimension]: id })} className={cn(className, "w-full text-start hover:bg-(--hover)")}>
                     {row}
-                  </Link>
+                  </button>
                 )}
               </li>
             )
@@ -564,7 +571,7 @@ function SessionsTable({ sessions, view, names, pinned, onClear, className }: { 
     { key: "cost", label: "Cost", numeric: true, value: (session) => session.cost_micros },
     { key: "started", label: "Started", numeric: true, value: (session) => session.started_ms },
   ]
-  const columns = every.filter((column) => column.key !== view.kind)
+  const columns = every.filter((column) => view[column.key as keyof View] === undefined)
   const by = columns.find((column) => column.key === sort.key) ?? columns[0]!
   const sorted = [...sessions].sort((a, b) => (by.value(a) > by.value(b) ? 1 : by.value(a) < by.value(b) ? -1 : 0) * sort.dir)
   const shown = all ? sorted : sorted.slice(0, PAGE)

@@ -1,17 +1,10 @@
-import { createFileRoute, notFound } from "@tanstack/react-router"
-import { viewKinds } from "@/features/usage/model"
-import { UsageView } from "@/features/usage/usage-view"
+import { createFileRoute, notFound, redirect } from "@tanstack/react-router"
 
-// kind is project (folder ID), machine (node ID) or agent (harness).
+// Sources became filters; old links keep working. Project links carried inode IDs, so they open unfiltered.
 export const Route = createFileRoute("/_app/usage/$kind/$id")({
-  beforeLoad: ({ params }) => {
-    if (!(viewKinds as readonly string[]).includes(params.kind)) throw notFound()
+  beforeLoad: ({ params: { kind, id }, search }) => {
+    if (kind !== "project" && kind !== "machine" && kind !== "agent") throw notFound()
+    const { range, metric } = search
+    throw redirect({ to: "/usage", search: { range, metric, ...(kind === "project" ? {} : { [kind]: id }) }, replace: true })
   },
-  component: UsageDrill,
 })
-
-// Keyed so a new source starts without the previous one's pinned day or sort.
-function UsageDrill() {
-  const { kind, id } = Route.useParams()
-  return <UsageView key={`${kind}:${id}`} view={{ kind: kind as (typeof viewKinds)[number], id }} />
-}

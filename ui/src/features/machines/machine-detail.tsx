@@ -69,7 +69,7 @@ export function MachineDetail({ id }: { id: string }) {
       <Empty title="Not on this mesh">
         <p>{`${id} isn't on this mesh.`}</p>
         <p className="mt-(--s3)">
-          <Link to="/machines" className="text-(--accent) hover:underline">Machines</Link>
+          <Link to="/machines/topology" className="text-(--accent) hover:underline">Machines</Link>
         </p>
       </Empty>
     )

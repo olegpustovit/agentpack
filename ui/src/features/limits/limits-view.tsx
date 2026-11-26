@@ -266,7 +266,7 @@ export function LimitsSummary({ agent }: { agent?: string }) {
   const shown = groups.filter((group) => group.usable && (!agent || group.provider === agent))
   if (shown.length === 0) return null
   return (
-    <Section title="Limits" action={<Link to="/usage/limits" search={true} className="text-(length:--fs-sm) text-(--accent) hover:underline">Show All</Link>}>
+    <Section title="Limits" action={<Link to="/usage/limits" search={{}} className="text-(length:--fs-sm) text-(--accent) hover:underline">Show All</Link>}>
       <div className="flex flex-col divide-y-[0.5px] divide-(--sep-soft)">
         {shown.flatMap((group) =>
           windowsOf(group.selected.snapshot).map((window) => (

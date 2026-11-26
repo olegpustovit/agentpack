@@ -224,11 +224,13 @@ export type MachineQueries<T> = {
 // One query per machine, built from a section-2 factory. Offline machines are disabled.
 export function useMachineQueries<T>(
   factory: (machine: string, live: boolean) => UseQueryOptions<T, Error, T, string[]>,
+  // False reads only what is cached.
+  enabled = true,
 ): MachineQueries<T> {
   const live = useEventsConnected()
   const machines = useMachines()
   return useQueries({
-    queries: machines.map((machine) => ({ ...factory(machine.id, live), enabled: machine.online })),
+    queries: machines.map((machine) => ({ ...factory(machine.id, live), enabled: enabled && machine.online })),
     combine: (results): MachineQueries<T> => {
       const byMachine: Record<string, MachineQuery<T>> = {}
       const errors: Record<string, Error> = {}
@@ -236,7 +238,7 @@ export function useMachineQueries<T>(
       machines.forEach((machine, i) => {
         const result = results[i]
         const error = result?.error ?? null
-        const pending = machine.online && result?.data === undefined && result?.isPending === true
+        const pending = enabled && machine.online && result?.data === undefined && result?.isPending === true
         if (pending) firstLoadPending = true
         if (error) errors[machine.id] = error
         byMachine[machine.id] = {

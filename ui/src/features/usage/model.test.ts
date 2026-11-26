@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { averageOf, bucketOf, bucketize, comparisonWindowLabel, costCoverage, exactRangeLabel, fmt, metrics, reportsCost, usageDataState, windowOf, type UsageHour } from "./model"
+import { averageOf, bucketOf, bucketize, byProject, inView, comparisonWindowLabel, costCoverage, exactRangeLabel, fmt, metrics, reportsCost, usageDataState, windowOf, type UsageHour, type UsageSession } from "./model"
 
 // New York: 4 h behind UTC until DST ends on Sunday, Nov 1 2026, 5 h after.
 const zone = process.env.TZ
@@ -103,5 +103,27 @@ describe("usageDataState and range labels", () => {
     const prev = windowOf("week", 1, wednesday)
     expect(exactRangeLabel(week)).toMatch(/Nov 2 – Nov 8, 2026 \(/)
     expect(comparisonWindowLabel(prev)).toBe("Oct 26 – Nov 1")
+  })
+})
+
+describe("projects and filters", () => {
+  const hourRow = (node_id: string, folder_id: string, harness = "claude") => ({ ...row("2026-11-04T10:00:00Z", harness, 1), node_id, folder_id })
+  const session = (node_id: string, folder_id: string, directory: string) => ({ node_id, folder_id, directory }) as UsageSession
+
+  it("names a project by its folder, merging across machines and keeping equal IDs apart", () => {
+    const { hourly } = byProject({
+      samples: [],
+      sessions: [session("a", "1", "/work/agentpack"), session("b", "2", "/srv/agentpack/"), session("b", "1", "/srv/rays"), session("w", "9", "C:\\code\\agentpack")],
+      hourly: [hourRow("a", "1"), hourRow("b", "2"), hourRow("b", "1"), hourRow("w", "9"), hourRow("a", "404"), hourRow("a", "")],
+    })
+    expect(hourly.map((entry) => entry.folder_id)).toEqual(["agentpack", "agentpack", "rays", "agentpack", "Unknown folder", ""])
+  })
+
+  it("requires every filter to match", () => {
+    const entry = hourRow("a", "agentpack", "codex")
+    expect(inView(entry, {})).toBe(true)
+    expect(inView(entry, { project: "agentpack", machine: "a", agent: "codex" })).toBe(true)
+    expect(inView(entry, { project: "agentpack", agent: "claude" })).toBe(false)
+    expect(inView(entry, { project: "" })).toBe(false)
   })
 })
