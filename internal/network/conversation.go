@@ -473,6 +473,12 @@ func (cs *ConversationSession) observeEntry(entry acp.LogEntry) bool {
 	cs.observeGoalEntry(entry)
 	cs.applyConfigUpdate(entry)
 	switch entry.Kind {
+	case "permission_request", "elicitation":
+		cs.requestOwnTurn = !cs.inPromptTurn
+	case "prompt", "turn_end", "agent_exit":
+		cs.requestOwnTurn = false
+	}
+	switch entry.Kind {
 	case "prompt":
 		cs.inPromptTurn = true
 		cs.lastParentKind = "prompt"

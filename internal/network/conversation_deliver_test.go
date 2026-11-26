@@ -358,7 +358,10 @@ func TestOpenRequestHoldsPrompts(t *testing.T) {
 // until it is resolved, whatever key sent them.
 func TestRequestLeftOpenAfterItsTurnQueuesPrompts(t *testing.T) {
 	conv, agent := newFakeAgentSession(t)
+	// An MCP sign-in link: raised in our turn, still open after it ended.
+	agent.log.Append("prompt", 1, MustRawJSON(map[string]any{"text": map[string]string{"text": "sign in"}}))
 	agent.log.Append("elicitation", 1, MustRawJSON(map[string]string{"elicitationId": "e1", "agentElicitationId": "a1"}))
+	agent.log.Append("turn_end", 1, MustRawJSON(map[string]string{"stopReason": "end_turn"}))
 	queued, first, err := conv.Submit(t.Context(), acp.PromptInput{Text: "go on"}, true)
 	if err != nil || queued == "" || first != nil || len(agent.cancels) != 0 || len(agent.prompts) != 0 {
 		t.Fatalf("queued %q, %d cancels, %v", queued, len(agent.cancels), err)
@@ -368,6 +371,20 @@ func TestRequestLeftOpenAfterItsTurnQueuesPrompts(t *testing.T) {
 		t.Fatalf("sent %q", prompt.Text)
 	}
 	agent.turns <- fakeTurn{}
+}
+
+// An agent woken by its own background work asks a question outside any turn of ours: Send now
+// cancels that turn, so the question is dismissed and the message goes next.
+func TestSendNowDismissesARequestFromTheAgentsOwnTurn(t *testing.T) {
+	conv, agent := newFakeAgentSession(t)
+	agent.log.Append("agent_message_chunk", 1, MustRawJSON(map[string]any{"content": map[string]string{"type": "text", "text": "the build finished"}}))
+	agent.log.Append("permission_request", 1, MustRawJSON(map[string]string{"requestId": "p1"}))
+	if _, _, err := conv.Submit(t.Context(), acp.PromptInput{Text: "go on"}, false); err != nil || len(agent.cancels) != 0 {
+		t.Fatalf("Enter dismissed it: %d cancels, %v", len(agent.cancels), err)
+	}
+	if _, _, err := conv.Submit(t.Context(), acp.PromptInput{Text: "now"}, true); err != nil || len(agent.cancels) != 1 {
+		t.Fatalf("Send now: %d cancels, %v", len(agent.cancels), err)
+	}
 }
 
 // Claude takes agent messages in during its turn and holds them behind the open request itself.

@@ -73,6 +73,7 @@ type turnRunner struct {
 	// turn_end once its last usage_update stays quiet for unpromptedUsageSettle.
 	unpromptedUsageSettle  time.Duration
 	inPromptTurn           bool
+	requestOwnTurn         bool // the open request came from a turn the agent started itself
 	lastParentKind         string
 	unpromptedUsagePending bool
 	settleGen              uint64
@@ -219,9 +220,15 @@ func (cs *ConversationSession) Submit(ctx context.Context, input acp.PromptInput
 // The caller holds queueMu.
 func (cs *ConversationSession) afterQueued(ctx context.Context, steer bool) {
 	cs.mu.Lock()
-	running, broker, nativeSteering := cs.running, cs.broker, cs.steer != nil && cs.state != string(StateNeedsYou)
+	needsYou := cs.state == string(StateNeedsYou)
+	running, broker, nativeSteering, ownTurn := cs.running, cs.broker, cs.steer != nil && !needsYou, needsYou && cs.requestOwnTurn
 	cs.mu.Unlock()
 	if !running {
+		// A request from a turn the agent started itself (woken by its own background work) has
+		// that turn to cancel; one left open after our turn ended has none and waits for its answer.
+		if steer && ownTurn {
+			cs.interruptToSteer(ctx, broker)
+		}
 		cs.maybeDrain()
 		return
 	}
@@ -232,6 +239,11 @@ func (cs *ConversationSession) afterQueued(ctx context.Context, steer bool) {
 	if nativeSteering {
 		return
 	}
+	cs.interruptToSteer(ctx, broker)
+}
+
+// interruptToSteer cancels the agent's turn so the steered message goes next.
+func (cs *ConversationSession) interruptToSteer(ctx context.Context, broker *acp.Broker) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	cs.Log.Append("notice", cs.clock().UnixMilli(), MustRawJSON(map[string]string{
