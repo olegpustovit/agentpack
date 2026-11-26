@@ -49,9 +49,9 @@ describe("vault", () => {
   })
 
   test("variables that change what runs are refused or warned about", () => {
-    for (const name of ["PATH", "HOME", "SHELL", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "AGENTPACK_HOME"]) expect(refusedForAgents(name), name).toBe(true)
+    for (const name of ["PATH", "Path", "HOME", "SHELL", "LD_PRELOAD", "ld_preload", "DYLD_INSERT_LIBRARIES", "AGENTPACK_HOME"]) expect(refusedForAgents(name), name).toBe(true)
     for (const name of ["PATHS", "MY_HOME", "SHELL_OPTS", "OLD_LD_PRELOAD", "DATABASE_URL", "NODE_OPTIONS"]) expect(refusedForAgents(name), name).toBe(false)
-    for (const name of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NODE_OPTIONS"]) expect(changesAgent(name), name).toBe(true)
+    for (const name of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NODE_OPTIONS", "Node_Options"]) expect(changesAgent(name), name).toBe(true)
     expect(changesAgent("GITHUB_TOKEN")).toBe(false)
   })
 })
