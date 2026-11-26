@@ -57,3 +57,14 @@ export function signInStatus(harness: string, row: SharedSignIn | undefined, mac
 export function vaultBadge(signIns: SharedSignIn[], connections: Connection[]): number {
   return signIns.filter((row) => row.state === "expired").length + connections.filter((item) => item.status === "needs_login").length
 }
+
+// A shared secret is an env credential; this approval hands it to agents too.
+export const AGENTS_MODULE = "agentpack:agents"
+
+export const secretReach = (modules: string[]) => (modules.includes(AGENTS_MODULE) ? "MCP servers · agents" : "MCP servers")
+
+// These would let a shared value change what runs, so they are never given to agents. The gateway refuses the same names.
+export const refusedForAgents = (name: string) => /^(PATH|HOME|SHELL)$|^(LD_|DYLD_|AGENTPACK_)/i.test(name)
+
+// Allowed, with a warning in the sheet.
+export const changesAgent = (name: string) => ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NODE_OPTIONS"].includes(name.toUpperCase())

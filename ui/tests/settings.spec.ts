@@ -512,6 +512,90 @@ test("Vault lists agent sign-ins, opens the sign-in sheet and tolerates an older
   await expect(pane.getByText("Update Agentpack on this machine to see agent sign-ins.")).toBeVisible()
 })
 
+const secret = (id: string, label: string, name: string, plugins: string[] = []) => ({ id, match: "", kind: "env", label, status: "connected", names: [name], plugins })
+
+test("adding a shared secret refuses unsafe names and shows a refused grant under the variables", async ({ page }) => {
+  await mockGateway(page)
+  let refuse = true
+  await page.route("**/api/mcp/credentials", (route) => answer(route, route.request().method() === "GET"
+    ? { callback_url: "", credentials: [secret("e1", "cloudflare", "CLOUDFLARE_API_TOKEN")] }
+    : { id: "e2" }))
+  await page.route("**/api/mcp/credentials/e2/approvals", (route) => refuse ? route.fulfill({ status: 400, body: "that name is refused" }) : answer(route, { approved: true }))
+  await page.goto("/settings/connections")
+  await expect(page.getByText("Agents see names through MCP; values only as environment variables.")).toBeVisible()
+  await expect(page.getByRole("listitem").filter({ hasText: "cloudflare" })).toContainText("CLOUDFLARE_API_TOKENMCP servers")
+
+  await page.getByRole("button", { name: "Add secret…" }).click()
+  const sheet = page.getByRole("dialog", { name: "Add secret" })
+  const agents = sheet.getByRole("switch", { name: "Give to agents on every machine" })
+  await expect(agents).not.toBeChecked()
+  await expect(sheet).toContainText("Agents can read these values and may print them into the chat.")
+  await expect(sheet.getByLabel("Value 1")).toHaveAttribute("type", "password")
+  await sheet.getByLabel("Name", { exact: true }).fill("cloudflare")
+  await sheet.getByLabel("Variable 1").fill("LD_PRELOAD")
+  await sheet.getByLabel("Value 1").fill("x")
+  await agents.click()
+  await sheet.getByRole("button", { name: "Save" }).click()
+  await expect(sheet.getByRole("alert")).toHaveText([/A secret named cloudflare exists/, /LD_PRELOAD can’t be given to agents/])
+  expect(calls).toEqual([])
+
+  await sheet.getByLabel("Name", { exact: true }).fill("node")
+  await sheet.getByLabel("Variable 1").fill("NODE_OPTIONS")
+  await expect(sheet.getByRole("status")).toHaveText("NODE_OPTIONS changes how the agent itself runs.")
+  await sheet.getByRole("button", { name: "Save" }).click()
+  await expect(sheet.getByRole("group", { name: "Variables" }).getByRole("alert")).toHaveText("Saved, but not given to agents: that name is refused")
+  refuse = false
+  await sheet.getByRole("button", { name: "Save" }).click()
+  await expect(sheet).toBeHidden()
+  const stored = { request: "POST /api/mcp/credentials", body: { kind: "env", label: "node", values: { NODE_OPTIONS: "x" } } }
+  expect(calls).toEqual([stored, stored, { request: "POST /api/mcp/credentials/e2/approvals", body: { module: "agentpack:agents" } }])
+
+  // Phones stack the name and value.
+  await page.setViewportSize({ width: 390, height: 700 })
+  await page.getByRole("button", { name: "Add secret…" }).click()
+  // Read both in one frame: the sheet is still sliding up.
+  expect(await sheet.evaluate((form) => {
+    const box = (label: string) => form.querySelector(`[aria-label="${label}"]`)!.getBoundingClientRect()
+    return box("Value 1").top >= box("Variable 1").bottom
+  })).toBe(true)
+})
+
+async function openAgentSecret(page: Page) {
+  await mockGateway(page)
+  await page.route("**/api/mcp/credentials", (route) => answer(route, route.request().method() === "GET"
+    ? { callback_url: "", credentials: [secret("e1", "openai", "OPENAI_API_KEY", ["agentpack:agents"])] }
+    : { id: "e1" }))
+  await page.route("**/api/mcp/credentials/e1", (route) => answer(route, { removed: true }))
+  await page.route("**/api/mcp/credentials/e1/approvals", (route) => answer(route, { removed: true }))
+  await page.goto("/settings/connections")
+  return page.getByRole("listitem").filter({ hasText: "openai" })
+}
+
+test("a secret given to agents loses access before its new values land", async ({ page }) => {
+  const row = await openAgentSecret(page)
+  await expect(row).toContainText("MCP servers · agents")
+  await expect(row).not.toContainText("may use it")
+
+  await row.getByRole("button", { name: "openai actions" }).click()
+  await page.getByRole("menuitem", { name: "Replace values…" }).click()
+  const sheet = page.getByRole("dialog", { name: "Replace values for “openai”" })
+  await expect(sheet.getByLabel("Variable 1")).toHaveValue("OPENAI_API_KEY")
+  await sheet.getByRole("switch").click()
+  await sheet.getByLabel("Value 1").fill("new")
+  await sheet.getByRole("button", { name: "Save" }).click()
+  await expect(sheet).toBeHidden()
+  expect(calls.map((call) => call.request)).toEqual(["DELETE /api/mcp/credentials/e1/approvals", "POST /api/mcp/credentials"])
+})
+
+test("removing a shared secret asks first", async ({ page }) => {
+  const row = await openAgentSecret(page)
+  await row.getByRole("button", { name: "openai actions" }).click()
+  await page.getByRole("menuitem", { name: "Remove…" }).click()
+  expect(calls).toEqual([])
+  await page.getByRole("alertdialog").getByRole("button", { name: "Remove", exact: true }).click()
+  await expect.poll(() => calls.map((call) => call.request)).toEqual(["DELETE /api/mcp/credentials/e1"])
+})
+
 test("sidebar search filters sections, opens the first match on Enter and clears on Escape", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings")
