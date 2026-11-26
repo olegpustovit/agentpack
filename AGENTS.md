@@ -197,14 +197,18 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 | `/library/mcp/$name` | same |
 | `/library/discover` | same; Install… sets `add` to the spec |
 | `/library/agentpack/$id` | same, plus `revision`, `restore` |
-| `/machines` | `q` (redirects to `/machines/topology`; phones show the machine list) |
-| `/machines/topology` | none |
-| `/machines/$machine` | `q` |
-| `/usage`, `/usage/$kind/$id` | `range` (`day`, `week`, `month`), `back`, `metric`; `kind` is `project`, `machine` or `agent` |
-| `/usage/limits` | same, plus `machine` |
+| `/system` | none. Desktop redirects to `/usage`; phones show the System list |
+| `/usage` | `range` (`day`, `week`, `month`), `back`, `metric`, and the filters `project` (folder name), `machine` (node ID), `agent` |
+| `/usage/$kind/$id` | redirects to `/usage` with that filter (`machine`, `agent`; old `project` links open unfiltered) |
+| `/usage/limits` | `range`, `back`, `metric`, plus its own `machine` |
 | `/limits` | `machine` (redirects to `/usage/limits`) |
-| `/settings` | none (redirects to `/settings/general`) |
-| `/settings/$pane` | `general`, `notifications`, `sharing`, `replication`, `connections`, `agents`, `omp`, `diagnostics`, `appearance`, `accessibility`, `account`. Diagnostics accepts `issue`, `status`. Connections accepts `callback`, `oauth_login`, `connection`. |
+| `/machines` | none (redirects to `/machines/topology`; phones to `/system`) |
+| `/machines/topology`, `/machines/$machine` | none |
+| `/settings` | none (redirects to `/settings/general`; phones to `/system`) |
+| `/settings/$pane` | `general`, `notifications`, `sharing`, `replication`, `connections`, `agents`, `omp`, `diagnostics`, `appearance`, `account`. Diagnostics accepts `issue`, `status`. Connections accepts `callback`, `oauth_login`, `connection`. |
+| `/settings/accessibility` | redirects to `/settings/appearance` |
+
+The toolbar and phone tab bar hold three views, Sessions, Library and System (⌘1–3, Ctrl off Mac); System keeps the `/usage`, `/machines` and `/settings` URLs beside one shared sidebar (`ui/src/features/system/`).
 
 - **Peers update on their own schedule.** The gateway routinely talks to older peers, so API reads tolerate them: a 404 means `Needs update`, never a raw error, and a response shape that changed is normalized in its query. This is runtime interoperability and is not covered by the pre-release rule. Test new endpoints against a peer without them.
 - **Never use `node` as a search param.** The Go handler treats `?node=` as a proxy instruction on `/api/` paths, and this rule stays in force anyway.

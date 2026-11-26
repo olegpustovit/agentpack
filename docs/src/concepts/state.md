@@ -18,7 +18,7 @@ approvals stay local. Cache and blob bytes use separate verified transfers.
 
 ## Usage counters
 
-The Usage tab reads three replicated sources. Each session row carries its model,
+The Usage page reads three replicated sources. Each session row carries its model,
 turns, token counts and reported cost; `usage_hourly` sums the same counters per
 hour, machine, agent, project folder and model; `limit_samples` keeps each limit
 window's last reading per hour for a week. A machine writes only its own rows, so
