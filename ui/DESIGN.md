@@ -77,6 +77,11 @@ Components live in `ui/src/components/kit/` (shell pieces in `ui/src/features/sh
 | `Empty`, `RowSkeleton`, `Spinner` | plain | Empty says what appears and how. Spinner respects reduced motion |
 | `Kbd` | plain | `--t-caption`, muted; hidden automatically on `@media (hover: none)` |
 
+## Composer keys
+
+- **↵** sends, or queues while the agent works or waits for an answer. **⌘↵** / **Ctrl+↵** steers; while a question is open it dismisses the question and sends.
+- Enter on an empty composer sends the oldest queued message now. Owner requirement; UX audits must not remove it.
+
 ## Motion
 
 Three durations (`--dur-1` 120 ms, `--dur-2` 200 ms, `--dur-3` 320 ms) and one easing curve (`--ease: cubic-bezier(.2, .8, .2, 1)`). Popup entry starts at `--enter-scale` (0.98) and `--enter-shift` (4 px). Progress spinners can loop. `prefers-reduced-motion: reduce` disables all animation and transitions.

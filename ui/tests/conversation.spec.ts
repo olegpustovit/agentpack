@@ -761,16 +761,121 @@ test("Enter queues while the agent works and ⌘Enter steers", async ({ page }) 
     await response
     return route.fulfill({ status: 409, body: "Cannot steer" })
   })
-  // An empty Enter never steers (CHT-02); only the queued item's own button does.
   await message.fill("")
-  await message.press("Enter")
-  expect(steered).toBe("")
   await page.getByRole("button", { name: "Send now" }).click()
   await expect(page.getByText("Steering next:", { exact: true })).toBeVisible()
   await expect.poll(() => steered).toContain("/queue/q1/steer")
   release()
   await expect(page.getByRole("button", { name: "Send now" })).toBeEnabled()
   expect(posts).toHaveLength(2)
+})
+
+// OWNER REQUIREMENT: removed once by an audit (fdc2f019) together with its test; do not remove either.
+test("OWNER REQUIREMENT: Enter on an empty composer sends the queued message now", async ({ page }) => {
+  const posts: Record<string, unknown>[] = []
+  const steers: string[] = []
+  const working = [
+    { seq: 1, ts: 1000, kind: "prompt", payload: { text: { text: "Go" } } },
+    { seq: 2, ts: 1001, kind: "queued_prompt", payload: { queueId: "q1", text: { text: "Then add tests" } } },
+  ].map((entry) => JSON.stringify(entry)).join("\n")
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: working, contentType: "application/x-ndjson" }))
+  await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+  await page.route("**/api/sessions/*/conversation/prompt", (route) => {
+    posts.push(route.request().postDataJSON() as Record<string, unknown>)
+    return route.fulfill({ json: { accepted: true, queued: "q2" } })
+  })
+  let release!: () => void
+  const response = new Promise<void>((resolve) => { release = resolve })
+  await page.route("**/api/sessions/*/conversation/queue/*/steer", async (route) => {
+    steers.push(route.request().url())
+    await response
+    return route.fulfill({ json: {} })
+  })
+  await page.goto("/sessions/local/chat-one")
+  const message = page.getByRole("textbox", { name: "Message" })
+  await expect(message).toHaveAttribute("placeholder", "Queue a message, or ↵ to send the queued one")
+  await message.press("Enter")
+  await expect(page.getByText("Steering next:", { exact: true })).toBeVisible()
+  await expect.poll(() => steers).toEqual([expect.stringContaining("/queue/q1/steer")])
+  release()
+  await expect(page.getByRole("button", { name: "Send now" })).toBeEnabled()
+
+  // Holding Enter after typing sends the typed message once, and the repeat does not also send the queued one.
+  await message.fill("one more")
+  await page.keyboard.down("Enter")
+  await expect(message).toHaveValue("")
+  await page.keyboard.down("Enter")
+  await page.keyboard.up("Enter")
+  await expect.poll(() => posts.length).toBe(1)
+  expect(posts[0]!.steer).toBeUndefined()
+  expect(steers).toHaveLength(1)
+})
+
+test("an open question queues Enter, and sending now dismisses it", async ({ page }) => {
+  const posts: Record<string, unknown>[] = []
+  let steers = 0
+  await page.route("**/api/config", (route) => route.fulfill({ json: { conversation_events: true } }))
+  await page.addInitScript(() => {
+    class Feed extends EventTarget {
+      static CLOSED = 2
+      readyState = 1
+      constructor(url: URL | string) {
+        super()
+        if (String(url).includes("session=chat-one")) Reflect.set(window, "chatFeed", this)
+      }
+      close() {}
+    }
+    Object.defineProperty(window, "EventSource", { value: Feed })
+  })
+  await page.route("**/api/sessions", (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    return route.fulfill({ json: [{ ...session, id: "chat-one", transport: "acp", agent_capabilities: { steering: true } }] })
+  })
+  const held = [
+    { seq: 1, ts: 1000, kind: "prompt", payload: { text: { text: "Go" } } },
+    { seq: 2, ts: 1001, kind: "permission_request", payload: { requestId: "p1", tool: "Bash", summary: "Run tests", options: [{ id: "allow", label: "Allow once" }] } },
+    { seq: 3, ts: 1002, kind: "queued_prompt", payload: { queueId: "q1", text: { text: "Then add tests" } } },
+  ].map((entry) => JSON.stringify(entry)).join("\n")
+  await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body: held + "\n", contentType: "application/x-ndjson" }))
+  await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+  await page.route("**/api/sessions/*/conversation/prompt", (route) => {
+    posts.push(route.request().postDataJSON() as Record<string, unknown>)
+    return route.fulfill({ json: { accepted: true, queued: "q2" } })
+  })
+  await page.route("**/api/sessions/*/conversation/queue/*/steer", (route) => {
+    steers++
+    return route.fulfill({ json: {} })
+  })
+  await page.goto("/sessions/local/chat-one")
+  const dismisses = "Send now dismisses the question and sends."
+  const message = page.getByRole("textbox", { name: "Message" })
+  await expect(message).toHaveAttribute("placeholder", "Queue for after your answer (⌘↵ dismisses it and sends)")
+  await expect(page.locator('[data-slot="prompt-queue"]')).toContainText(dismisses)
+  await expect(page.getByRole("button", { name: "Send now" })).toHaveAttribute("title", dismisses)
+  await message.press("Enter")
+  await message.fill("after the answer")
+  await expect(page.getByRole("button", { name: "Steer" })).toHaveAttribute("title", dismisses)
+  await message.press("Enter")
+  await expect.poll(() => posts.length).toBe(1)
+  expect(posts[0]!.steer).toBeUndefined()
+  await message.fill("do this instead")
+  await message.press("Control+Enter")
+  await expect.poll(() => posts.length).toBe(2)
+  expect(posts[1]).toMatchObject({ text: "do this instead", steer: true })
+  expect(steers).toBe(0)
+
+  // The worker cancels the turn, then sends the message: the dismissed question just goes away.
+  const dock = page.getByRole("region", { name: "Requests from the agent" })
+  await expect(dock).toBeVisible()
+  await page.waitForFunction(() => Boolean(Reflect.get(window, "chatFeed")))
+  await page.evaluate(() => {
+    for (const entry of [
+      { seq: 4, ts: 1003, kind: "permission_result", payload: { requestId: "p1", cancelled: true } },
+      { seq: 5, ts: 1004, kind: "turn_end", payload: { stopReason: "cancelled" } },
+      { seq: 6, ts: 1005, kind: "prompt", payload: { text: { text: "do this instead" } } },
+    ]) Reflect.get(window, "chatFeed").dispatchEvent(new MessageEvent("conversation", { data: JSON.stringify(entry) }))
+  })
+  await expect(dock).toHaveCount(0)
 })
 
 test("⌘Enter submits the composer even while slash hints are open", async ({ page }) => {

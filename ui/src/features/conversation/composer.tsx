@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react"
-import { ArrowUp, AtSign, Check, ChevronDown, CornerDownLeft, Plus, Slash, Square } from "lucide-react"
+import { ArrowUp, AtSign, Check, ChevronDown, CornerDownLeft, Plus, Square, SquareSlash } from "lucide-react"
 import { ConfirmAlert, ConfirmAlertContent, Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
 import { Spinner } from "@/components/kit/feedback"
 import { Button } from "@/components/ui/button"
@@ -18,7 +18,7 @@ import type { LogEntry, ThreadItem, ThreadState, UserMessagePayload } from "./mo
 import { reduceThread } from "./reducer"
 import { userImageSrc } from "./thread-view"
 import { parseGoalCommand } from "./goal-sheet"
-import { QueueChips } from "./queue-chips"
+import { QueueChips, sendNowDismisses } from "./queue-chips"
 import type { useHistoryPaging } from "./conversation-log"
 import { ChatConfigControls, type useChatConfig } from "./chat-config"
 import { applyHint, commandSpans, type AgentCommand, filterAtHints, filterSlashHints, moveHint, slashQuery, type ComposerHint } from "./composer-hints"
@@ -330,9 +330,17 @@ export function Composer({
 
   const canSend = (draft.trim().length > 0 || attachments.length > 0) && uploadingFiles.length === 0 && !needsUpdate && !awaitingSignIn && !(resumable && (attachments.length > 0 || resume.isPending))
   const working = !starting && parent.working
+  // A permission or question is open: Enter queues, and sending now dismisses it first. Not tied to
+  // `working`, which is false while the worker reports needs_you.
+  const held = !starting && !resumable && parent.needs_you
   const nextQueued = parent.queue?.find((item) => !item.steer && !item.delivered)
 
   function submit(steer = false) {
+    // OWNER REQUIREMENT: removed once by an audit (fdc2f019); do not remove.
+    if (!draft.trim() && attachments.length === 0) {
+      if (nextQueued && uploadingFiles.length === 0 && !needsUpdate && !awaitingSignIn && !starting && !resumable && !parent.needs_you && !steerQueued.isPending) steerQueued.mutate(nextQueued.queueId)
+      return
+    }
     if (!canSend) return
     recalledPromptRef.current = null
     const text = draft.trim()
@@ -347,8 +355,7 @@ export function Composer({
       resume.mutate(text)
       return
     }
-    // Writing instead of answering an open question interrupts it, as in the Claude CLI.
-    send.mutate({ text, attachments, clearComposer: true, steer: !starting && (steer || (parent.needs_you && working)) })
+    send.mutate({ text, attachments, clearComposer: true, steer: !starting && steer })
   }
 
   const diffPaths = listDiffChanges(parent.items).map((change) => change.path)
@@ -435,6 +442,7 @@ export function Composer({
           readOnly={needsUpdate || starting}
           steering={steerQueued.isPending ? steerQueued.input : undefined}
           steerJoins={steering}
+          held={held}
           onSteer={steerQueued.mutate}
         />
         {children}
@@ -442,7 +450,7 @@ export function Composer({
           {(starting || resumable || resume.isPending) && (
             <div className="flex flex-wrap items-center justify-between gap-(--s2) px-(--s3) text-(length:--fs-sm) text-(--fg2)">
               <span role="status">
-                {starting || resume.isPending ? "Starting" : awaitingSignIn ? "Awaiting sign-in" : "Stopped"} · {agentName} on {machineName}
+                {stoppedStatus(starting || resume.isPending, info?.resume_pending, awaitingSignIn)} · {agentName} on {machineName}
               </span>
               {resumable && !awaitingSignIn && !resume.isPending && (
                 <Button type="button" size="sm" variant="ghost" disabled={needsUpdate} onClick={() => resume.mutate("")}>Resume</Button>
@@ -475,7 +483,7 @@ export function Composer({
                 id="conversation-message"
                 aria-label="Message"
                 rows={1}
-                placeholder={needsUpdate ? "Update this peer to open the conversation…" : starting || resume.isPending ? "Queue a message while the agent connects…" : awaitingSignIn ? "Draft a message while you sign in…" : resumable ? "Draft a message to send when you resume…" : nextQueued ? "Queue another message, or choose Send now on a queued message" : working ? `Queue a message for ${agentName} (⌘↵ ${steering ? "steers" : "interrupts to steer"})` : `Message ${agentName}`}
+                placeholder={needsUpdate ? "Update this peer to open the conversation…" : starting || resume.isPending ? "Queue a message while the agent connects…" : awaitingSignIn ? "Draft a message while you sign in…" : resumable ? "Draft a message to send when you resume…" : held ? "Queue for after your answer (⌘↵ dismisses it and sends)" : nextQueued ? (matchMedia("(pointer: coarse)").matches ? "Queue another message" : "Queue a message, or ↵ to send the queued one") : working ? `Queue a message for ${agentName} (⌘↵ ${steering ? "steers" : "interrupts to steer"})` : `Message ${agentName}`}
                 value={draft}
                 disabled={needsUpdate}
                 aria-controls={composerHints.length > 0 ? "composer-hints-list" : undefined}
@@ -530,7 +538,7 @@ export function Composer({
                   }
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault()
-                    submit()
+                    if (!event.repeat) submit()
                   }
                 }}
                 className="relative block min-h-(--ctl-h) max-h-45 w-full resize-none border-0 bg-transparent px-(--s3) py-(--s2) text-(length:--fs) text-(--fg) outline-none placeholder:text-(--fg3)"
@@ -578,7 +586,7 @@ export function Composer({
               disabled={needsUpdate}
               onClick={() => setDraft("/")}
             >
-              <Slash aria-hidden />
+              <SquareSlash aria-hidden />
             </Button>
             <span className="min-w-0 flex-1" />
             {info?.transport === "acp" && (
@@ -657,8 +665,8 @@ export function Composer({
                 {stopping ? <Spinner /> : <Square aria-hidden className="fill-current" />}
               </Button>
             )}
-            {working && canSend && (
-              <Button type="button" size="sm" variant="ghost" title={steering ? "Send this into the agent's current turn now (⌘↵)" : "Interrupt the agent and send this now (⌘↵)"} onClick={() => submit(true)}>
+            {(working || held) && canSend && (
+              <Button type="button" size="sm" variant="ghost" title={held ? sendNowDismisses : steering ? "Send this into the agent's current turn now (⌘↵)" : "Interrupt the agent and send this now (⌘↵)"} onClick={() => submit(true)}>
                 <CornerDownLeft aria-hidden /> Steer
               </Button>
             )}
@@ -666,8 +674,8 @@ export function Composer({
               <button
                 type="button"
                 disabled={!canSend}
-                aria-label={starting || working ? "Queue" : resumable ? "Send and resume" : "Send"}
-                title={starting ? "Send when the agent connects (↵)" : working ? "Queue for after this turn (↵)" : resumable ? `Start ${agentName} again and send (↵)` : "Send (↵)"}
+                aria-label={starting || working || held ? "Queue" : resumable ? "Send and resume" : "Send"}
+                title={starting ? "Send when the agent connects (↵)" : held ? "Queue for after your answer (↵)" : working ? "Queue for after this turn (↵)" : resumable ? `Start ${agentName} again and send (↵)` : "Send (↵)"}
                 className="ml-(--s2) grid size-6 shrink-0 place-items-center rounded-full bg-(--accent-fill) text-(--accent-fg) disabled:bg-(--track) disabled:text-(--fg3) [&_svg]:size-(--s4)"
                 onClick={() => submit()}
               >
@@ -698,6 +706,10 @@ function confirmedPrompts(entries: LogEntry[]): Set<string> {
     if (id) received.add(id)
   }
   return received
+}
+
+export function stoppedStatus(starting: boolean, resumePending: boolean | undefined, awaitingSignIn: boolean): string {
+  return starting ? "Starting" : resumePending ? "Waiting for sign-ins to sync" : awaitingSignIn ? "Awaiting sign-in" : "Stopped"
 }
 
 // Messages on their way show at the end of the thread until the log records them.

@@ -182,6 +182,7 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 
 - **Stack:** React 19, TanStack Router (file routes in `ui/src/routes/`) and TanStack Query, Tailwind CSS v4, shadcn components on `@base-ui/react` (`ui/src/components/ui/`), and xterm.js 6 for the terminal, loaded lazily. Tokens live in `ui/src/index.css`. React Compiler handles memoization: never hand-write `useMemo`, `useCallback` or `memo`.
 - **Kit:** macOS composition in `ui/src/components/kit/`, specified in `ui/DESIGN.md`. Components use only kit tokens.
+- **Composer:** Enter on an empty composer sends the oldest queued message now. Owner requirement; UX audits must not remove it.
 - **CSS traps:** base rules stay inside `@layer base`, because an unlayered rule beats every Tailwind utility. Font-size utilities must name their type (`text-(length:--fs-sm)`); plain `text-(--fs-sm)` is a color. The `data-selected:` variant needs `data-selected="true"`, and Base UI toggles expose `aria-pressed`, not `data-state`. `ui/tests/visual.spec.ts` asserts computed styles, because role-based tests cannot see any of this.
 - **Placeholder:** `internal/gateway/webdist/placeholder.html` is the only tracked file there, so `make ui-stage` never dirties the checkout. The gateway serves it when no build was staged, and `agentpack deploy` refuses to build without one.
 - **Routes** (`ui/src/routes/`):
