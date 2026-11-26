@@ -300,7 +300,7 @@ func readPromptImages(w http.ResponseWriter, r *http.Request) (acp.PromptInput, 
 		http.Error(w, "images must be an array", http.StatusBadRequest)
 		return acp.PromptInput{}, false, false
 	}
-	if len(input.Images) > maxPromptImages {
+	if len(input.Images) > MaxPromptImages {
 		http.Error(w, "too many images", http.StatusBadRequest)
 		return acp.PromptInput{}, false, false
 	}
@@ -312,7 +312,7 @@ func readPromptImages(w http.ResponseWriter, r *http.Request) (acp.PromptInput, 
 			return acp.PromptInput{}, false, false
 		}
 		prompt.Images = append(prompt.Images, acp.PromptImage{
-			Sha: sha, Name: sanitizePromptImageName(image.Name), Width: image.Width, Height: image.Height,
+			Sha: sha, Name: SanitizePromptImageName(image.Name), Width: image.Width, Height: image.Height,
 		})
 	}
 	if prompt.Text == "" && len(prompt.Images) == 0 {

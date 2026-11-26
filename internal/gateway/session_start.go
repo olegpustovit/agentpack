@@ -45,7 +45,8 @@ func (g *Gateway) registerSessions(mux routeRegistrar) {
 
 func (g *Gateway) serveStartSession(w http.ResponseWriter, r *http.Request) {
 	var input chatStartRequest
-	if !network.ReadJSON(w, r, &input) {
+	// 28 MiB holds MaxBlobBytes of images as base64, plus the rest of the request.
+	if !network.ReadJSONLimit(w, r, &input, 28<<20) {
 		return
 	}
 	if input.ChatStartOptions != (network.ChatStartOptions{}) {
@@ -56,6 +57,10 @@ func (g *Gateway) serveStartSession(w http.ResponseWriter, r *http.Request) {
 		if input.ID == "" {
 			input.ID = "session-" + network.RandomToken()[:32]
 		}
+	}
+	if err := checkFirstImages(input); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	actor, ok := session.ActorFrom(r.Context())
 	if !ok {
@@ -330,10 +335,44 @@ type chatStartRequest struct {
 	Worktree     string `json:"worktree,omitempty"`
 	WorktreeName string `json:"worktree_name,omitempty"`
 	Carry        bool   `json:"carry,omitempty"`
+	// FirstImages travel with the first message; omitempty keeps older claim fingerprints.
+	FirstImages []firstImage `json:"first_images,omitempty"`
 
 	forkSessionID           string
 	definitionRoot          string
 	forkKeepNativeSubagents bool
+}
+
+type firstImage struct {
+	Name   string `json:"name"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+	Data   []byte `json:"data"`
+}
+
+// checkFirstImages refuses a request before it claims anything. Its messages must differ from
+// ReadJSON's "invalid request", which the web UI reads as a gateway without first_images.
+func checkFirstImages(input chatStartRequest) error {
+	if len(input.FirstImages) == 0 {
+		return nil
+	}
+	if input.Transport != "acp" || input.ID == "" {
+		return errors.New("images need a chat with a request ID")
+	}
+	if len(input.FirstImages) > network.MaxPromptImages {
+		return errors.New("too many images")
+	}
+	total := 0
+	for _, image := range input.FirstImages {
+		total += len(image.Data)
+		if total > network.MaxBlobBytes {
+			return errors.New("images are over 20 MiB")
+		}
+		if image.Width < 0 || image.Height < 0 || network.SniffBlobMIME(image.Data) == "" {
+			return errors.New("images must be PNG, JPEG, GIF or WebP")
+		}
+	}
+	return nil
 }
 
 var (
@@ -422,6 +461,13 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor session.Actor, input
 	if err != nil {
 		return session.SessionInfo{}, err
 	}
+	// Hashed outside the write transaction; the bytes are stored after it commits.
+	var images []acp.PromptImage
+	for _, image := range input.FirstImages {
+		sum := sha256.Sum256(image.Data)
+		images = append(images, acp.PromptImage{Sha: hex.EncodeToString(sum[:]),
+			Name: network.SanitizePromptImageName(image.Name), Width: image.Width, Height: image.Height})
+	}
 	inserted := false
 	err = state.Transaction(ctx, g.store.DB, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, insertStartClaim, info.ID, fingerprint[:], info.ID)
@@ -439,8 +485,8 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor session.Actor, input
 		if err := network.SaveChatStartOptions(ctx, tx, info.ID, input.ChatStartOptions); err != nil {
 			return err
 		}
-		if prompt := strings.TrimSpace(input.FirstMessage); prompt != "" {
-			message := acp.PromptInput{Text: prompt, QueueID: token}
+		if prompt := strings.TrimSpace(input.FirstMessage); prompt != "" || len(images) > 0 {
+			message := acp.PromptInput{Text: prompt, Images: images, QueueID: token}
 			if actor.Chat != "" && input.ParentID == "" {
 				message.From = &acp.PromptFrom{Session: actor.Chat, Agent: actor.Agent, Kind: "start"}
 			}
@@ -458,8 +504,42 @@ func (g *Gateway) claimChatStart(ctx context.Context, actor session.Actor, input
 		}
 		return existing, err
 	}
+	// The blobs must be there before the worker reads the queued prompt.
+	if err := g.storeFirstImages(ctx, info.ID, input.FirstImages); err != nil {
+		_, event := obs.Start(ctx, "gateway", "store_first_images")
+		event.Set("session_id", info.ID)
+		event.Fail(err)
+		event.End()
+		g.failStart(context.WithoutCancel(ctx), info, errors.New("The attached images could not be saved. Start the chat again."))
+		return session.StoredSession(context.WithoutCancel(ctx), g.store.Reader, info.ID)
+	}
 	g.startInBackground(ctx, info, input.forkSessionID, &input)
 	return info, nil
+}
+
+// storeFirstImages writes a new chat's images to its blob store. A failed advertisement only costs
+// peers their hint of where the bytes are, so it does not fail the start.
+func (g *Gateway) storeFirstImages(ctx context.Context, id string, images []firstImage) error {
+	if len(images) == 0 {
+		return nil
+	}
+	dir, err := sessionBlobDir(g.options.Home, id)
+	if err != nil {
+		return err
+	}
+	for _, image := range images {
+		sha, err := network.StoreSessionBlob(dir, image.Data)
+		if err != nil {
+			return err
+		}
+		if err := network.AdvertiseBlob(context.WithoutCancel(ctx), g.store, id, sha, int64(len(image.Data))); err != nil {
+			_, event := obs.Start(ctx, "gateway", "advertise_first_image")
+			event.Set("session_id", id)
+			event.Fail(err)
+			event.End()
+		}
+	}
+	return nil
 }
 
 func readStartClaim(ctx context.Context, db *sql.DB, id string, fingerprint []byte) (session.SessionInfo, error) {

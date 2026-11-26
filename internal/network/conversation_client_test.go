@@ -101,7 +101,7 @@ func TestWorkerPromptImagesRoute(t *testing.T) {
 		Width  int    `json:"width"`
 		Height int    `json:"height"`
 	}
-	tooMany := make([]wireImage, maxPromptImages+1)
+	tooMany := make([]wireImage, MaxPromptImages+1)
 	for i := range tooMany {
 		tooMany[i] = wireImage{Sha: strings.Repeat("a", 64), Name: "photo.png"}
 	}

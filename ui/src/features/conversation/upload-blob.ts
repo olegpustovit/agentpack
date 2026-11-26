@@ -34,7 +34,7 @@ export async function uploadConversationBlob(
   }
 }
 
-function loadImageSize(file: File): Promise<{ width: number; height: number }> {
+export function loadImageSize(file: File): Promise<{ width: number; height: number }> {
   return new Promise((resolve, reject) => {
     const img = new Image()
     const objectUrl = URL.createObjectURL(file)

@@ -146,7 +146,7 @@ func TestPromptMultipleImagesFollowAgentCapability(t *testing.T) {
 }
 
 func TestPromptMultipleImagesAreBounded(t *testing.T) {
-	images := make([]acp.PromptImage, maxPromptImages+1)
+	images := make([]acp.PromptImage, MaxPromptImages+1)
 	_, _, err := promptContentBlocks(t.TempDir(), acp.PromptInput{Images: images}, false)
 	if err == nil {
 		t.Fatal("expected excessive image count rejection")
