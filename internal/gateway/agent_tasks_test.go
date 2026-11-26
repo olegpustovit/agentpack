@@ -258,7 +258,7 @@ func TestAgentsAskReplyAndWakeTheSender(t *testing.T) {
 	if state, _ := taskRow(t, h, asked.TaskID, "in"); state != "submitted" {
 		t.Fatal("failed before the chat could resume:", state)
 	}
-	if _, err := h.gateway.store.DB.Exec("UPDATE sessions SET ended_at=? WHERE id='session-c'", time.Now().Add(-2*time.Minute).UnixNano()); err != nil {
+	if _, err := h.gateway.store.DB.Exec("UPDATE sessions SET ended_at=? WHERE id='session-c'", time.Now().Add(-4*time.Minute).UnixNano()); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.gateway.mcp.TaskPass(t.Context()); err != nil {
