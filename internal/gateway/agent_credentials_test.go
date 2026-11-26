@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
@@ -356,5 +357,65 @@ func TestAgentCredentialAnEmptyFileIsNeverPublished(t *testing.T) {
 		if got := shared(); got.Data != nil || got.Rev != 0 {
 			t.Fatalf("%s published an empty sign-in: rev %d", target, got.Rev)
 		}
+	}
+}
+
+// A renewal already sent survives a shutdown, and one whose file write fails is installed later.
+func TestAgentCredentialRenewalSurvivesShutdownAndAFailedWrite(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	path := filepath.Join(t.TempDir(), "token")
+	var renew func() []byte
+	agent := registry.Entry{Harness: harness.Harness{Target: harness.Agy}, Login: &harness.LoginSpec{Refresh: func(ctx context.Context, _ []byte) ([]byte, error) {
+		if renew == nil {
+			return nil, nil
+		}
+		renewed := renew()
+		return renewed, ctx.Err()
+	}}}
+	shared, _ := credentialRow(t, g, "agy/token")
+	read := func() string {
+		data, _ := os.ReadFile(path)
+		return string(data)
+	}
+	writeCredential(t, path, []byte(`{"n":1}`))
+	if _, err := g.syncAgentCredential(t.Context(), agent, path, "local", false); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	renew = func() []byte {
+		cancel() // the gateway stops while the server answers
+		return []byte(`{"n":2}`)
+	}
+	if _, err := g.syncAgentCredential(ctx, agent, path, "local", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := shared(); string(got.Data) != `{"n":2}` || read() != `{"n":2}` {
+		t.Fatalf("renewal lost to a shutdown: row %s file %s", got.Data, read())
+	}
+
+	renew = func() []byte {
+		// A directory in the file's place makes the install fail.
+		if err := errors.Join(os.Remove(path), os.Mkdir(path, 0o700)); err != nil {
+			t.Fatal(err)
+		}
+		return []byte(`{"n":3}`)
+	}
+	if _, err := g.syncAgentCredential(t.Context(), agent, path, "local", false); err == nil {
+		t.Fatal("the failed write was not reported")
+	}
+	if got := shared(); string(got.Data) != `{"n":3}` || got.Rev != 3 {
+		t.Fatalf("renewal not published: %+v", got)
+	}
+	renew = nil
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	writeCredential(t, path, []byte(`{"n":2}`)) // the spent file is still there
+	if _, err := g.syncAgentCredential(t.Context(), agent, path, "local", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := shared(); read() != `{"n":3}` || string(got.Data) != `{"n":3}` || got.Rev != 3 {
+		t.Fatalf("spent file republished: row %s rev %d file %s", got.Data, got.Rev, read())
 	}
 }

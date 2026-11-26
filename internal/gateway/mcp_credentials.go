@@ -365,6 +365,10 @@ func (g *Gateway) freshMCPSecret(ctx context.Context, id string, failedGeneratio
 // refreshMCPToken refreshes on this node under the credential's lock, unless
 // another refresh already moved past the failed generation.
 func (g *Gateway) refreshMCPToken(ctx context.Context, id string, failedGeneration int64) (mcpCredential, error) {
+	// Shutdown waits for a refresh asked over HTTP too: its rotated token must reach the table.
+	if g.beginBackground(&g.operations) {
+		defer g.operations.Done()
+	}
 	lock := g.mcpBroker.lock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -395,6 +399,8 @@ func (g *Gateway) refreshMCPToken(ctx context.Context, id string, failedGenerati
 	}
 	config := oauth2.Config{ClientID: credential.Client.ClientID, ClientSecret: credential.Client.ClientSecret, Scopes: credential.Client.Scopes, RedirectURL: credential.Client.RedirectURL,
 		Endpoint: oauth2.Endpoint{AuthURL: credential.Client.AuthURL, TokenURL: credential.Client.TokenURL, AuthStyle: oauth2.AuthStyle(credential.Client.AuthStyle)}}
+	// Once sent, the server may rotate the token: a cancelled caller or a shutdown must not drop the answer.
+	ctx = context.WithoutCancel(ctx)
 	refreshCtx, cancel := context.WithTimeout(context.WithValue(ctx, oauth2.HTTPClient, mcpOutboundClient()), 30*time.Second)
 	defer cancel()
 	// shortcut: the refresh omits RFC 8707 resource; add it if a server requires it on refresh.

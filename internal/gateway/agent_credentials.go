@@ -147,18 +147,21 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 	case localUsable && same && (!known || localChanged || sharedNewer):
 		return false, g.recordAgentCredential(ctx, key, shared)
 	case agent.Login.Refresh != nil && shared.Node == node && localUsable && same:
+		// Once sent, the server may rotate the token whatever happens here: a shutdown must not drop the answer.
+		ctx := context.WithoutCancel(ctx)
 		renewed, err := agent.Login.Refresh(ctx, local)
 		if renewed == nil || err != nil {
 			return false, err
 		}
 		// The old refresh token is spent: keep the new one locally even if publishing fails, and
-		// in the table even if the file write fails; the next round reconciles either.
+		// in the table even if the file write fails; the next round reconciles either. The file goes
+		// first, so a crash between the two never publishes the spent token as a new sign-in.
 		credential := sharedAgentCredential{Data: renewed, Rev: shared.Rev + 1, Modified: time.Now().UnixMilli(), Node: node}
+		installed, installErr := installAgentCredential(path, local, credential)
 		publishErr := g.publishAgentCredential(ctx, key, credential)
-		installed, err := installAgentCredential(path, local, credential)
-		if err != nil {
+		if installErr != nil {
 			// The spent file stays recorded as unchanged, so the next round installs the renewal instead of publishing it.
-			return false, errors.Join(publishErr, err, g.recordAgentCredential(ctx, key, sharedAgentCredential{Data: local, Rev: credential.Rev}))
+			return false, errors.Join(publishErr, installErr, g.recordAgentCredential(ctx, key, sharedAgentCredential{Data: local, Rev: credential.Rev}))
 		}
 		return installed, publishErr
 	}
