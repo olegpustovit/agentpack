@@ -213,7 +213,7 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 | `/settings/$pane` | `general`, `notifications`, `sharing`, `replication`, `connections`, `agents`, `omp`, `diagnostics`, `appearance`, `account`. Diagnostics accepts `issue`, `status`. `connections` is the Vault pane and accepts `callback`, `oauth_login`, `connection`. |
 | `/settings/accessibility` | redirects to `/settings/appearance` |
 
-The toolbar and phone tab bar hold three views, Sessions, Library and System (⌘1–3, Ctrl off Mac); System keeps the `/usage`, `/machines` and `/settings` URLs beside one shared sidebar (`ui/src/features/system/`).
+The toolbar and phone tab bar hold three views, Sessions, Library and System (⌘1–3 or ⌥⌘1–3, since Safari keeps ⌘1–9; Ctrl off Mac); System keeps the `/usage`, `/machines` and `/settings` URLs beside one shared sidebar (`ui/src/features/system/`).
 
 - **Peers update on their own schedule.** The gateway routinely talks to older peers, so API reads tolerate them: a 404 means `Needs update`, never a raw error, and a response shape that changed is normalized in its query. This is runtime interoperability and is not covered by the pre-release rule. Test new endpoints against a peer without them.
 - **Never use `node` as a search param.** The Go handler treats `?node=` as a proxy instruction on `/api/` paths, and this rule stays in force anyway.

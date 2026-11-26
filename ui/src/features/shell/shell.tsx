@@ -94,12 +94,15 @@ function useShellShortcuts() {
   const { toggle } = useSidebar()
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.repeat) return
+      if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.repeat) return
+      // ⌥⌘ as well: Safari keeps ⌘1–9, macOS ⌃1–9 (Desktops) and 1Password ⌘\ for themselves. Ctrl+Alt off Mac is AltGr.
+      if (event.altKey && !event.metaKey) return
       if (!event.metaKey && (event.target as Element | null)?.closest?.(".xterm")) return
       // The physical key, so layouts whose digit row types punctuation still switch views.
       const digit = /^(?:Digit|Numpad)([1-9])$/.exec(event.code)?.[1]
       const view = digit ? views[Number(digit) - 1] : undefined
-      if (event.key !== "\\" && !view) return
+      const sidebar = event.altKey ? event.code === "Backslash" : event.key === "\\"
+      if (!sidebar && !view) return
       event.preventDefault()
       event.stopPropagation()
       if (view) void navigate({ to: view.to })
@@ -215,7 +218,7 @@ function AppToolbar({ onCommands }: { onCommands: () => void }) {
             key={item.id}
             to={item.to}
             aria-current={item.id === view ? "page" : undefined}
-            title={`⌘${index + 1}`}
+            title={isMac ? `⌥⌘${index + 1}` : `Ctrl+${index + 1}`}
             className={cn(
               "flex h-full cursor-default items-center rounded-full px-(--s5) text-(length:--fs-sm) font-medium text-(--fg2) transition-colors duration-(--dur-2) ease-(--ease)",
               item.id === view && "text-(--fg)",

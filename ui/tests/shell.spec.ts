@@ -24,6 +24,9 @@ test("view digits follow the physical key, whatever the layout types", async ({ 
   await page.keyboard.press("Meta+3")
   await expect(page).toHaveURL(/\/usage$/)
   await expect(views.getByRole("link", { name: "System" })).toHaveAttribute("aria-current", "page")
+  // Safari keeps ⌘1–9 for itself, so ⌥⌘ switches too.
+  await page.keyboard.press("Meta+Alt+1")
+  await expect(page).toHaveURL(/\/sessions/)
 })
 
 test("sidebar toggle is on every list-detail view and survives view switch and reload", async ({ page }) => {
