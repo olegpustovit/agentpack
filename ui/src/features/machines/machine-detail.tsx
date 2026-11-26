@@ -12,7 +12,7 @@ import { useIsPhone } from "@/features/shell/use-is-phone"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useEventsConnected } from "@/features/events/use-events"
 import { AddPackageSheet } from "@/features/library/add-package-sheet"
-import { agentsQuery } from "@/features/agents/queries"
+import { agentsQuery, signOutConfirm } from "@/features/agents/queries"
 import { SignIn } from "@/features/agents/sign-in"
 import { limitsQuery } from "@/features/limits/queries"
 import { replicationQuery } from "@/features/library/queries"
@@ -493,8 +493,7 @@ function AgentsGrid({ machine, agents, limits }: { machine: Machine; agents: Mac
       <ConfirmAlert open={signingOut !== undefined} onOpenChange={(open) => { if (!open) setSigningOut(undefined) }}>
         {signingOut && (
           <ConfirmAlertContent
-            title={`Sign ${harnessName(signingOut)} out on ${machine.name}?`}
-            description={`Signs ${harnessName(signingOut)} out on ${machine.name} and stops future sharing from this machine. Enrolled peers keep their own copy until signed out there. Running chats keep their session until they stop.`}
+            {...signOutConfirm(harnessName(signingOut), machine.name)}
             destructiveLabel="Sign out"
             onConfirm={() => {
               const harness = signingOut

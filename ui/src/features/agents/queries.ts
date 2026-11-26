@@ -73,3 +73,11 @@ export const agentsQuery = (machine: string, fresh = false) =>
   })
 
 export const agentPath = (harness: string) => `/api/agents/${encodeURIComponent(harness)}/login` as const
+
+// The confirm text for signing an agent out on one machine, wherever that is offered.
+export function signOutConfirm(agent: string, machine: string) {
+  return {
+    title: `Sign ${agent} out on ${machine}?`,
+    description: `Signs ${agent} out on ${machine} and stops future sharing from this machine. Enrolled peers keep their own copy until signed out there. Running chats keep their session until they stop.`,
+  }
+}

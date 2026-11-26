@@ -7,7 +7,7 @@ import { FormGroup, FormRow, PopupSelect } from "@/components/kit/forms"
 import { ConfirmAlert, ConfirmAlertContent, Menu, MenuContent, MenuItem, MenuTrigger, RowMoreButton, Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { StatusDot } from "@/components/kit/status-dot"
 import { Button } from "@/components/ui/button"
-import { agentsQuery } from "@/features/agents/queries"
+import { agentsQuery, signOutConfirm } from "@/features/agents/queries"
 import { SignIn } from "@/features/agents/sign-in"
 import { identityQuery, useMachines, type Machine } from "@/features/machines/queries"
 import { useIsPhone } from "@/features/shell/use-is-phone"
@@ -103,9 +103,7 @@ function HealthyMenu({ harness, machines, publisher, onSignIn }: { harness: stri
       </Menu>
       <ConfirmAlert open={confirming} onOpenChange={setConfirming}>
         {confirming && target && <ConfirmAlertContent
-          // shortcut: same words as the Machines page; share them when this ships.
-          title={`Sign ${name} out on ${target.name}?`}
-          description={`Signs ${name} out on ${target.name} and stops future sharing from this machine. Enrolled peers keep their own copy until signed out there. Running chats keep their session until they stop.`}
+          {...signOutConfirm(name, target.name)}
           destructiveLabel="Sign out"
           onConfirm={() => { setConfirming(false); signOut.mutate(target) }}
         />}

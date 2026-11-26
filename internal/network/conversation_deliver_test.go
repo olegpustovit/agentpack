@@ -385,6 +385,13 @@ func TestSendNowDismissesARequestFromTheAgentsOwnTurn(t *testing.T) {
 	if _, _, err := conv.Submit(t.Context(), acp.PromptInput{Text: "now"}, true); err != nil || len(agent.cancels) != 1 {
 		t.Fatalf("Send now: %d cancels, %v", len(agent.cancels), err)
 	}
+	// The cancelled turn answers its request and ends; the steered message goes first.
+	agent.log.Append("permission_result", 1, MustRawJSON(map[string]string{"requestId": "p1", "outcome": "cancelled"}))
+	agent.log.Append("turn_end", 1, MustRawJSON(map[string]string{"stopReason": "cancelled"}))
+	if prompt := agent.nextPrompt(t); prompt.Text != "now" {
+		t.Fatalf("sent %q first", prompt.Text)
+	}
+	agent.turns <- fakeTurn{}
 }
 
 // Claude takes agent messages in during its turn and holds them behind the open request itself.
