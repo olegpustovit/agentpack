@@ -1,9 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { search } from "@/lib/search"
 import { MachineDetail } from "@/features/machines/machine-detail"
 
 export const Route = createFileRoute("/_app/machines/$machine")({
-  validateSearch: search({ q: "text" }),
   component: MachineRoute,
 })
 

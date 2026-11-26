@@ -16,6 +16,7 @@ import { Route as AppLibraryRouteImport } from './routes/_app/library'
 import { Route as AppLimitsRouteImport } from './routes/_app/limits'
 import { Route as AppMachinesRouteImport } from './routes/_app/machines'
 import { Route as AppSessionsRouteImport } from './routes/_app/sessions'
+import { Route as AppSystemRouteImport } from './routes/_app/system'
 import { Route as AppUsageRouteImport } from './routes/_app/usage'
 import { Route as AppLibraryIndexRouteImport } from './routes/_app/library/index'
 import { Route as AppLibraryDiscoverRouteImport } from './routes/_app/library/discover'
@@ -25,6 +26,7 @@ import { Route as AppMachinesTopologyRouteImport } from './routes/_app/machines/
 import { Route as AppSessionsIndexRouteImport } from './routes/_app/sessions/index'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings/index'
 import { Route as AppSettingsPaneRouteImport } from './routes/_app/settings/$pane'
+import { Route as AppSettingsAccessibilityRouteImport } from './routes/_app/settings/accessibility'
 import { Route as AppUsageIndexRouteImport } from './routes/_app/usage/index'
 import { Route as AppUsageLimitsRouteImport } from './routes/_app/usage/limits'
 import { Route as AppLibraryAgentpackIdRouteImport } from './routes/_app/library/agentpack/$id'
@@ -65,6 +67,11 @@ const AppMachinesRoute = AppMachinesRouteImport.update({
 const AppSessionsRoute = AppSessionsRouteImport.update({
   id: '/sessions',
   path: '/sessions',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSystemRoute = AppSystemRouteImport.update({
+  id: '/system',
+  path: '/system',
   getParentRoute: () => AppRoute,
 } as any)
 const AppUsageRoute = AppUsageRouteImport.update({
@@ -112,6 +119,12 @@ const AppSettingsPaneRoute = AppSettingsPaneRouteImport.update({
   path: '/settings/$pane',
   getParentRoute: () => AppRoute,
 } as any)
+const AppSettingsAccessibilityRoute =
+  AppSettingsAccessibilityRouteImport.update({
+    id: '/settings/accessibility',
+    path: '/settings/accessibility',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppUsageIndexRoute = AppUsageIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -156,11 +169,13 @@ export interface FileRoutesByFullPath {
   '/limits': typeof AppLimitsRoute
   '/machines': typeof AppMachinesRouteWithChildren
   '/sessions': typeof AppSessionsRouteWithChildren
+  '/system': typeof AppSystemRoute
   '/usage': typeof AppUsageRouteWithChildren
   '/library/discover': typeof AppLibraryDiscoverRoute
   '/machines/$machine': typeof AppMachinesMachineRoute
   '/machines/topology': typeof AppMachinesTopologyRoute
   '/settings/$pane': typeof AppSettingsPaneRoute
+  '/settings/accessibility': typeof AppSettingsAccessibilityRoute
   '/usage/limits': typeof AppUsageLimitsRoute
   '/library/': typeof AppLibraryIndexRoute
   '/machines/': typeof AppMachinesIndexRoute
@@ -177,10 +192,12 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/limits': typeof AppLimitsRoute
+  '/system': typeof AppSystemRoute
   '/library/discover': typeof AppLibraryDiscoverRoute
   '/machines/$machine': typeof AppMachinesMachineRoute
   '/machines/topology': typeof AppMachinesTopologyRoute
   '/settings/$pane': typeof AppSettingsPaneRoute
+  '/settings/accessibility': typeof AppSettingsAccessibilityRoute
   '/usage/limits': typeof AppUsageLimitsRoute
   '/library': typeof AppLibraryIndexRoute
   '/machines': typeof AppMachinesIndexRoute
@@ -202,11 +219,13 @@ export interface FileRoutesById {
   '/_app/limits': typeof AppLimitsRoute
   '/_app/machines': typeof AppMachinesRouteWithChildren
   '/_app/sessions': typeof AppSessionsRouteWithChildren
+  '/_app/system': typeof AppSystemRoute
   '/_app/usage': typeof AppUsageRouteWithChildren
   '/_app/library/discover': typeof AppLibraryDiscoverRoute
   '/_app/machines/$machine': typeof AppMachinesMachineRoute
   '/_app/machines/topology': typeof AppMachinesTopologyRoute
   '/_app/settings/$pane': typeof AppSettingsPaneRoute
+  '/_app/settings/accessibility': typeof AppSettingsAccessibilityRoute
   '/_app/usage/limits': typeof AppUsageLimitsRoute
   '/_app/library/': typeof AppLibraryIndexRoute
   '/_app/machines/': typeof AppMachinesIndexRoute
@@ -228,11 +247,13 @@ export interface FileRouteTypes {
     | '/limits'
     | '/machines'
     | '/sessions'
+    | '/system'
     | '/usage'
     | '/library/discover'
     | '/machines/$machine'
     | '/machines/topology'
     | '/settings/$pane'
+    | '/settings/accessibility'
     | '/usage/limits'
     | '/library/'
     | '/machines/'
@@ -249,10 +270,12 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/limits'
+    | '/system'
     | '/library/discover'
     | '/machines/$machine'
     | '/machines/topology'
     | '/settings/$pane'
+    | '/settings/accessibility'
     | '/usage/limits'
     | '/library'
     | '/machines'
@@ -273,11 +296,13 @@ export interface FileRouteTypes {
     | '/_app/limits'
     | '/_app/machines'
     | '/_app/sessions'
+    | '/_app/system'
     | '/_app/usage'
     | '/_app/library/discover'
     | '/_app/machines/$machine'
     | '/_app/machines/topology'
     | '/_app/settings/$pane'
+    | '/_app/settings/accessibility'
     | '/_app/usage/limits'
     | '/_app/library/'
     | '/_app/machines/'
@@ -348,6 +373,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSessionsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/system': {
+      id: '/_app/system'
+      path: '/system'
+      fullPath: '/system'
+      preLoaderRoute: typeof AppSystemRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/usage': {
       id: '/_app/usage'
       path: '/usage'
@@ -409,6 +441,13 @@ declare module '@tanstack/react-router' {
       path: '/settings/$pane'
       fullPath: '/settings/$pane'
       preLoaderRoute: typeof AppSettingsPaneRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings/accessibility': {
+      id: '/_app/settings/accessibility'
+      path: '/settings/accessibility'
+      fullPath: '/settings/accessibility'
+      preLoaderRoute: typeof AppSettingsAccessibilityRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/usage/': {
@@ -534,8 +573,10 @@ interface AppRouteChildren {
   AppLimitsRoute: typeof AppLimitsRoute
   AppMachinesRoute: typeof AppMachinesRouteWithChildren
   AppSessionsRoute: typeof AppSessionsRouteWithChildren
+  AppSystemRoute: typeof AppSystemRoute
   AppUsageRoute: typeof AppUsageRouteWithChildren
   AppSettingsPaneRoute: typeof AppSettingsPaneRoute
+  AppSettingsAccessibilityRoute: typeof AppSettingsAccessibilityRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
 }
 
@@ -544,8 +585,10 @@ const AppRouteChildren: AppRouteChildren = {
   AppLimitsRoute: AppLimitsRoute,
   AppMachinesRoute: AppMachinesRouteWithChildren,
   AppSessionsRoute: AppSessionsRouteWithChildren,
+  AppSystemRoute: AppSystemRoute,
   AppUsageRoute: AppUsageRouteWithChildren,
   AppSettingsPaneRoute: AppSettingsPaneRoute,
+  AppSettingsAccessibilityRoute: AppSettingsAccessibilityRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
 }
 

@@ -79,7 +79,7 @@ export default function TerminalPane({
               {snapshot.banner || (snapshot.connected ? snapshot.canType ? "Connected" : "Connected · read-only" : snapshot.ended ? "Terminal stopped" : "Connecting…")}
               {snapshot.columns && snapshot.rows ? ` · ${snapshot.columns}×${snapshot.rows} host grid` : ""}
             </span>
-            <Link to="/settings/$pane" params={{ pane: "accessibility" }} className="text-(--accent) hover:underline">Accessibility</Link>
+            <Link to="/settings/$pane" params={{ pane: "appearance" }} className="text-(--accent) hover:underline">Accessibility</Link>
           </div>
         </div>
       ) : <ToolbarSlot>{zoom}</ToolbarSlot>}

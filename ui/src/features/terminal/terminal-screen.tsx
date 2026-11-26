@@ -17,7 +17,7 @@ export function TerminalScreen({ stageRef, busy, terminal }: { stageRef: RefObje
         <RowContextMenuItem onClick={() => terminal.selectAll()}>Select All</RowContextMenuItem>
         <RowContextMenuItem onClick={() => terminal.clearSelection()}>Clear Selection</RowContextMenuItem>
         <ContextMenuSeparator />
-        <RowContextMenuItem render={<Link to="/settings/$pane" params={{ pane: "accessibility" }} />}>Terminal accessibility</RowContextMenuItem>
+        <RowContextMenuItem render={<Link to="/settings/$pane" params={{ pane: "appearance" }} />}>Terminal accessibility</RowContextMenuItem>
       </RowContextMenuContent>
     </RowContextMenu>
   )

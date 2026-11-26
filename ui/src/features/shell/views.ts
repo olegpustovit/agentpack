@@ -1,19 +1,15 @@
 import { createBrowserHistory, useRouterState, type RouterHistory } from "@tanstack/react-router"
-import { ChartColumn, Library, Server, Settings, Terminal } from "lucide-react"
+import { Library, MonitorCog, Terminal } from "lucide-react"
 import { onSignOut } from "@/lib/persist"
 
 export const views = [
   { id: "sessions", label: "Sessions", to: "/sessions", icon: Terminal },
   { id: "library", label: "Library", to: "/library", icon: Library },
-  { id: "machines", label: "Machines", to: "/machines/topology", icon: Server },
-  { id: "usage", label: "Usage", to: "/usage", icon: ChartColumn },
+  { id: "system", label: "System", to: "/usage", icon: MonitorCog },
 ] as const
 
-export const tabs = [...views, { id: "settings", label: "Settings", to: "/settings", icon: Settings }] as const
-
-// Views with a source list beside a detail pane, and so get the sidebar toggle. Settings counts,
-// so the view switcher stays put when entering it.
-export const listDetailViews = ["sessions", "library", "machines", "usage", "settings"]
+// Views with a source list beside a detail pane, and so get the sidebar toggle.
+export const listDetailViews = ["sessions", "library", "system"]
 
 export type LastSession = { machine: string; sessionId: string; search: { q?: string; group?: string } }
 
@@ -45,10 +41,15 @@ export function rememberSession(session: LastSession | undefined) {
   }
 }
 
+// System groups usage, machines and settings, whose URLs kept their own first segment.
+const systemSegments = ["system", "usage", "machines", "settings"]
+
 // Route position from the URL: the first segment is the view; any further segment is a detail.
+// In System every page is a detail of /system, the list a phone shows.
 export function routePosition(pathname: string) {
-  const [, view = "", ...rest] = pathname.split("/")
-  return { view, detail: rest.some(Boolean), landing: pathname === "/machines/topology" }
+  const [, first = "", ...rest] = pathname.split("/")
+  if (systemSegments.includes(first)) return { view: "system", detail: first !== "system" }
+  return { view: first, detail: rest.some(Boolean) }
 }
 
 export function useRoutePosition() {
@@ -70,8 +71,8 @@ export function createViewHistory() {
     const current = history.location
     const from = routePosition(current.pathname)
     const to = routePosition(href.split(/[?#]/, 1)[0] ?? "")
-    const sectionOrigin = to.detail && !to.landing && from.view === to.view
-      ? !from.detail || from.landing ? current.href : current.state.sectionOrigin
+    const sectionOrigin = to.detail && from.view === to.view
+      ? !from.detail ? current.href : current.state.sectionOrigin
       : undefined
     write(href, { ...state, sectionOrigin }, options)
   }

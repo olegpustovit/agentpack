@@ -68,12 +68,11 @@ async function mockMachines(page: Page) {
   await page.route("**/api/events", (route) => route.abort())
 }
 
-test("MAC-01 phone topology renders Machines list link and compact Relay via fra rows with no overflow", async ({ page }) => {
+test("MAC-01 phone topology renders compact Relay via fra rows with no overflow", async ({ page }) => {
   await mockMachines(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto("/machines/topology")
 
-  await expect(page.getByRole("link", { name: "Machines list" })).toBeVisible()
   await expect(page.getByRole("table", { name: "Machines and connections" })).toHaveCount(0)
   const list = page.getByRole("list", { name: "Machines and connections" })
   await expect(list).toContainText("Relay via fra")
@@ -149,7 +148,7 @@ test("MAC-05 update job keeps its progress across navigation and verifies the re
 
   // Navigate away and back; job survives in sidebar and detail.
   await page.goto("/machines/topology")
-  const row = page.getByRole("navigation", { name: "Machines" }).getByRole("link", { name: /birch/ })
+  const row = page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /birch/ })
   await page.clock.fastForward("00:03")
   await expect(row).toContainText("Downloading…")
 
@@ -174,7 +173,7 @@ test("MAC-05 update timeout shows Retry and View logs", async ({ page }) => {
   await expect(page.getByRole("link", { name: "View logs" })).toBeVisible()
 })
 
-test("MAC-06 distinguishes an undiscovered machine from an unknown one and clears the filter", async ({ page }) => {
+test("MAC-06 distinguishes an undiscovered machine from an unknown one and searches the sidebar", async ({ page }) => {
   await mockMachines(page)
   let releaseNodes = () => {}
   const nodesGate = new Promise<void>((resolve) => { releaseNodes = resolve })
@@ -189,11 +188,9 @@ test("MAC-06 distinguishes an undiscovered machine from an unknown one and clear
   await expect(page.getByText("Not on this mesh")).toBeVisible()
   await expect(page.getByTestId("content").getByRole("link", { name: "Machines", exact: true })).toBeVisible()
 
-  if (test.info().project.name !== "phone") {
-    const filter = page.getByRole("searchbox", { name: "Filter machines" })
-    await filter.fill("zz")
-    await expect(page.getByText('No machines match "zz"')).toBeVisible()
-    await page.getByRole("button", { name: "Clear filter" }).click()
-    await expect(page.getByRole("navigation", { name: "Machines" }).getByRole("link", { name: /birch/ })).toBeVisible()
-  }
+  const search = page.getByRole("searchbox", { name: "Search system" })
+  await search.fill("zz")
+  await expect(page.getByText("Nothing matches “zz”.")).toBeVisible()
+  await search.press("Escape")
+  await expect(page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /birch/ })).toBeVisible()
 })

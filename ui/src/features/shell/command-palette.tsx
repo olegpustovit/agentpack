@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react"
 import { Autocomplete } from "@base-ui/react/autocomplete"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { Archive, GitFork, GitPullRequest, Plus, Search, Settings, Square, Minimize2 } from "lucide-react"
+import { Archive, ChartColumn, Gauge, GitFork, GitPullRequest, Plus, Search, Server, Settings, Square, Minimize2 } from "lucide-react"
 import { Kbd } from "@/components/kit/feedback"
 import { ConfirmAlert, menuRow, menuSurface } from "@/components/kit/overlays"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
@@ -75,7 +75,7 @@ const shortcuts: [string, string][] = [
   ["Toggle terminal", `${mod}J / Ctrl+\``],
   ["New shell", "Ctrl+Shift+`"],
   ["Next session that needs you", isMac ? "⌘⇧J" : "Ctrl+Shift+J"],
-  ["Sessions, Library, Machines, Usage", `${mod}1–4`],
+  ["Sessions, Library, System", `${mod}1–3`],
   ["Toggle the sidebar", `${mod}\\`],
   ["Filter the list", `${mod}F`],
   ["Rename a session", "F2"],
@@ -146,6 +146,9 @@ export default function CommandPalette({
   entries.push(
     { id: "new", group: "Go to", label: "New session…", icon: <Plus aria-hidden />, run: () => void navigate({ to: "/sessions", search: { new: "1" } }) },
     ...views.map((view, index) => ({ id: `view:${view.id}`, group: "Go to", label: view.label, icon: <view.icon aria-hidden />, shortcut: `${mod}${index + 1}`, run: () => void navigate({ to: view.to }) })),
+    { id: "usage", group: "Go to", label: "Usage", icon: <ChartColumn aria-hidden />, run: () => void navigate({ to: "/usage" }) },
+    { id: "limits", group: "Go to", label: "Limits", icon: <Gauge aria-hidden />, run: () => void navigate({ to: "/usage/limits" }) },
+    { id: "machines", group: "Go to", label: "Machines", icon: <Server aria-hidden />, run: () => void navigate({ to: "/machines" }) },
     { id: "settings", group: "Go to", label: "Settings", icon: <Settings aria-hidden />, run: () => void navigate({ to: "/settings" }) },
     ...sessions.filter((session) => !waiting.includes(session) && !session.archived_at).map((session) => sessionEntry(session, "Sessions", true)),
   )

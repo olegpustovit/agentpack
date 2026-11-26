@@ -1,7 +1,7 @@
 import type { ReactNode } from "react"
 import { lazy, Suspense, useEffect, useState } from "react"
 import { Link, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router"
-import { ChevronLeft, Command, PanelLeft, Settings } from "lucide-react"
+import { ChevronLeft, Command, PanelLeft } from "lucide-react"
 import { Announcement } from "@/components/kit/feedback"
 import { slidingThumb, useSlidingThumb } from "@/components/kit/list"
 import { ActivityViewer } from "./activity"
@@ -19,7 +19,7 @@ import { queueLastChatTerminal, requestTerminal, terminalShortcut } from "@/feat
 import { useAttention } from "./attention"
 import { useIsPhone } from "./use-is-phone"
 import { useSidebar } from "./sidebar"
-import { listDetailViews, routePosition, tabs, useRoutePosition, views } from "./views"
+import { listDetailViews, routePosition, useRoutePosition, views } from "./views"
 import { ToolbarProvider, ToolbarTarget, ToolbarTitleTarget } from "./toolbar-slot"
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -70,8 +70,8 @@ function useViewEnter() {
 function useDetailHeadingFocus() {
   const router = useRouter()
   useEffect(() => router.subscribe("onRendered", ({ pathChanged, fromLocation, toLocation }) => {
-    const { view, detail, landing } = routePosition(toLocation.pathname)
-    if (!fromLocation || !pathChanged || !detail || landing) return
+    const { view, detail } = routePosition(toLocation.pathname)
+    if (!fromLocation || !pathChanged || !detail) return
     if (view === "sessions") {
       const sessionId = toLocation.pathname.split("/")[3]
       const session = router.options.context.queryClient.getQueryData(sessionsQuery(false).queryKey)?.find((item) => encodeURIComponent(item.id) === sessionId)
@@ -88,27 +88,25 @@ function useDetailHeadingFocus() {
   }), [router])
 }
 
-// ⌘\ and ⌘1–4 fire even from inputs and the terminal, so they are the only global keys.
+// ⌘\ and ⌘1–3 fire even from inputs and the terminal, so they are the only global keys.
 function useShellShortcuts() {
   const navigate = useNavigate()
   const { toggle } = useSidebar()
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.repeat) return
       if (!event.metaKey && (event.target as Element | null)?.closest?.(".xterm")) return
-      if (event.key === "\\") {
-        event.preventDefault()
-        toggle()
-        return
-      }
-      const view = views[Number(event.key) - 1]
-      if (view) {
-        event.preventDefault()
-        void navigate({ to: view.to })
-      }
+      // The physical key, so layouts whose digit row types punctuation still switch views.
+      const digit = /^(?:Digit|Numpad)([1-9])$/.exec(event.code)?.[1]
+      const view = digit ? views[Number(digit) - 1] : undefined
+      if (event.key !== "\\" && !view) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (view) void navigate({ to: view.to })
+      else toggle()
     }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
+    window.addEventListener("keydown", onKeyDown, true)
+    return () => window.removeEventListener("keydown", onKeyDown, true)
   }, [navigate, toggle])
 }
 
@@ -123,7 +121,7 @@ function ShellCommands({ palette, setPalette }: { palette: string | null; setPal
   const { sessions } = useListedSessions()
   const params = useParams({ strict: false })
   const { view } = useRoutePosition()
-  const machine = view === "machines" ? params.machine : undefined
+  const machine = view === "system" ? params.machine : undefined
   const openKey = params.machine && params.sessionId ? `${params.machine}:${params.sessionId}` : undefined
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -176,15 +174,15 @@ function ShellCommands({ palette, setPalette }: { palette: string | null; setPal
 }
 
 function AppToolbar({ onCommands }: { onCommands: () => void }) {
-  const { view, detail, landing } = useRoutePosition()
+  const { view, detail } = useRoutePosition()
   const origin = useRouterState({ select: (state) => state.location.state.sectionOrigin })
   const subagent = useRouterState({ select: (state) => view === "sessions" && Boolean(state.location.search.sub) })
   const isPhone = useIsPhone()
   const { collapsed, toggle } = useSidebar()
   const discovering = useDiscovering()
-  const tab = tabs.find((item) => item.id === view)
+  const tab = views.find((item) => item.id === view)
   const title = tab?.label ?? "Agentpack"
-  const backTo = view === "machines" ? "/machines" : tab?.to ?? "/sessions"
+  const backTo = view === "system" ? "/system" : tab?.to ?? "/sessions"
   const hasSidebar = listDetailViews.includes(view)
   const viewsTrack = useSlidingThumb<HTMLElement>('[aria-current="page"]')
 
@@ -201,7 +199,7 @@ function AppToolbar({ onCommands }: { onCommands: () => void }) {
           <PanelLeft />
         </ToolbarButton>
       )}
-      {isPhone && detail && !landing && !subagent && (
+      {isPhone && detail && !subagent && (
         <Link
           to={backTo}
           href={origin}
@@ -236,13 +234,6 @@ function AppToolbar({ onCommands }: { onCommands: () => void }) {
       <ToolbarButton aria-label="Command palette" aria-haspopup="dialog" title={isMac ? "Command palette (⌘K)" : "Command palette (Ctrl+K)"} onClick={onCommands} className="max-[760px]:ms-auto max-[760px]:size-11">
         <Command aria-hidden />
       </ToolbarButton>
-      <Link
-        to="/settings"
-        aria-label="Settings"
-        className={buttonVariants({ variant: "ghost", size: "icon", className: cn("shrink-0 rounded-full [&_svg]:size-4 max-[760px]:hidden", view === "settings" && "text-(--accent)") })}
-      >
-        <Settings />
-      </Link>
     </Toolbar>
   )
 }
@@ -256,12 +247,13 @@ function TabBar() {
     <nav
       aria-label="Tabs"
       data-slot="tab-bar"
-      className="hidden grid-cols-5 border-t-[0.5px] border-(--sep) bg-(--chrome) max-[760px]:grid"
+      className="hidden grid-cols-3 border-t-[0.5px] border-(--sep) bg-(--chrome) max-[760px]:grid"
     >
-      {tabs.map((tab) => (
+      {views.map((tab) => (
         <Link
           key={tab.id}
-          to={tab.to}
+          // System opens on Usage; tapping it again opens its list.
+          to={tab.id === "system" && view === "system" ? "/system" : tab.to}
           aria-current={tab.id === view ? "page" : undefined}
           aria-label={tab.id === "sessions" && needsYou ? `${tab.label}, ${needsYou} need you` : undefined}
           className="relative flex min-w-0 flex-col items-center justify-center gap-1 pt-1 text-(--fg2) aria-[current=page]:text-(--accent)"

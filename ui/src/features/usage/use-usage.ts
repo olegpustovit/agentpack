@@ -2,9 +2,9 @@ import { useQuery } from "@tanstack/react-query"
 import { getRouteApi } from "@tanstack/react-router"
 import { identityQuery, useMachines } from "@/features/machines/queries"
 import { LOCAL } from "@/lib/api"
-import { basename, harnessName } from "@/lib/format"
+import { harnessName } from "@/lib/format"
 import { useNow } from "@/lib/use-now"
-import { bucketOf, metricOf, rangeOf, windowOf, type UsageHour, type UsageReport } from "./model"
+import { bucketOf, metricOf, rangeOf, windowOf, type UsageHour } from "./model"
 import { usageQuery } from "./queries"
 
 const usageRoute = getRouteApi("/_app/usage")
@@ -35,14 +35,13 @@ export function useUsage() {
   }
 }
 
-// Display names for row IDs: folders come from their sessions' directories, machines from the mesh.
-export function useNames(report: UsageReport | undefined) {
+// Display names for row IDs: project rows already carry their folder name, machines come from the mesh.
+export function useNames() {
   const machines = useMachines()
   const identity = useQuery(identityQuery).data
-  const folders = new Map((report?.sessions ?? []).map((session) => [session.folder_id, basename(session.directory)]))
   const machineId = (node: string) => (node === identity?.node.id ? LOCAL : node)
   const names = {
-    project: (id: string) => folders.get(id) || (id ? "Unknown folder" : "No folder"),
+    project: (id: string) => id || "No folder",
     machine: (id: string) => machines.find((machine) => machine.id === machineId(id))?.name ?? id,
     agent: (id: string) => harnessName(id),
     model: (id: string) => id || "Not reported",

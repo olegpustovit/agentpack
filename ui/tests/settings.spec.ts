@@ -80,13 +80,14 @@ test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
 })
 
-test("on phones the settings index lists sections and a pane opens full height with Back", async ({ page }) => {
+test("on phones the settings index opens the System list and a pane opens full height with Back", async ({ page }) => {
   await mockGateway(page)
   await page.setViewportSize({ width: 390, height: 500 })
   await page.goto("/settings")
-  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Appearance" }).click()
+  await expect(page).toHaveURL(/\/system$/)
+  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: "Appearance" }).click()
   await expect(page).toHaveURL(/\/settings\/appearance$/)
-  await expect(page.getByRole("navigation", { name: "Settings sections" })).toHaveCount(0)
+  await expect(page.getByRole("navigation", { name: "System" })).toHaveCount(0)
   for (const viewport of [{ width: 390, height: 500 }, { width: 320, height: 568 }]) {
     await page.setViewportSize(viewport)
     for (const name of ["System", "Light", "Dark"]) {
@@ -97,8 +98,8 @@ test("on phones the settings index lists sections and a pane opens full height w
       expect(bottom.y + bottom.height).toBeLessThanOrEqual(tabs.y)
     }
   }
-  await page.getByRole("link", { name: "Back to Settings" }).click()
-  await expect(page).toHaveURL(/\/settings$/)
+  await page.getByRole("link", { name: "Back to System" }).click()
+  await expect(page).toHaveURL(/\/system$/)
 })
 
 test("the settings index opens General", async ({ page }) => {
@@ -250,9 +251,11 @@ test("appearance sets the theme and keeps it across a reload", async ({ page }) 
   await expect(page.getByText("Currently Light")).toBeVisible()
 })
 
-test("terminal screen reader mode lives in Accessibility and explains its browser scope", async ({ page }) => {
+test("an old Accessibility link opens Appearance, where screen reader mode explains its browser scope", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings/accessibility")
+  await expect(page).toHaveURL(/\/settings\/appearance$/)
+  await expect(page.getByRole("group", { name: "Theme" })).toBeVisible()
   const mode = page.getByRole("switch", { name: "Terminal screen reader mode" })
   await expect(mode).toHaveAccessibleDescription("Open terminals reconnect with this setting.")
   await mode.click()
@@ -512,8 +515,8 @@ test("Vault lists agent sign-ins, opens the sign-in sheet and tolerates an older
 test("sidebar search filters sections, opens the first match on Enter and clears on Escape", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings")
-  const sidebar = page.getByRole("navigation", { name: "Settings sections" })
-  const search = page.getByLabel("Search settings")
+  const sidebar = page.getByRole("navigation", { name: "System" })
+  const search = page.getByLabel("Search system")
   await search.fill("mcp")
   await expect(sidebar.getByRole("link")).toHaveCount(3)
   await expect(sidebar.getByRole("link", { name: "Appearance" })).toBeHidden()
@@ -534,7 +537,7 @@ test("sidebar shows badges for issues, expired logins and peers that are behind"
     ...replication, contacts: { n2: { needs_update: true } },
   }))
   await page.goto("/settings")
-  const sidebar = page.getByRole("navigation", { name: "Settings sections" })
+  const sidebar = page.getByRole("navigation", { name: "System" })
   for (const name of ["Diagnostics 2", "Vault 1 to sign in", "Replication 1 not syncing"]) {
     await expect(sidebar.getByRole("link", { name, exact: true })).toBeVisible()
   }

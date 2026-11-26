@@ -50,7 +50,11 @@
     },
     {
       "name": "Machines",
-      "url": "/machines"
+      "url": "/machines/topology"
+    },
+    {
+      "name": "System",
+      "url": "/system"
     }
   ]
 }

@@ -89,7 +89,8 @@ test("no IP address appears on the page or in the grid", async ({ page }) => {
   const isPhone = test.info().project.name === "phone"
   await page.goto("/machines/topology")
   await expect(row(page, "mac-studio", isPhone)).toBeVisible()
-  const html = await page.evaluate(() => document.body.outerHTML)
+  // Icon path data reads like dotted quads ("19.53 9.696-.382"), and is not text.
+  const html = (await page.evaluate(() => document.body.outerHTML)).replace(/ d="[^"]*"/g, "")
   expect(html).not.toMatch(ipv4)
   expect(html).not.toMatch(ipv6)
   const containerHtml = await (isPhone ? phoneList(page) : grid(page)).evaluate((element) => element.outerHTML)

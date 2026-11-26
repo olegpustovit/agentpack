@@ -27,7 +27,7 @@ export function FilterFacet({ label, active, onClear, children }: { label: strin
   )
 }
 
-export function FilterChip({ pressed, count, onClick, children }: { pressed: boolean; count: number; onClick: () => void; children: ReactNode }) {
+export function FilterChip({ pressed, count, onClick, children }: { pressed: boolean; count: number | string; onClick: () => void; children: ReactNode }) {
   return (
     <button type="button" aria-pressed={pressed} onClick={onClick}
       className={cn(

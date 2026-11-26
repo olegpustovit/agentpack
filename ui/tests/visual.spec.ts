@@ -198,7 +198,7 @@ test.describe("kit styling", () => {
     await desktop(page)
     await page.emulateMedia({ colorScheme: "light" })
     await page.goto("/sessions")
-    await expect(page.getByRole("link", { name: "Settings" })).toBeVisible()
+    await expect(page.getByRole("link", { name: "System", exact: true })).toBeVisible()
     expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--terminal-bg").trim())).toMatch(/^#f{3,6}$/)
   })
 
@@ -638,7 +638,7 @@ test("a confirm alert places macOS-order buttons inside it on desktop and stacks
   await cancelBtn.click()
   await expect(dialog).toBeHidden()
   await page.setViewportSize({ width: 390, height: 844 })
-  await expect(page.getByRole("link", { name: "Back to Settings" })).toBeVisible()
+  await expect(page.getByRole("link", { name: "Back to System" })).toBeVisible()
   await page.getByRole("button", { name: "Stop gateway…" }).click()
   await expect(cancelBtn).toBeFocused()
   const phone = await measure()

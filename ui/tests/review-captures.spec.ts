@@ -20,7 +20,7 @@ const views: { name: string; path: string; ready: (page: Page) => Locator }[] = 
   { name: "machines", path: "/machines/peer-1", ready: (page) => page.getByRole("heading", { level: 1, name: "Build server" }) },
   { name: "topology", path: "/machines/topology", ready: (page) => page.getByRole("heading", { level: 1, name: "Topology" }) },
   { name: "limits", path: "/limits", ready: (page) => page.locator("[data-provider]").first() },
-  { name: "settings", path: "/settings/general", ready: (page) => page.getByRole("navigation", { name: "Settings sections" }) },
+  { name: "settings", path: "/settings/general", ready: (page) => page.getByRole("navigation", { name: "System" }) },
 ]
 const widths = [1440, 1024, 390]
 const themes = ["light", "dark"] as const

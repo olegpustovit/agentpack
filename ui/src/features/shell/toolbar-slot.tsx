@@ -13,7 +13,7 @@ export function ToolbarProvider({ children }: { children: ReactNode }) {
   return <ToolbarSlotContext value={{ element, setElement, title, setTitle }}>{children}</ToolbarSlotContext>
 }
 
-// Sits before the gear. Empty targets take no space, so routes without a slot see no gap.
+// Sits before the Commands button. Empty targets take no space, so routes without a slot see no gap.
 export function ToolbarTarget() {
   const target = useContext(ToolbarSlotContext)
   return <div ref={target?.setElement} className="flex shrink-0 items-center gap-(--s2) empty:hidden [&_[data-slot=button]]:rounded-full" />

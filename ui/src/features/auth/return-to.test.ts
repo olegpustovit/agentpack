@@ -8,6 +8,7 @@ describe("safeReturnTo", () => {
     "/library/package/github.com/acme/tools?type=skill",
     "/machines/atlas",
     "/usage",
+    "/system",
     "/limits",
     "/settings/account",
     "/oauth/authorize?x=1",

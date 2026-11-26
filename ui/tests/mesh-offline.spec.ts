@@ -36,11 +36,11 @@ test("replicated offline chat survives reload, keeps history and refuses all inp
   await expect(page.getByText(/Offline · saved history · Last seen/)).toBeVisible()
   expect(writes).toEqual([])
   await page.goto("/machines")
-  await expect(page.getByRole("navigation",{name:"Machines"}).getByText("Main",{exact:true})).toBeVisible()
+  await expect(page.getByRole("navigation",{name:"System"}).getByText("Main",{exact:true})).toBeVisible()
   await page.screenshot({path:"/tmp/agentpack-main-badge-phone.png"})
   await page.setViewportSize({width:1280,height:720})
   await page.goto("/machines")
-  await expect(page.getByRole("navigation",{name:"Machines"}).getByText("Main",{exact:true})).toBeVisible()
+  await expect(page.getByRole("navigation",{name:"System"}).getByText("Main",{exact:true})).toBeVisible()
   await page.screenshot({path:"/tmp/agentpack-main-badge-desktop.png"})
 })
 

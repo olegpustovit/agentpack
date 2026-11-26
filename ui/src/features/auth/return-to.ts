@@ -5,6 +5,7 @@ const sections = new Map([
   ["usage", "Usage"],
   ["limits", "Limits"],
   ["settings", "Settings"],
+  ["system", "System"],
 ])
 
 export const consentPath = "/oauth/authorize"

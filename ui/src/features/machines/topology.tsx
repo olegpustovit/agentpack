@@ -2,7 +2,6 @@ import { Button } from "@/components/ui/button"
 import { hud } from "@/lib/hud"
 import { Badge } from "@/components/ui/badge"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Inspector, Section } from "@/components/kit/data"
 import { Banner, RowSkeleton } from "@/components/kit/feedback"
@@ -121,11 +120,6 @@ export function TopologyView() {
   return (
     <div className="h-full min-h-0 overflow-y-auto">
       <Inspector>
-        {isPhone && (
-          <Link to="/machines" className="col-span-full inline-flex min-h-11 items-center text-(--accent) hover:underline">
-            Machines list
-          </Link>
-        )}
         {topology.error && (
           <Banner tone="danger" className="col-span-full">
             {`Couldn't refresh topology: ${topology.error.message}`}
@@ -170,7 +164,7 @@ export function TopologyView() {
             ))}
           </svg>
         </div>
-        <Section title="Machines" className="col-span-full">
+        <Section title="Machines" className="col-span-full max-[760px]:border-t-0 max-[760px]:pt-0">
           {isPhone ? (
             <ul aria-label="Machines and connections" className="flex flex-col divide-y-[0.5px] divide-(--sep)">
               {rows.map((row) => {

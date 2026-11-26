@@ -159,6 +159,7 @@ function subscribeToSystemTheme(notify: () => void) {
 export function AppearancePane() {
   const [theme, setTheme] = useState<Theme>(currentTheme)
   const dark = useSyncExternalStore(subscribeToSystemTheme, () => systemTheme().matches)
+  const [screenReader, setScreenReader] = useState(screenReaderEnabled)
   function choose(value: unknown[]) {
     const next = themes.find((item) => item === value[0])
     if (!next) return
@@ -178,15 +179,7 @@ export function AppearancePane() {
           </SegmentedControl>
         </FormRow>
       </FormGroup>
-    </Pane>
-  )
-}
-
-export function AccessibilityPane() {
-  const [screenReader, setScreenReader] = useState(screenReaderEnabled)
-  return (
-    <Pane title="Accessibility">
-      <FormGroup>
+      <FormGroup title="Accessibility">
         <FormRow label="Terminal screen reader mode" htmlFor="terminal-screen-reader" description={<span id="terminal-screen-reader-scope">Open terminals reconnect with this setting.</span>}>
           <Switch
             id="terminal-screen-reader"

@@ -12,12 +12,26 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/nodes", (route) => route.fulfill({ json: [] }))
 })
 
+test("view digits follow the physical key, whatever the layout types", async ({ page, isMobile }) => {
+  test.skip(isMobile, "desktop keyboard")
+  await mockAPI(page)
+  await page.goto("/sessions")
+  const views = page.getByRole("navigation", { name: "Views" })
+  await expect(views).toBeVisible()
+  // AZERTY: the unshifted digit row types punctuation.
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "&", code: "Digit2", metaKey: true, bubbles: true })))
+  await expect(page).toHaveURL(/\/library$/)
+  await page.keyboard.press("Meta+3")
+  await expect(page).toHaveURL(/\/usage$/)
+  await expect(views.getByRole("link", { name: "System" })).toHaveAttribute("aria-current", "page")
+})
+
 test("sidebar toggle is on every list-detail view and survives view switch and reload", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
   const toggle = page.getByRole("button", { name: "Toggle sidebar" })
   const sidebar = page.getByRole("region", { name: "Sidebar" })
 
-  for (const path of ["/sessions", "/library", "/machines", "/settings/general"]) {
+  for (const path of ["/sessions", "/library", "/usage", "/settings/general"]) {
     await page.goto(path)
     await expect(toggle).toBeVisible()
     await expect(toggle).toHaveAttribute("aria-expanded", "true")
@@ -45,13 +59,13 @@ test("the tab title counts the sessions that need you", async ({ page }) => {
   await expect(page).toHaveTitle("(1) Agentpack")
 })
 
-test("390 px shows all five tabs, none covered", async ({ page }) => {
+test("390 px shows all three tabs, none covered", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   // /limits has the widest content: its table must not widen the window and push tabs off screen.
   for (const path of ["/sessions", "/limits"]) {
     await page.goto(path)
     const tabs = page.getByRole("navigation", { name: "Tabs" }).getByRole("link")
-    await expect(tabs).toHaveCount(5)
+    await expect(tabs).toHaveCount(3)
 
     for (const tab of await tabs.all()) {
       const href = await tab.getAttribute("href")
@@ -83,33 +97,38 @@ test("phone Back remembers the filtered Library across search changes, browser h
   await expect(page.getByRole("searchbox", { name: "Search library" })).toHaveValue("alpha")
 })
 
-test("phone Usage Back restores the original range and measure", async ({ page }) => {
+test("the phone System tab opens Usage; Back and a second tap open its list", async ({ page }) => {
   await mockAPI(page)
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.goto("/usage?range=month&metric=cost")
-  await page.getByRole("combobox", { name: "Scope" }).click()
-  await page.getByRole("option", { name: "Limits", exact: true }).click()
-  await expect(page).toHaveURL(/\/usage\/limits\?/)
-  await page.getByRole("link", { name: "Back to Usage" }).click()
-  await expect(page).toHaveURL(/\/usage\?range=month&metric=cost$/)
-  await expect(page.getByRole("heading", { name: "Usage", level: 1 })).toBeVisible()
+  await page.goto("/sessions")
+  const system = page.getByRole("navigation", { name: "Tabs" }).getByRole("link", { name: "System" })
+  const list = page.getByRole("navigation", { name: "System" })
+  await system.click()
+  await expect(page).toHaveURL(/\/usage$/)
+  await system.click()
+  await expect(page).toHaveURL(/\/system$/)
+  await list.getByRole("link", { name: /^Limits/ }).click()
+  await expect(page).toHaveURL(/\/usage\/limits$/)
+  await page.getByRole("link", { name: "Back to System" }).click()
+  await expect(page).toHaveURL(/\/system$/)
+  await expect(list).toBeVisible()
 })
 
-test("a direct phone Settings pane returns to the index", async ({ page }) => {
+test("a direct phone Settings pane returns to the System list", async ({ page }) => {
   await mockAPI(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto("/settings/general")
-  await page.getByRole("link", { name: "Back to Settings" }).click()
-  await expect(page).toHaveURL(/\/settings$/)
+  await page.getByRole("link", { name: "Back to System" }).click()
+  await expect(page).toHaveURL(/\/system$/)
   await expect(page.getByRole("link", { name: "Notifications" })).toBeVisible()
 })
 
-test("phone Machines stays selected at its index, topology and detail", async ({ page }) => {
+test("phone System stays selected at its list, topology and a machine", async ({ page }) => {
   await mockAPI(page)
   await page.setViewportSize({ width: 390, height: 844 })
-  for (const path of ["/machines", "/machines/topology", "/machines/local"]) {
+  for (const path of ["/system", "/machines/topology", "/machines/local"]) {
     await page.goto(path)
-    await expect(page.getByRole("navigation", { name: "Tabs" }).getByRole("link", { name: "Machines" })).toHaveAttribute("aria-current", "page")
+    await expect(page.getByRole("navigation", { name: "Tabs" }).getByRole("link", { name: "System" })).toHaveAttribute("aria-current", "page")
   }
 })
 

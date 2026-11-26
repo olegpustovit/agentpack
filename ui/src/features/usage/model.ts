@@ -1,3 +1,5 @@
+import { basename } from "@/lib/format"
+
 // Usage arrives as hourly rows (Unix seconds at the start of the hour), grouped here into the
 // viewer's local days or hours. Session rows carry each session's lifetime totals.
 
@@ -74,16 +76,24 @@ export function costCoverage(sessions: { cost_micros: number }[]): string {
 export const metricOf = (value: string | undefined): Metric => (value && value in metrics ? (value as Metric) : "out")
 export const rangeOf = (value: string | undefined): Range => (value === "day" || value === "month" ? value : "week")
 
-// A sidebar source. Overview and Limits take every row.
-export type View = { kind: "overview" | "project" | "machine" | "agent"; id?: string }
+// folder_id is only unique per machine (an inode on Unix), so a project is its folder name, as in Sessions:
+// the same name merges across machines, and equal IDs on two machines stay apart.
+export function byProject(report: UsageReport): UsageReport {
+  const names = new Map(report.sessions.map((session) => [`${session.node_id}\0${session.folder_id}`, basename(session.directory)]))
+  const named = <T extends { node_id: string; folder_id: string }>(row: T): T => ({
+    ...row,
+    folder_id: row.folder_id && (names.get(`${row.node_id}\0${row.folder_id}`) || "Unknown folder"),
+  })
+  return { ...report, hourly: report.hourly.map(named), sessions: report.sessions.map(named) }
+}
 
-export const viewKinds = ["project", "machine", "agent"] as const
+// The filters on the Usage page, at most one value per dimension; a row must match all of them.
+export type View = { project?: string; machine?: string; agent?: string }
 
 export function inView(row: { folder_id: string; node_id: string; harness: string }, view: View): boolean {
-  if (view.kind === "project") return row.folder_id === view.id
-  if (view.kind === "machine") return row.node_id === view.id
-  if (view.kind === "agent") return row.harness === view.id
-  return true
+  return (view.project === undefined || row.folder_id === view.project)
+    && (view.machine === undefined || row.node_id === view.machine)
+    && (view.agent === undefined || row.harness === view.agent)
 }
 
 // Bucket starts in ms. Day: 24 hours; week (Monday first) and month: local days, so a DST day keeps its own length.
