@@ -17,6 +17,7 @@ GET /api/agent-sessions
 GET /api/agent-snapshot
 GET /api/agents
 GET /api/agents/defaults
+GET /api/agents/shared
 GET /api/agents/{harness}/login/{id}
 GET /api/cache/{cache_key}
 GET /api/config

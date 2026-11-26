@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -120,6 +121,14 @@ func (g *Gateway) registerAgents(mux routeRegistrar) {
 	mux.HandleFunc("GET /api/agents", func(w http.ResponseWriter, r *http.Request) {
 		network.WriteJSON(w, map[string]any{"agents": g.agents.read(r.Context(), r.URL.Query().Get("fresh") == "1")})
 	})
+	mux.HandleFunc("GET /api/agents/shared", func(w http.ResponseWriter, r *http.Request) {
+		agents, err := g.sharedSignIns(r.Context())
+		if err != nil {
+			fail(w, r, err)
+			return
+		}
+		network.WriteJSON(w, map[string]any{"agents": agents})
+	})
 	mux.HandleFunc("POST /api/agents/{harness}/login", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			Method string `json:"method"`
@@ -238,6 +247,66 @@ func (g *Gateway) registerAgents(mux routeRegistrar) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+}
+
+// sharedSignIn is how one agent's sign-in is shared on the mesh: metadata only, never the file or its hash.
+type sharedSignIn struct {
+	Harness        string    `json:"harness"`
+	State          string    `json:"state"` // shared, stopped, none or expired
+	PublisherNode  string    `json:"publisher_node,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at,omitzero"`
+	ExpiresAt      time.Time `json:"expires_at,omitzero"`
+	RenewerNode    string    `json:"renewer_node,omitempty"`
+	RefreshErrorAt time.Time `json:"refresh_error_at,omitzero"`
+}
+
+// sharedSignIns reads the replicated rows; it opens no sign-in file.
+func (g *Gateway) sharedSignIns(ctx context.Context) ([]sharedSignIn, error) {
+	roles, err := g.store.Main(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := []sharedSignIn{}
+	for _, agent := range network.Agents {
+		if agent.Login == nil || agent.Login.Credential == nil {
+			continue
+		}
+		path := agent.Login.Credential()
+		if path == "" {
+			continue
+		}
+		key := agentCredentialKey(agent, path)
+		shared, err := g.sharedAgentCredential(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		row := sharedSignIn{Harness: string(agent.Target), State: "none"}
+		if shared.Modified > 0 {
+			row.UpdatedAt = time.UnixMilli(shared.Modified).UTC()
+		}
+		if shared.Data == nil {
+			if shared.Rev > 0 {
+				row.State = "stopped"
+			}
+			result = append(result, row)
+			continue
+		}
+		row.State, row.PublisherNode = "shared", shared.Node
+		if agent.Login.Freshness != nil && agent.Login.FreshnessExpires {
+			row.ExpiresAt = agent.Login.Freshness(shared.Data)
+		}
+		if agent.Login.Refresh != nil {
+			row.RenewerNode = cmp.Or(roles.MainNode, shared.Node)
+			if at, ok := g.refreshFailed.Load(signInRevision{key, shared.Rev}); ok {
+				row.RefreshErrorAt = at.(time.Time).UTC()
+			}
+		}
+		if !row.ExpiresAt.IsZero() && row.ExpiresAt.Before(time.Now()) || !row.RefreshErrorAt.IsZero() {
+			row.State = "expired"
+		}
+		result = append(result, row)
+	}
+	return result, nil
 }
 
 // requireOwner admits enabled owners through browser, CLI, MCP or a peer

@@ -116,6 +116,8 @@ type LoginSpec struct {
 	// Freshness is when a sign-in's token was issued or expires, zero when unknown. It only vetoes
 	// publishing a changed file that is older than the shared one; it never promotes a file.
 	Freshness func([]byte) time.Time
+	// FreshnessExpires says Freshness is when the token expires, not when it was issued.
+	FreshnessExpires bool
 	// Refresh renews a rotating sign-in ahead of the agent, returning nil when it is not due; only
 	// Main calls it, or without a Main the machine that published the shared sign-in.
 	Refresh func(context.Context, []byte) ([]byte, error)

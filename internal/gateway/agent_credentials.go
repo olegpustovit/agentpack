@@ -34,6 +34,16 @@ type installedCredential struct {
 	Rev  int64
 }
 
+// signInRevision names one published sign-in; a newer one starts without the old one's failure.
+type signInRevision struct {
+	key string
+	rev int64
+}
+
+func agentCredentialKey(agent registry.Entry, path string) string {
+	return string(agent.Target) + "/" + filepath.Base(path)
+}
+
 // runAgentCredentials shares agent sign-ins across the mesh: an agent signed in on any machine is
 // signed in on all of them.
 func (g *Gateway) runAgentCredentials(ctx context.Context, interval time.Duration) {
@@ -90,7 +100,7 @@ func (g *Gateway) syncAgentCredentials(ctx context.Context, signedIn string) {
 // renews the shared one ahead of the agent when this machine published it. After a web UI sign-out
 // nothing is published until signedIn. It reports whether it replaced the local file.
 func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry, path, node string, signedIn bool) (bool, error) {
-	key := string(agent.Target) + "/" + filepath.Base(path)
+	key := agentCredentialKey(agent, path)
 	shared, err := g.sharedAgentCredential(ctx, key)
 	if err != nil {
 		return false, err
@@ -151,6 +161,12 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 		// Once sent, the server may rotate the token whatever happens here: a shutdown must not drop the answer.
 		ctx := context.WithoutCancel(ctx)
 		renewed, err := agent.Login.Refresh(ctx, local)
+		// shortcut: only the renewing gateway reports it; elsewhere expires_at shows the expiry
+		if err != nil {
+			g.refreshFailed.LoadOrStore(signInRevision{key, shared.Rev}, time.Now())
+		} else {
+			g.refreshFailed.Delete(signInRevision{key, shared.Rev})
+		}
 		if renewed == nil || err != nil {
 			return false, err
 		}
@@ -211,7 +227,7 @@ func (g *Gateway) stopSharingAgentCredential(ctx context.Context, agent registry
 	}
 	g.credentialsMu.Lock()
 	defer g.credentialsMu.Unlock()
-	key := string(agent.Target) + "/" + filepath.Base(agent.Login.Credential())
+	key := agentCredentialKey(agent, agent.Login.Credential())
 	shared, err := g.sharedAgentCredential(ctx, key)
 	if err != nil {
 		return err
