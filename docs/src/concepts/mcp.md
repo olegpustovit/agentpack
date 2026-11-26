@@ -215,7 +215,7 @@ Limits: the bridge opens no standalone server-sent-event stream, so notification
 
 ## Shared secrets
 
-An env connection can also be given to your agents, as environment variables, on every machine. It is off until you turn it on:
+An env connection can also be given to your agents, as environment variables, on every machine. It is off until you turn it on, in **Settings → Vault → Shared secrets** (`Add secret…` and its **Give to agents on every machine** switch), or from the CLI:
 
 ```sh
 agentpack mcp login --var STRIPE_API_KEY --label stripe     # reads the value hidden
