@@ -94,3 +94,25 @@ func TestUsageTokenReadsNativeCLIStore(t *testing.T) {
 		t.Fatalf("native token lookup failed: %v", err)
 	}
 }
+
+func TestReadLimitsWithoutLoginAsksForSignInOnlyWithTheCLI(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"HOME", "USERPROFILE", "XDG_CONFIG_HOME", "APPDATA"} {
+		t.Setenv(name, root)
+	}
+	t.Setenv("CURSOR_AUTH_TOKEN", "")
+	t.Setenv("AGENT_CLI_CREDENTIAL_STORE", "")
+
+	t.Setenv("CURSOR_AGENT_PATH", filepath.Join(root, "missing"))
+	if got := ReadLimits(context.Background()); got.State != "unsupported" || got.Error != "cursor CLI not found" {
+		t.Fatalf("without the CLI: %+v", got)
+	}
+	t.Setenv("CURSOR_AGENT_PATH", os.Args[0])
+	want := "No Cursor sign-in on this machine. Sign in from Vault."
+	if runtime.GOOS == "darwin" {
+		want = "Cursor's keychain login can't be read. Sign in once from Vault to show limits."
+	}
+	if got := ReadLimits(context.Background()); got.State != "error" || got.Error != want {
+		t.Fatalf("with the CLI: %+v", got)
+	}
+}

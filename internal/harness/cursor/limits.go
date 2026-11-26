@@ -44,10 +44,14 @@ func ReadLimits(ctx context.Context) base.LimitSnapshot {
 		return snapshot
 	}
 	if token == "" {
-		snapshot.State = base.LimitStateUnsupported
-		snapshot.Error = "No Cursor CLI login on this machine. Sign in with cursor-agent login."
+		if _, err := base.Cursor.Resolve(); err != nil {
+			snapshot.State = base.LimitStateUnsupported
+			snapshot.Error = "cursor CLI not found"
+			return snapshot
+		}
+		snapshot.Error = "No Cursor sign-in on this machine. Sign in from Vault."
 		if runtime.GOOS == "darwin" {
-			snapshot.Error = "Cursor keeps its macOS login in the keychain, which agentpack does not read."
+			snapshot.Error = "Cursor's keychain login can't be read. Sign in once from Vault to show limits."
 		}
 		return snapshot
 	}
