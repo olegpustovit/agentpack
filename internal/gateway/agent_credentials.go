@@ -117,12 +117,20 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 		localChanged, sharedNewer = !sharedUsable && !signedOut, sharedUsable
 	}
 	localChanged = localChanged || signedIn
+	changed := localChanged // for .bak
+	// A changed file whose token is older than the shared one is stale (restored, or left from before
+	// a sleep): install the shared one instead. Token age never promotes a file.
+	if age := agent.Login.Freshness; age != nil && localChanged && !signedIn && !signedOut && localUsable && sharedUsable {
+		if mine, theirs := age(local), age(shared.Data); !mine.IsZero() && !theirs.IsZero() && mine.Before(theirs) {
+			localChanged, sharedNewer = false, true
+		}
+	}
 	same := bytes.Equal(local, shared.Data)
 	switch {
 	case localUsable && localChanged && !same && (!signedOut || signedIn):
 		return false, g.publishAgentCredential(ctx, key, sharedAgentCredential{Data: local, Rev: shared.Rev + 1, Modified: time.Now().UnixMilli(), Node: node})
 	case sharedUsable && (!localUsable || sharedNewer && !localChanged) && !same:
-		if !known && local != nil {
+		if (!known || changed) && local != nil {
 			if err := os.WriteFile(path+".bak", local, 0o600); err != nil {
 				return false, err
 			}

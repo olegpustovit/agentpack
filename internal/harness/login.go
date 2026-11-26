@@ -113,7 +113,10 @@ type LoginSpec struct {
 	Credential func() string
 	// ValidCredential excludes incomplete or expired native credentials from sharing.
 	ValidCredential func([]byte) bool
+	// Freshness is when a sign-in's token was issued or expires, zero when unknown. It only vetoes
+	// publishing a changed file that is older than the shared one; it never promotes a file.
+	Freshness func([]byte) time.Time
 	// Refresh renews a rotating sign-in ahead of the agent, returning nil when it is not due; only
-	// the machine that published the shared sign-in calls it.
+	// Main calls it, or without a Main the machine that published the shared sign-in.
 	Refresh func(context.Context, []byte) ([]byte, error)
 }

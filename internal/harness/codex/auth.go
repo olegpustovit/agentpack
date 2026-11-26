@@ -92,7 +92,7 @@ func materializeEncryptedAuth(userHome, destination string) (bool, error) {
 	if len(auth) == 0 {
 		return false, nil
 	}
-	if !validAuthData(auth) {
+	if !ValidCredential(auth) {
 		return false, fmt.Errorf("invalid Codex auth in encrypted store")
 	}
 	return true, atomicWriteAuth(destination, auth)
@@ -209,7 +209,7 @@ func finishIsolatedLoginHome(loginHome, staged string) error {
 	if err != nil {
 		return err
 	}
-	if !validAuthData(data) {
+	if !ValidCredential(data) {
 		return fmt.Errorf("Codex login wrote invalid auth in %s; left it for recovery", loginHome)
 	}
 	native, err := persistLogin(data)
@@ -279,7 +279,7 @@ func preserveAuth(staged string) error {
 	if err != nil {
 		return err
 	}
-	if !validAuthData(data) {
+	if !ValidCredential(data) {
 		return nil
 	}
 	destination := shared
@@ -299,7 +299,8 @@ func preserveAuth(staged string) error {
 	return installAuthData(destination, shared, data)
 }
 
-func validAuthData(data []byte) bool {
+// ValidCredential reports an auth.json that holds a sign-in of any kind.
+func ValidCredential(data []byte) bool {
 	var value map[string]json.RawMessage
 	if json.Unmarshal(data, &value) != nil || len(value) == 0 {
 		return false
@@ -435,6 +436,17 @@ func updateConfig(path string, mutate func(map[string]any)) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+// Freshness is when the ChatGPT tokens were last renewed, zero for an API key or unknown.
+func Freshness(data []byte) time.Time {
+	var auth struct {
+		LastRefresh time.Time `json:"last_refresh"`
+	}
+	if json.Unmarshal(data, &auth) != nil {
+		return time.Time{}
+	}
+	return auth.LastRefresh
 }
 
 // Codex's own OAuth client; tests point tokenURL at a fake.

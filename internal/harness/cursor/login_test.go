@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestCursorCredentialFiles(t *testing.T) {
@@ -53,6 +54,19 @@ func TestLateSharedCursorLoginReachesStagedMacHome(t *testing.T) {
 			if err != nil || string(got) != data {
 				t.Fatalf("staged credential mismatch: %v", err)
 			}
+		}
+	}
+}
+
+func TestCursorCredentialFreshness(t *testing.T) {
+	// The payload is {"exp":1}.
+	expired := []byte(`{"accessToken":"header.eyJleHAiOjF9.signature"}`)
+	if got := Freshness(expired); !got.Equal(time.Unix(1, 0)) || ValidCredential(expired) {
+		t.Fatalf("expired token: freshness %v", got)
+	}
+	for _, data := range []string{`{"accessToken":"opaque"}`, `{"apiKey":"k"}`} {
+		if got := Freshness([]byte(data)); !got.IsZero() || !ValidCredential([]byte(data)) {
+			t.Fatalf("%s: freshness %v", data, got)
 		}
 	}
 }
