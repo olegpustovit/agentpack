@@ -20,7 +20,7 @@
   "shadowed": 0,
   "inheritance": [
     "credentials, remote MCP services, npm/npx installs, and model answers stay outside the portable closure",
-    "Antigravity leaves HOME untouched and writes a workspace plugin overlay",
+    "Antigravity leaves HOME untouched and writes a copy of the pack as a workspace plugin",
     "CI policy treats undeclared inheritance as a violation"
   ],
   "capabilities": {
@@ -53,7 +53,7 @@
     {
       "code": "INHERITANCE_BOUNDARY",
       "severity": "info",
-      "message": "Antigravity leaves HOME untouched and writes a workspace plugin overlay",
+      "message": "Antigravity leaves HOME untouched and writes a copy of the pack as a workspace plugin",
       "evidence": "declared"
     },
     {

@@ -12,7 +12,6 @@ import (
 
 	"github.com/olegpustovit/agentpack/internal/cache"
 	base "github.com/olegpustovit/agentpack/internal/harness"
-	"github.com/olegpustovit/agentpack/internal/harness/agy"
 	"github.com/olegpustovit/agentpack/internal/harness/cursor"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
@@ -239,20 +238,18 @@ func WriteLaunchDigest(projectRoot, modeName string, target base.Target, digest 
 // publishes a generation without this one; following it would rebuild on every
 // switch between agents. The digest still decides whether it may be reused.
 //
-// Overlay harnesses stay on the published path: the rebuild is what keeps their
-// workspace links current, as it is for any launcher that must clean them up.
+// Overlay harnesses stay on the published path, and so do launches after
+// Cursor: the rebuild is what keeps its workspace links current.
 func selectLaunchGeneration(projectRoot, modeName string, target base.Target) error {
 	if target.UsesWorkspaceOverlay() {
 		return nil
 	}
-	for _, manifest := range []func(string) (string, error){cursor.OverlayManifestPath, agy.OverlayManifestPath} {
-		path, err := manifest(projectRoot)
-		if err != nil {
-			return err
-		}
-		if info, err := os.Stat(path); err == nil && info.Size() != 0 {
-			return nil
-		}
+	manifest, err := cursor.OverlayManifestPath(projectRoot)
+	if err != nil {
+		return err
+	}
+	if info, err := os.Stat(manifest); err == nil && info.Size() != 0 {
+		return nil
 	}
 	path, err := paths.LaunchSyncStatePath(projectRoot, modeName, string(target))
 	if err != nil {
