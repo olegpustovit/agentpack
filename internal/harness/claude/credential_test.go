@@ -45,3 +45,24 @@ func TestRefreshCredentialRenewsAnHourAhead(t *testing.T) {
 		t.Fatalf("renewed file: %s", renewed)
 	}
 }
+
+func TestCredentialValidityAndFreshness(t *testing.T) {
+	for data, want := range map[string]struct {
+		valid bool
+		fresh time.Time
+	}{
+		`{"claudeAiOauth":{"accessToken":"a","expiresAt":1000}}`: {true, time.UnixMilli(1000)}, // expired, still renewable
+		`{"claudeAiOauth":{"accessToken":"a"}}`:                  {true, time.Time{}},
+		`{"claudeAiOauth":{"accessToken":""}}`:                   {false, time.Time{}},
+		`{"mcpOAuth":{}}`:                                        {false, time.Time{}},
+		`{}`:                                                     {false, time.Time{}},
+		`not json`:                                               {false, time.Time{}},
+	} {
+		if got := ValidCredential([]byte(data)); got != want.valid {
+			t.Errorf("valid(%s) = %t", data, got)
+		}
+		if got := Freshness([]byte(data)); !got.Equal(want.fresh) {
+			t.Errorf("freshness(%s) = %v", data, got)
+		}
+	}
+}

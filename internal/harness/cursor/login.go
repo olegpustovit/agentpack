@@ -110,16 +110,34 @@ func (auth fileLogin) usable() bool {
 		return false
 	}
 	// Some Cursor tokens are opaque. Only exclude a token if it declares an expired lifetime.
+	expires := auth.expires()
+	return expires.IsZero() || time.Now().Before(expires)
+}
+
+// expires is the lifetime the access token declares, zero when it declares none.
+func (auth fileLogin) expires() time.Time {
 	_, payload, ok := strings.Cut(auth.AccessToken, ".")
 	payload, _, jwt := strings.Cut(payload, ".")
 	if !ok || !jwt {
-		return true
+		return time.Time{}
 	}
 	body, err := base64.RawURLEncoding.DecodeString(payload)
 	var claims struct {
 		Expires int64 `json:"exp"`
 	}
-	return err != nil || json.Unmarshal(body, &claims) != nil || claims.Expires == 0 || time.Now().Unix() < claims.Expires
+	if err != nil || json.Unmarshal(body, &claims) != nil || claims.Expires == 0 {
+		return time.Time{}
+	}
+	return time.Unix(claims.Expires, 0)
+}
+
+// Freshness is when the access token expires, zero for an opaque token or an API key.
+func Freshness(data []byte) time.Time {
+	var auth fileLogin
+	if json.Unmarshal(data, &auth) != nil {
+		return time.Time{}
+	}
+	return auth.expires()
 }
 
 // ValidCredential prevents a stale native login from replacing a usable shared login.

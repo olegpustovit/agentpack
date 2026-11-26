@@ -33,6 +33,7 @@ type fakeMCPAuthServer struct {
 	refresh   string
 	serial    int
 	refreshes atomic.Int32
+	onRefresh func() // runs before the token endpoint answers a refresh
 }
 
 func newFakeMCPAuthServer(t *testing.T) *fakeMCPAuthServer {
@@ -79,6 +80,9 @@ func newFakeMCPAuthServer(t *testing.T) *fakeMCPAuthServer {
 				return
 			}
 			fake.refreshes.Add(1)
+			if fake.onRefresh != nil {
+				fake.onRefresh()
+			}
 		}
 		fake.serial++
 		fake.access, fake.refresh = fmt.Sprintf("at-%d", fake.serial), fmt.Sprintf("rt-%d", fake.serial)
@@ -521,5 +525,27 @@ func TestMCPRefreshLosesToNewerLogin(t *testing.T) {
 	}
 	if current, _ := g.loadMCPCredential(ctx, id); current.State.Token == nil || current.State.Token.AccessToken != "new" {
 		t.Fatalf("stale refresh overwrote the new login: %+v", current.State.Token)
+	}
+}
+
+// The server rotates the token as soon as it is asked: a caller that goes away (a shutdown) must not lose the answer.
+func TestMCPCredentialRefreshSurvivesCancel(t *testing.T) {
+	fake := newFakeMCPAuthServer(t)
+	fake.refresh = "rt"
+	g, _ := startCredentialGateway(t)
+	id, err := g.saveMCPCredential(t.Context(), mcpCredential{Kind: mcp.CredentialOAuth, Match: fake.URL + "/mcp", Label: "X", Account: testBrowserEmail,
+		Client: mcpOAuthClient{ClientID: "dynamic-client", TokenURL: fake.URL + "/token"},
+		State:  mcpCredentialState{Generation: 1, Status: mcpStatusConnected, Token: &mcpToken{AccessToken: "old", RefreshToken: "rt", IssuedAt: time.Now()}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	fake.onRefresh = cancel
+	if _, err := g.refreshMCPToken(ctx, id, 1); err != nil {
+		t.Fatal(err)
+	}
+	current, err := g.loadMCPCredential(t.Context(), id)
+	if err != nil || current.State.Generation != 2 || current.State.Token.RefreshToken != "rt-1" {
+		t.Fatalf("rotated token lost: generation %d, %v", current.State.Generation, err)
 	}
 }

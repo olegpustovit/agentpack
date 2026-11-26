@@ -30,16 +30,19 @@ type Entry struct {
 func All() []Entry {
 	return []Entry{
 		{Harness: claude.New(), Hooks: claude.HookRenderer{}, Limits: claude.ReadLimits, Probe: claude.Probe,
-			Login: &base.LoginSpec{Methods: claude.LoginMethods, Account: claude.Account, Login: claude.Login, Logout: claude.Logout, Credential: claude.CredentialFile, Refresh: claude.RefreshCredential}},
+			Login: &base.LoginSpec{Methods: claude.LoginMethods, Account: claude.Account, Login: claude.Login, Logout: claude.Logout, Credential: claude.CredentialFile, ValidCredential: claude.ValidCredential, Freshness: claude.Freshness, Refresh: claude.RefreshCredential}},
 		{Harness: cursor.New(), Hooks: cursor.HookRenderer{}, Limits: cursor.ReadLimits,
-			Login: &base.LoginSpec{Methods: cursor.LoginMethods, Account: cursor.Account, Login: cursor.Login, Logout: cursor.Logout, Credential: cursor.CredentialFile, ValidCredential: cursor.ValidCredential}},
+			Login: &base.LoginSpec{Methods: cursor.LoginMethods, Account: cursor.Account, Login: cursor.Login, Logout: cursor.Logout, Credential: cursor.CredentialFile, ValidCredential: cursor.ValidCredential, Freshness: cursor.Freshness}},
 		{Harness: codex.New(), Hooks: codex.HookRenderer{}, Limits: func(ctx context.Context) base.LimitSnapshot { return codex.ReadLimits(ctx, "") }, Probe: codex.Probe,
-			Login: &base.LoginSpec{Methods: codex.LoginMethods, Account: codex.Account, Login: codex.Login, Logout: codex.Logout, Credential: codex.CredentialFile, Refresh: codex.RefreshCredential}},
+			Login: &base.LoginSpec{Methods: codex.LoginMethods, Account: codex.Account, Login: codex.Login, Logout: codex.Logout, Credential: codex.CredentialFile, ValidCredential: codex.ValidCredential, Freshness: codex.Freshness, Refresh: codex.RefreshCredential}},
 		{Harness: opencode.New(), Hooks: opencode.HookRenderer{}, Limits: opencode.ReadLimits, Probe: opencode.Probe,
+			// shortcut: no Freshness, OpenCode's auth.json has no token age agentpack reads; add one when a stale copy of it wins.
 			Login: &base.LoginSpec{Methods: opencode.LoginMethods, Account: opencode.Account, Login: opencode.Login, Credential: opencode.CredentialFile}},
 		{Harness: grok.New(), Limits: grok.ReadLimits,
+			// shortcut: no Freshness, Grok's auth.json has no token age agentpack reads; add one when a stale copy of it wins.
 			Login: &base.LoginSpec{Methods: grok.LoginMethods, Account: grok.Account, Login: grok.Login, Logout: grok.Logout, Credential: grok.CredentialFile}},
 		{Harness: agy.New(), Hooks: agy.HookRenderer{}, Limits: agy.ReadLimits,
+			// shortcut: no Freshness, Antigravity's token file has no token age agentpack reads; add one when a stale copy of it wins.
 			Login: &base.LoginSpec{Methods: agy.LoginMethods, Account: agy.Account, Login: agy.Login, Credential: agy.CredentialFile}},
 		{Harness: omp.New(), Hooks: omp.HookRenderer{}, Limits: omp.ReadLimits,
 			Login: &base.LoginSpec{Methods: omp.LoginMethods, Account: omp.Account, Login: omp.Login}},
