@@ -229,9 +229,9 @@ test("replication lists what a peer receives and links removal to credential rec
   await page.getByRole("button", { name: "oracle-vm actions" }).click()
   await page.getByRole("menuitem", { name: "Remove from replication…" }).click()
   await expect(dialog).toContainText("Previously replicated data remains")
-  await expect(dialog.getByRole("link", { name: "Connections" })).toHaveAttribute("href", "/settings/connections")
+  await expect(dialog.getByRole("link", { name: "Vault" })).toHaveAttribute("href", "/settings/connections")
   await dialog.getByRole("button", { name: "Remove", exact: true }).click()
-  await expect(page.getByRole("link", { name: "Open Connections" })).toBeVisible()
+  await expect(page.getByRole("link", { name: "Open Vault" })).toBeVisible()
 })
 
 test("appearance sets the theme and keeps it across a reload", async ({ page }) => {
@@ -465,7 +465,7 @@ test("connections group logins by server and a second login needs its own name",
   expect(calls).toEqual([])
 })
 
-test("phone Connections shows visible actions and the OAuth return state on its row", async ({ page }) => {
+test("phone Vault shows visible actions and the OAuth return state on its row", async ({ page }) => {
   await mockGateway(page)
   await page.setViewportSize({ width: 320, height: 568 })
   await page.route("**/api/mcp/credentials", (route) => answer(route, { callback_url: "", credentials: [
@@ -478,6 +478,35 @@ test("phone Connections shows visible actions and the OAuth return state on its 
   await expect(work.getByText(/link expired or was already used/)).toBeVisible()
   await expect(work.getByRole("button", { name: "Try again" })).toBeVisible()
   await expect(page.getByRole("listitem").filter({ hasText: "Client" }).getByRole("button", { name: "Try again" })).toHaveCount(0)
+})
+
+test("Vault lists agent sign-ins, opens the sign-in sheet and tolerates an older gateway", async ({ page }) => {
+  await mockGateway(page)
+  let shared = 200
+  await page.route("**/api/mcp/credentials", (route) => answer(route, { callback_url: "", credentials: [] }))
+  await page.route("**/api/agents", (route) => answer(route, { agents: [
+    { harness: "cursor", installed: true, signed_in: false, methods: [{ id: "cursor", label: "Cursor account" }] },
+  ] }))
+  await page.route("**/api/agents/shared", (route) => shared === 200
+    ? answer(route, { agents: [{ harness: "claude", state: "shared", publisher_node: "n1" }, { harness: "cursor", state: "none" }] })
+    : route.fulfill({ status: shared, body: "404 page not found" }))
+  await page.goto("/settings/connections")
+  const pane = page.getByRole("region", { name: "Vault" })
+  await expect(pane.getByText("Shared from host-a")).toBeVisible()
+  await expect(pane.getByRole("button", { name: "Claude actions" })).toBeVisible()
+  await pane.getByRole("button", { name: "Sign in to Cursor CLI…" }).click()
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Sign in with Cursor account" })).toBeVisible()
+  await page.keyboard.press("Escape")
+
+  // Phones put the action under the status line.
+  await page.setViewportSize({ width: 390, height: 700 })
+  const status = await pane.getByText("Not shared yet").first().boundingBox()
+  const action = await pane.getByRole("button", { name: "Sign in to Cursor CLI…" }).boundingBox()
+  expect(action!.y).toBeGreaterThanOrEqual(status!.y + status!.height)
+
+  shared = 404
+  await page.reload()
+  await expect(pane.getByText("Update Agentpack on this machine to see agent sign-ins.")).toBeVisible()
 })
 
 test("sidebar search filters sections, opens the first match on Enter and clears on Escape", async ({ page }) => {
@@ -506,7 +535,7 @@ test("sidebar shows badges for issues, expired logins and peers that are behind"
   }))
   await page.goto("/settings")
   const sidebar = page.getByRole("navigation", { name: "Settings sections" })
-  for (const name of ["Diagnostics 2", "Connections 1 to sign in", "Replication 1 not syncing"]) {
+  for (const name of ["Diagnostics 2", "Vault 1 to sign in", "Replication 1 not syncing"]) {
     await expect(sidebar.getByRole("link", { name, exact: true })).toBeVisible()
   }
 })

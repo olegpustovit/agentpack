@@ -111,6 +111,7 @@ var routeTable = []route{
 	{pattern: "POST /api/limits/refresh", peer: peerWrite},
 	{pattern: "GET /api/usage"},
 	{pattern: "GET /api/agents", peer: peerRead},
+	{pattern: "GET /api/agents/shared", policy: owner},
 	{pattern: "POST /api/agents/{harness}/login", policy: owner, peer: peerWrite},
 	{pattern: "GET /api/agents/{harness}/login/{id}", policy: owner, peer: peerRead},
 	{pattern: "POST /api/agents/{harness}/login/{id}", policy: owner, peer: peerWrite},

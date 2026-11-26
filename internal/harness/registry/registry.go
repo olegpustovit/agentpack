@@ -30,9 +30,9 @@ type Entry struct {
 func All() []Entry {
 	return []Entry{
 		{Harness: claude.New(), Hooks: claude.HookRenderer{}, Limits: claude.ReadLimits, Probe: claude.Probe,
-			Login: &base.LoginSpec{Methods: claude.LoginMethods, Account: claude.Account, Login: claude.Login, Logout: claude.Logout, Credential: claude.CredentialFile, ValidCredential: claude.ValidCredential, Freshness: claude.Freshness, Refresh: claude.RefreshCredential}},
+			Login: &base.LoginSpec{Methods: claude.LoginMethods, Account: claude.Account, Login: claude.Login, Logout: claude.Logout, Credential: claude.CredentialFile, ValidCredential: claude.ValidCredential, Freshness: claude.Freshness, FreshnessExpires: true, Refresh: claude.RefreshCredential}},
 		{Harness: cursor.New(), Hooks: cursor.HookRenderer{}, Limits: cursor.ReadLimits,
-			Login: &base.LoginSpec{Methods: cursor.LoginMethods, Account: cursor.Account, Login: cursor.Login, Logout: cursor.Logout, Credential: cursor.CredentialFile, ValidCredential: cursor.ValidCredential, Freshness: cursor.Freshness}},
+			Login: &base.LoginSpec{Methods: cursor.LoginMethods, Account: cursor.Account, Login: cursor.Login, Logout: cursor.Logout, Credential: cursor.CredentialFile, ValidCredential: cursor.ValidCredential, Freshness: cursor.Freshness, FreshnessExpires: true}},
 		{Harness: codex.New(), Hooks: codex.HookRenderer{}, Limits: func(ctx context.Context) base.LimitSnapshot { return codex.ReadLimits(ctx, "") }, Probe: codex.Probe,
 			Login: &base.LoginSpec{Methods: codex.LoginMethods, Account: codex.Account, Login: codex.Login, Logout: codex.Logout, Credential: codex.CredentialFile, ValidCredential: codex.ValidCredential, Freshness: codex.Freshness, Refresh: codex.RefreshCredential}},
 		{Harness: opencode.New(), Hooks: opencode.HookRenderer{}, Limits: opencode.ReadLimits, Probe: opencode.Probe,

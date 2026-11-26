@@ -18,6 +18,7 @@ import { issuesQuery } from "./diagnostics-model"
 import { NotificationsPane } from "./notifications-pane"
 import { AccessibilityPane, AgentsPane, AppearancePane, ConnectionsPane, DiagnosticsPane, GeneralPane, OmpPane, SharingPane } from "./panes"
 import { ReplicationPane } from "./replication-pane"
+import { sharedSignInsQuery, vaultBadge } from "./vault-model"
 
 type Scope = "account" | "machine" | "mesh" | "browser"
 type SettingsSection = { id: string; label: string; scope: Scope; icon: LucideIcon; view: ComponentType; keywords: string; about?: string; wide?: boolean }
@@ -30,8 +31,8 @@ const sections: SettingsSection[] = [
   { id: "diagnostics", label: "Diagnostics", scope: "machine", icon: Activity, view: DiagnosticsPane, keywords: "issues errors traces crash logs resolve" },
   { id: "replication", label: "Replication", scope: "mesh", icon: RefreshCw, view: ReplicationPane, keywords: "mesh peers machines enroll sync remove schema",
     about: "Enrolled machines share accounts, chat history, limits and Library data, and every member is fully trusted. Enroll on both machines to start syncing." },
-  { id: "connections", label: "Connections", scope: "mesh", icon: KeyRound, view: ConnectionsPane, keywords: "mcp oauth login sign in credentials token header variable linear notion",
-    about: "Sign in to a remote MCP server once and every machine can use it. With more than one login, projects use the default unless you pick another in New session." },
+  { id: "connections", label: "Vault", scope: "mesh", icon: KeyRound, view: ConnectionsPane, keywords: "mcp oauth login sign in credentials token header variable linear notion vault secrets agents cursor claude codex grok",
+    about: "Sign in once. Every enrolled machine can use it." },
   { id: "agents", label: "Agents", scope: "mesh", icon: Sparkles, view: AgentsPane, keywords: "mcp agentpack tools subagents task helpers defaults new chats permissions bypass auto approve" },
   // Role tables need more than the form width.
   { id: "omp", label: "Oh My Pi", scope: "mesh", icon: Bot, view: OmpPane, keywords: "omp models roles thinking agent", wide: true,
@@ -66,7 +67,7 @@ function useBadges(): Record<string, { text: string; attention: boolean } | unde
   const issues = useQuery({ ...issuesQuery("open"), refetchInterval: live ? false : 30_000 }).data
   const connections = useQuery(connectionsQuery(live)).data
   const replication = useQuery({ ...replicationQuery, refetchInterval: live ? false : 30_000 }).data
-  const signIn = connections?.credentials.filter((item) => item.status === "needs_login").length ?? 0
+  const signIn = vaultBadge(useQuery(sharedSignInsQuery).data ?? [], connections?.credentials ?? [])
   const stuck = (replication?.peers ?? []).filter((peer) => {
     const contact = replication?.contacts?.[peer.node]
     return contact?.error || contact?.needs_update || contact?.needs_trust || contact?.reachable === false

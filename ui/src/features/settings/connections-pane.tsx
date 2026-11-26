@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react"
 import { Plus } from "lucide-react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { getRouteApi } from "@tanstack/react-router"
+import { Section } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { Field, FieldError, FieldGrid, FieldLabel, FormGroup, FormRow } from "@/components/kit/forms"
 import { SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
@@ -15,6 +16,7 @@ import { api, ApiError, errorText } from "@/lib/api"
 import { hud } from "@/lib/hud"
 import { connectionsQuery, loginsFor, serverName, signInOutcome, startSignIn, type Connection } from "./connections-model"
 import { LoadError, Pane } from "./panes"
+import { VaultAgents } from "./vault-agents"
 
 const route = getRouteApi("/_app/settings/$pane")
 const returningConnectionKey = "agentpack.mcp.returning-connection"
@@ -46,6 +48,15 @@ const callbackMessages = {
 }
 
 export function ConnectionsPane() {
+  return (
+    <Pane title="Vault">
+      <VaultAgents />
+      <Section title="MCP connections"><MCPConnections /></Section>
+    </Pane>
+  )
+}
+
+function MCPConnections() {
   const [adding, setAdding] = useState<string>()
   const [returning] = useState(returningConnection)
   const { callback, oauth_login: login, connection } = route.useSearch()
@@ -87,30 +98,28 @@ export function ConnectionsPane() {
     void navigate({ replace: true, search: (previous) => ({ ...previous, callback: undefined, oauth_login: undefined, connection: undefined }) })
   }
   return (
-    <Pane title="Connections">
-      <div className="flex flex-col gap-(--s7)">
-        {feedback && !target && <Banner tone={feedback.retry ? "warn" : "info"} action={
-          <div className="flex flex-wrap gap-(--s2)">
-            {feedback.retry && <Button size="sm" onClick={() => { dismissFeedback(); setAdding("") }}>Try again</Button>}
-            <Button size="sm" variant="ghost" onClick={dismissFeedback}>{feedback.pending ? "Dismiss" : "Done"}</Button>
-          </div>
-        }>{feedback.message}</Banner>}
-        {connections.data.credentials.length === 0 && (
-          <Empty title="No connections">Add a server below, or run <code>agentpack mcp login</code>.</Empty>
-        )}
-        {servers.map((match) => <ServerGroup key={match} match={match} logins={loginsFor(match, remote)} onAdd={() => setAdding(match)} targetID={target?.id} feedback={feedback} dismissFeedback={dismissFeedback} />)}
-        {local.length > 0 && (
-          <FormGroup title="Local servers">
-            <ul>{local.map((connection) => <ConnectionRow key={connection.id} connection={connection} single />)}</ul>
-          </FormGroup>
-        )}
-        <div><Button onClick={() => setAdding("")}><Plus aria-hidden className="size-3.5" />Add connection…</Button></div>
-        <Sheet open={adding !== undefined} onOpenChange={(open) => !open && setAdding(undefined)}>
-          {adding !== undefined && <AddConnection key={adding} initialURL={adding} remote={remote} callbackURL={connections.data.callbackURL} onDone={() => setAdding(undefined)} />}
-        </Sheet>
-        {connections.data.credentials.some((connection) => connection.kind === "oauth") && <RevokeAll />}
-      </div>
-    </Pane>
+    <div className="flex flex-col gap-(--s7)">
+      {feedback && !target && <Banner tone={feedback.retry ? "warn" : "info"} action={
+        <div className="flex flex-wrap gap-(--s2)">
+          {feedback.retry && <Button size="sm" onClick={() => { dismissFeedback(); setAdding("") }}>Try again</Button>}
+          <Button size="sm" variant="ghost" onClick={dismissFeedback}>{feedback.pending ? "Dismiss" : "Done"}</Button>
+        </div>
+      }>{feedback.message}</Banner>}
+      {connections.data.credentials.length === 0 && (
+        <Empty title="No connections">Add a server below, or run <code>agentpack mcp login</code>.</Empty>
+      )}
+      {servers.map((match) => <ServerGroup key={match} match={match} logins={loginsFor(match, remote)} onAdd={() => setAdding(match)} targetID={target?.id} feedback={feedback} dismissFeedback={dismissFeedback} />)}
+      {local.length > 0 && (
+        <FormGroup title="Local servers">
+          <ul>{local.map((connection) => <ConnectionRow key={connection.id} connection={connection} single />)}</ul>
+        </FormGroup>
+      )}
+      <div><Button onClick={() => setAdding("")}><Plus aria-hidden className="size-3.5" />Add connection…</Button></div>
+      <Sheet open={adding !== undefined} onOpenChange={(open) => !open && setAdding(undefined)}>
+        {adding !== undefined && <AddConnection key={adding} initialURL={adding} remote={remote} callbackURL={connections.data.callbackURL} onDone={() => setAdding(undefined)} />}
+      </Sheet>
+      {connections.data.credentials.some((connection) => connection.kind === "oauth") && <RevokeAll />}
+    </div>
   )
 }
 
@@ -156,7 +165,7 @@ function ConnectionRow({ connection, single, first = false, feedback, dismissFee
   const kind = { oauth: "Signed in", header: "Token header", env: "Variable" }[connection.kind] ?? connection.kind
   const plugins = connection.plugins.map((module) => module.split("/").pop() ?? module)
   return (
-    <li className="group/row flex min-w-0 items-center gap-(--s4) border-t-[0.5px] border-(--sep-soft) px-(--s5) py-(--s3) first:border-t-0">
+    <li ref={feedback ? (element) => element?.scrollIntoView({ block: "nearest" }) : undefined} className="group/row flex min-w-0 items-center gap-(--s4) border-t-[0.5px] border-(--sep-soft) px-(--s5) py-(--s3) first:border-t-0">
       <LoginGlyph login={problem ? "needs_login" : "connected"} />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-(--s3)">

@@ -82,7 +82,7 @@ func TestRoutePoliciesArePinned(t *testing.T) {
 		"POST /api/node/update", "POST /api/node/stop", "POST /api/mcp/servers", "PUT /api/projects/settings", "POST /api/settings/sharing",
 		"POST " + replicationPrefix + "peers", "DELETE " + replicationPrefix + "peers/{peer}", "POST " + replicationPrefix + "sync",
 		"POST /api/agents/{harness}/login", "GET /api/agents/{harness}/login/{id}", "POST /api/agents/{harness}/login/{id}",
-		"DELETE /api/agents/{harness}/login/{id}", "POST /api/agents/{harness}/logout",
+		"DELETE /api/agents/{harness}/login/{id}", "POST /api/agents/{harness}/logout", "GET /api/agents/shared",
 		"PUT /api/agents/defaults", "PUT /api/omp/settings/{key}", "DELETE /api/omp/settings/{key}", "POST /api/worktrees/remove", "POST /api/worktrees/push",
 	}
 	cliRoutes := []string{"GET /api/debug/pprof/{name...}", "POST /api/local/sessions/{id}/presence", "DELETE /api/local/sessions/{id}/presence"}

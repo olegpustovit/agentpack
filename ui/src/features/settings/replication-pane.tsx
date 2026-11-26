@@ -45,8 +45,8 @@ export function ReplicationPane() {
   return (
     <div className="flex min-w-0 flex-col gap-(--s7)">
       {!sharing && <Banner tone="warn" action={<Link className="text-(--accent)" to="/settings/$pane" params={{ pane: "sharing" }}>Open Sharing</Link>}>Turn on Tailscale sharing before enrolling a machine.</Banner>}
-      {removedPeer && <Banner tone="warn" action={<Link className="text-(--accent)" to="/settings/$pane" params={{ pane: "connections" }}>Open Connections</Link>}>
-        {`${removedPeer} keeps the MCP logins it already received. Sign out of OAuth logins in Connections and rotate other credentials at their providers.`}
+      {removedPeer && <Banner tone="warn" action={<Link className="text-(--accent)" to="/settings/$pane" params={{ pane: "connections" }}>Open Vault</Link>}>
+        {`${removedPeer} keeps the MCP logins it already received. Sign out of OAuth logins in Vault and rotate other credentials at their providers.`}
       </Banner>}
       <FormGroup title="Machines" footer={canManage ? undefined : "Only the gateway owner can enroll or remove machines."}>
         {nodes.data.length === 0 ? (
@@ -139,7 +139,7 @@ function PeerRow({
         {removing && (
           <ConfirmAlertContent
             title={`Remove ${peer.name} from replication?`}
-            description={<>{`Stops syncing with ${peer.name}. Previously replicated data remains on both machines, including shared MCP logins. After removal, use `}<Link className="text-(--accent) underline" to="/settings/$pane" params={{ pane: "connections" }}>Connections</Link>{" to sign out of OAuth logins. Rotate other credentials at their providers."}</>}
+            description={<>{`Stops syncing with ${peer.name}. Previously replicated data remains on both machines, including shared MCP logins. After removal, use `}<Link className="text-(--accent) underline" to="/settings/$pane" params={{ pane: "connections" }}>Vault</Link>{" to sign out of OAuth logins. Rotate other credentials at their providers."}</>}
             destructiveLabel="Remove"
             onConfirm={() => {
               setRemoving(false)

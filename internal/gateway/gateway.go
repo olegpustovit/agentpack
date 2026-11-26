@@ -94,6 +94,7 @@ type Gateway struct {
 	omp               ompSettings
 	found             folderDiscovery
 	credentialsMu     sync.Mutex // one agent credential sync at a time
+	refreshFailed     sync.Map   // signInRevision → time.Time of the first failed renewal
 
 	syncSince   atomic.Int64     // wall time (Unix ns) of the start or last wake; renewals wait for a pull after it
 	lastLook    atomic.Int64     // wall time of the last wake check
