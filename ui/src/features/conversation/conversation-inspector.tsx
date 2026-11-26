@@ -14,7 +14,7 @@ import { hud } from "@/lib/hud"
 import { SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
 import { cn } from "@/lib/utils"
 import type { ThreadState } from "./model"
-import type { GoalAction } from "./goal-sheet"
+import { resumeGate, type GoalAction } from "./goal-sheet"
 import { subagentRunning, subagentStats } from "./subagent-card"
 import { groupByPath, listDiffChanges, reviewPrompt, type ReviewComment } from "./diff-summary"
 import { projectDirectory } from "@/features/sessions/git"
@@ -47,6 +47,7 @@ export function ConversationInspector({
   sessionId,
   readOnly,
   goal,
+  signInOpen,
   onGoalEdit,
   onGoalAction,
   compact,
@@ -66,6 +67,8 @@ export function ConversationInspector({
   sessionId?: string
   readOnly?: boolean
   goal?: GoalState
+  /** The agent waits for a sign-in, so a blocked goal cannot resume yet. */
+  signInOpen?: boolean
   onGoalEdit?: () => void
   onGoalAction?: (action: GoalAction) => void
   /** Sends the agent's /compact; absent when the agent doesn't offer it. */
@@ -192,7 +195,7 @@ export function ConversationInspector({
               <Row label="Used">{`${tokens(thread.context_tokens)} of ${tokens(thread.context_limit)}`}</Row>
               {thread.cost_usd !== undefined && thread.cost_usd > 0 && <Row label="Cost so far">{`$${thread.cost_usd.toFixed(2)}`}</Row>}
             </dl>
-            <Button type="button" size="sm" className="mt-(--s3)" disabled={readOnly || !compact} title={compact ? "Summarise the conversation to free context" : compactReason} onClick={compact}>
+            <Button type="button" size="sm" className="mt-(--s3)" disabled={readOnly || !compact} title={compact ? "Summarise the conversation to free context" : compactReason} onClick={() => compact?.()}>
               Compact
             </Button>
           </Section>
@@ -215,7 +218,7 @@ export function ConversationInspector({
                 {goal.state === "active" ? (
                   <Button type="button" size="sm" onClick={() => onGoalAction?.("pause")}>Pause</Button>
                 ) : goal.state !== "met" && (
-                  <Button type="button" size="sm" onClick={() => onGoalAction?.("resume")}>Resume</Button>
+                  <Button type="button" size="sm" {...resumeGate(goal, signInOpen)} onClick={() => onGoalAction?.("resume")}>Resume</Button>
                 )}
                 <Button type="button" size="sm" onClick={onGoalEdit}>Edit</Button>
                 <Button type="button" size="sm" onClick={() => onGoalAction?.("clear")}>Clear</Button>

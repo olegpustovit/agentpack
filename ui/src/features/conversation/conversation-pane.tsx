@@ -60,13 +60,16 @@ function RequestDock({ items, machine, sessionId, agent }: { items: ThreadItem[]
   const [selected, setSelected] = useState(first)
   const [answered, setAnswered] = useState<number[]>([])
   const selectedItem = selected === undefined ? undefined : items.find((item) => item.seq === selected)
-  const resolvedElsewhere = selected !== undefined && selectedItem &&
+  // A message sent after it dismissed the request (Send now does that): nothing is left to report.
+  const dismissed = selected !== undefined && (selectedItem?.data as { inactive?: boolean } | undefined)?.inactive === true &&
+    items.some((item) => item.kind === "user_message_chunk" && (item.seq ?? 0) > selected)
+  const resolvedElsewhere = selected !== undefined && selectedItem && !dismissed &&
     (selectedItem.kind === "permission" || selectedItem.kind === "elicitation") &&
     !isOpenRequest(selectedItem) && !answered.includes(selected)
   const active = pending.findIndex((item) => item.seq === selected)
   const index = active < 0 ? 0 : active
   // The initial log can contain only history. Select an item when a new request reaches this view.
-  if ((selected === undefined || !selectedItem || answered.includes(selected)) && selected !== first && active < 0) {
+  if ((selected === undefined || !selectedItem || dismissed || answered.includes(selected)) && selected !== first && active < 0) {
     setSelected(first)
   }
   if (!pending.length && !resolvedElsewhere) return null
@@ -237,6 +240,7 @@ export default function ConversationPane({
   const [goalEditorLoaded, setGoalEditorLoaded] = useState(false)
   if (goalSheet && !goalEditorLoaded) setGoalEditorLoaded(true)
   const goalActions = useGoalActions(machine, sessionId)
+  const signInOpen = !!signInNotice(parent.items)
 
   const fork = useStartSession()
   const forkChat = () => {
@@ -304,9 +308,9 @@ export default function ConversationPane({
   }
   const { git, canLoad: canLoadGit, details: gitDetails } = useSessionGit(machine, sessionId, info)
   const branch = branchLine(git)
-  function compact(focus?: string) {
+  function compact() {
     if (!canCompact || readOnly) return
-    submitPrompt({ text: focus ? `/compact ${focus}` : "/compact", attachments: [], clearComposer: false })
+    submitPrompt({ text: "/compact", attachments: [], clearComposer: false })
   }
   const commands = agentCommands(entries) ?? snapshot?.commands?.availableCommands ?? []
   const canCompact = advertises(commands, "compact")
@@ -536,7 +540,7 @@ export default function ConversationPane({
         <Composer
           composer={composer} machine={machine} machineName={machineName} sessionId={sessionId} info={info} parent={parent} history={history}
           chatConfig={chatConfig} commands={commands} contextPercent={contextPercent} compact={canCompact ? compact : undefined}
-          starting={starting} resumable={resumable} awaitingSignIn={resumable && !!signInNotice(parent.items)} needsUpdate={needsUpdate} stopping={cancelTurn.isPending} onStop={() => cancelTurn.mutate()}
+          starting={starting} resumable={resumable} awaitingSignIn={resumable && signInOpen} needsUpdate={needsUpdate} stopping={cancelTurn.isPending} onStop={() => cancelTurn.mutate()}
           onFork={canFork && !fork.isPending ? forkChat : undefined} onSwitchTerminal={onSwitchTerminal} onGoalCommand={goalCommand}
           threadScrollRef={threadScrollRef} stickToBottomRef={stickToBottomRef}
         >
@@ -544,6 +548,7 @@ export default function ConversationPane({
             goal={goal}
             plan={plan}
             readOnly={readOnly || needsUpdate}
+            signInOpen={signInOpen}
             onEdit={() => setGoalSheet({ objective: goal?.objective ?? "" })}
             onAction={(action) => goalActions.act.mutate(action)}
           />
@@ -577,6 +582,7 @@ export default function ConversationPane({
           sessionId={sessionId}
           readOnly={readOnly || needsUpdate}
           goal={goal}
+          signInOpen={signInOpen}
           onGoalEdit={() => setGoalSheet({ objective: goal?.objective ?? "" })}
           onGoalAction={(action) => goalActions.act.mutate(action)}
           compact={canCompact ? compact : undefined}
