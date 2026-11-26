@@ -100,7 +100,7 @@ test("the phone terminal fits the same host grid and opens the keyboard explicit
 test("Continue last session reopens the terminal Sessions left, with its grouping", async ({ page }) => {
   await stubWorker(page)
   await openRoute(page, "/sessions/local/s1?group=machine")
-  await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Usage", exact: true }).click()
+  await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "System", exact: true }).click()
   await expect(page).toHaveURL(/\/usage/)
   // The URL changes before the Usage route commits; until the terminal has left, there is nothing to reopen.
   await expect(page.locator(".xterm")).toHaveCount(0)

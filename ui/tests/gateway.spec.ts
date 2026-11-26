@@ -7,8 +7,7 @@ const gwMore = (page: Page, key: string) => gwRow(page, key).locator("xpath=..")
 // The terminal stage is the only element with aria-busy on the session route.
 const gwStage = (page: Page) => page.locator("div[aria-busy]")
 const gwSessions = (page: Page) => page.getByRole("navigation", { name: "Sessions" })
-// The toolbar gear comes before the phone tab bar's Settings link in the DOM.
-const gwSettingsLink = (page: Page) => page.getByRole("link", { name: "Settings", exact: true }).first()
+const gwSystemLink = (page: Page) => page.getByRole("link", { name: "System", exact: true })
 const gwDesktopViewport = { width: 1280, height: 800 }
 // Reconnects add a query string (?since=), so the socket route must match it too.
 const gwTerminalSocket = "**/api/sessions/*/terminal*"
@@ -491,14 +490,14 @@ test("gateway settings stay separate from selected remote sessions", async ({ pa
   })
   await page.goto("/")
   await gwRow(page, "local:local-one").click()
-  await gwSettingsLink(page).click()
-  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Sharing" }).click()
+  await gwSystemLink(page).click()
+  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: "Sharing" }).click()
   await expect(page.getByText("tag:server", { exact: true })).toBeVisible()
   await page.getByRole("switch", { name: "Tailscale sharing" }).click()
   await expect(page.getByRole("switch", { name: "Tailscale sharing" })).not.toBeChecked()
   expect(settingsQueries.every((value) => !value.includes("node="))).toBeTruthy()
 
-  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "General" }).click()
+  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: "General" }).click()
   await page.getByRole("button", { name: "Stop agents…", exact: true }).click()
   await page.getByRole("alertdialog").getByRole("button", { name: "Stop all agents", exact: true }).click()
   await expect(page.getByText("Agents on the gateway machine have been stopped.")).toBeVisible()
@@ -605,8 +604,8 @@ test("Sessions starts active and appearance settings persist across views and re
   await gwRow(page, "local:local-one").click()
   await expect(page.getByRole("link", { name: "Sessions", exact: true })).toHaveAttribute("aria-current", "page")
 
-  await gwSettingsLink(page).click()
-  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Appearance" }).click()
+  await gwSystemLink(page).click()
+  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: "Appearance" }).click()
   for (const theme of ["Dark", "Light"] as const) {
     await page.getByRole("group", { name: "Theme" }).getByRole("button", { name: theme, exact: true }).click()
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme.toLowerCase())
@@ -622,8 +621,8 @@ test("Sessions starts active and appearance settings persist across views and re
   await page.reload()
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light")
 
-  await gwSettingsLink(page).click()
-  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("link", { name: "Appearance" }).click()
+  await gwSystemLink(page).click()
+  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: "Appearance" }).click()
   await page.getByRole("group", { name: "Theme" }).getByRole("button", { name: "System", exact: true }).click()
   await expect(page.locator("html")).not.toHaveAttribute("data-theme", /./)
 })

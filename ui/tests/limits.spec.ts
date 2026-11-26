@@ -92,8 +92,8 @@ test("returning to Limits within a minute makes no request and shows no loader",
   // Views on desktop, the tab bar on phone: the link is the only visible one with this name.
   await page.getByRole("link", { name: "Sessions", exact: true }).click()
   await expect(page).toHaveURL(/\/sessions/)
-  await page.getByRole("link", { name: "Usage", exact: true }).click()
-  await page.getByRole("navigation", { name: "Usage" }).getByRole("link", { name: /^Limits/ }).click()
+  await page.getByRole("link", { name: "System", exact: true }).click()
+  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /^Limits/ }).click()
 
   await expect(grid(page).getByText("72% left")).toBeVisible()
   await expect(page.locator('[data-slot="skeleton"]')).toHaveCount(0)

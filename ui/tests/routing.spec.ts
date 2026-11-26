@@ -13,9 +13,8 @@ async function openFleet(page: Page) {
   await page.route("**/api/library/drafts", (route) => route.fulfill({ json: [] }))
 }
 
-// Desktop shows the Views bar in the top toolbar; under 760 px the Tabs bar takes over. The Settings icon sits in the toolbar at every width.
-function viewLink(page: Page, label: "Sessions" | "Library" | "Machines" | "Usage" | "Settings") {
-  if (label === "Settings") return page.getByRole("link", { name: "Settings", exact: true }).first()
+// Desktop shows the Views bar in the top toolbar; under 760 px the Tabs bar takes over.
+function viewLink(page: Page, label: "Sessions" | "Library" | "System") {
   return page
     .getByRole("navigation", { name: "Views" })
     .or(page.getByRole("navigation", { name: "Tabs" }))
@@ -34,15 +33,17 @@ const libraryNav = (page: Page) => page.getByRole("navigation", { name: "Library
 const limitsGrid = (page: Page) => page.getByRole("region", { name: "Provider limits" })
 const usageEmpty = (page: Page) => page.getByText("No usage in this range", { exact: true })
 const topologyHeading = (page: Page) => page.getByRole("heading", { level: 1, name: "Topology" })
-const machineList = (page: Page) => page.getByRole("link", { name: "Topology", exact: true })
-const settingsNav = (page: Page) => page.getByRole("navigation", { name: "Settings sections" })
+const systemNav = (page: Page) => page.getByRole("navigation", { name: "System" })
 
-// `settles` is the URL the route ends on when it redirects (/machines, /settings).
+// `settles` is the URL the route ends on when it redirects.
 const deepLinks: { path: string; settles?: string; rendered: (page: Page) => Locator }[] = [
   { path: "/sessions/local/local-alpha-claude", rendered: (page) => page.getByRole("button", { name: "Larger" }) },
   { path: "/library/package/github.com/acme/tools", rendered: (page) => page.getByText("Package not found") },
   { path: "/machines/topology", rendered: topologyHeading },
   { path: "/settings/sharing", rendered: (page) => page.getByRole("switch", { name: "Tailscale sharing" }) },
+  { path: "/system", settles: "/usage", rendered: usageEmpty },
+  { path: "/machines", settles: "/machines/topology", rendered: topologyHeading },
+  { path: "/settings", settles: "/settings/general", rendered: systemNav },
 ]
 
 for (const { path, settles = path, rendered } of deepLinks) {
@@ -62,35 +63,40 @@ for (const { path, settles = path, rendered } of deepLinks) {
   })
 }
 
-test("on phones Back from a machine returns to the machine list", async ({ page }) => {
+test("on phones the old index routes and Back from a machine open the System list", async ({ page }) => {
   const errors = trackPageErrors(page)
   await page.setViewportSize({ width: 390, height: 844 })
   await openFleet(page)
+  for (const path of ["/machines", "/settings", "/system"]) {
+    await page.goto(path)
+    await expect(page).toHaveURL("/system")
+    await expect(systemNav(page)).toBeVisible()
+  }
   await page.goto("/machines/local")
-  await page.getByRole("link", { name: "Back to Machines", exact: true }).click()
-  await expect(page).toHaveURL(/\/machines$/)
-  await expect(machineList(page)).toBeVisible()
+  await page.getByRole("link", { name: "Back to System", exact: true }).click()
+  await expect(page).toHaveURL("/system")
+  await expect(systemNav(page)).toBeVisible()
   await expectNoCrash(page, errors)
 })
 
-test("back and forward step through the views, with each view's URL", async ({ page, isMobile }) => {
+test("back and forward step through the views, with each view's URL", async ({ page }) => {
   const errors = trackPageErrors(page)
   await openFleet(page)
   await page.goto("/sessions")
   await expect(sessionsNav(page)).toBeVisible()
 
-  // Usage and Machines come before Settings; Machines opens its list, so the tab bar stays on screen on phones.
+  // The System tab, then its own sidebar: usage, machines and settings keep their URLs.
+  const sidebar = (name: string) => systemNav(page).getByRole("link", { name, exact: true })
   const trail = [
-    { label: "Sessions", url: "/sessions", rendered: sessionsNav },
-    { label: "Library", url: "/library", rendered: libraryNav },
-    { label: "Usage", url: "/usage", rendered: usageEmpty },
-    { label: "Machines", url: "/machines/topology", rendered: topologyHeading },
-    // Phones land on the section list; desktop opens General beside it.
-    { label: "Settings", url: isMobile ? "/settings" : "/settings/general", rendered: settingsNav },
-  ] as const
+    { open: () => viewLink(page, "Sessions"), url: "/sessions", rendered: sessionsNav },
+    { open: () => viewLink(page, "Library"), url: "/library", rendered: libraryNav },
+    { open: () => viewLink(page, "System"), url: "/usage", rendered: usageEmpty },
+    { open: () => sidebar("Topology"), url: "/machines/topology", rendered: topologyHeading },
+    { open: () => sidebar("General"), url: "/settings/general", rendered: systemNav },
+  ]
 
   for (const view of trail.slice(1)) {
-    await viewLink(page, view.label).click()
+    await view.open().click()
     await expect(page).toHaveURL(view.url)
     await expect(view.rendered(page)).toBeVisible()
   }

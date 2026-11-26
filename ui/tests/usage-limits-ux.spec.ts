@@ -105,7 +105,7 @@ async function setupUsage(page: Page, override?: { usage?: object; usageStatus?:
   })
 }
 
-test("USE-01 at 320 px keeps Range, Metric, and Scope reachable without horizontal scroll", async ({ page }) => {
+test("USE-01 at 320 px keeps Range, Metric, and Filters reachable without horizontal scroll", async ({ page }) => {
   await setupUsage(page)
   await page.setViewportSize({ width: 320, height: 640 })
   await page.goto("/usage")
@@ -117,6 +117,7 @@ test("USE-01 at 320 px keeps Range, Metric, and Scope reachable without horizont
   await page.getByRole("option", { name: "Reported cost" }).click()
   await expect(page.getByText("Reported cost · This Week")).toBeVisible()
   await expect(page.getByRole("button", { name: "Reset" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Filters", exact: true })).toBeInViewport()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })
 

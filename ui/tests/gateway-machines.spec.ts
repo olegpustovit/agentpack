@@ -90,8 +90,8 @@ test("recent folders retain unavailable reasons and only available paths can sta
 test("limits view shows each harness with partial failures and no raw CLI output", async ({ page }) => {
   await mockAPI(page)
   await page.goto("/")
-  await page.getByRole("link", { name: "Usage", exact: true }).click()
-  await page.getByRole("navigation", { name: "Usage" }).getByRole("link", { name: /^Limits/ }).click()
+  await page.getByRole("link", { name: "System", exact: true }).click()
+  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /^Limits/ }).click()
 
   const grid = page.getByRole("region", { name: "Provider limits" })
   await expect(grid).toBeVisible()
@@ -110,10 +110,9 @@ test("limits shortcut opens the view and a passed reset is labelled refreshing",
     }),
   )
   await page.goto("/")
-  // The shell binds ⌘4 through metaKey only, so Meta is the key on every platform.
-  await expect(page.getByRole("link", { name: "Usage", exact: true })).toBeVisible()
-  await page.keyboard.press("Meta+4")
-  await page.getByRole("navigation", { name: "Usage" }).getByRole("link", { name: /^Limits/ }).click()
+  await expect(page.getByRole("link", { name: "System", exact: true })).toBeVisible()
+  await page.keyboard.press("Meta+3")
+  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /^Limits/ }).click()
 
   const grid = page.getByRole("region", { name: "Provider limits" })
   await expect(grid).toBeVisible()
@@ -177,8 +176,8 @@ test("limits automatically prefers capable nodes and refreshes every source", as
   })
 
   await page.goto("/")
-  await page.getByRole("link", { name: "Usage", exact: true }).click()
-  await page.getByRole("navigation", { name: "Usage" }).getByRole("link", { name: /^Limits/ }).click()
+  await page.getByRole("link", { name: "System", exact: true }).click()
+  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /^Limits/ }).click()
 
   const grid = page.getByRole("region", { name: "Provider limits" })
   const codex = grid.locator('[data-provider="codex"]')
@@ -231,8 +230,8 @@ test("limits labels replicated reports after machine discovery", async ({ page }
   })
 
   await page.goto("/")
-  await page.getByRole("link", { name: "Usage", exact: true }).click()
-  await page.getByRole("navigation", { name: "Usage" }).getByRole("link", { name: /^Limits/ }).click()
+  await page.getByRole("link", { name: "System", exact: true }).click()
+  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /^Limits/ }).click()
   await expect(page.getByText("No provider limits yet")).toBeVisible()
   releaseNodes()
   await expect(page.getByRole("meter", { name: "Weekly remaining" })).toHaveAttribute("value", "63")
@@ -259,12 +258,12 @@ test("startup and machine discovery announce pending work", async ({ page }) => 
   releaseStatus()
   await expect(page.getByText("Discovering machines…")).toBeVisible()
 
-  await page.getByRole("link", { name: "Machines", exact: true }).click()
+  await page.getByRole("link", { name: "System", exact: true }).click()
   await expect(page.getByText("Discovering connected machines")).toBeVisible()
-  await expect(page.locator('[aria-label="Machines"]')).toHaveAttribute("aria-busy", "true")
+  await expect(page.getByRole("navigation", { name: "System" })).toHaveAttribute("aria-busy", "true")
   releaseNodes()
   await expect(page.getByText("Discovering connected machines")).toBeHidden()
-  await expect(page.locator('[aria-label="Machines"]')).toHaveAttribute("aria-busy", "false")
+  await expect(page.getByRole("navigation", { name: "System" })).toHaveAttribute("aria-busy", "false")
 })
 
 test("settings errors finish loading and offer a working retry", async ({ page }) => {
@@ -279,7 +278,8 @@ test("settings errors finish loading and offer a working retry", async ({ page }
   })
 
   await page.goto("/")
-  await page.getByRole("link", { name: "Settings", exact: true }).first().click()
+  await page.getByRole("link", { name: "System", exact: true }).click()
+  await page.getByRole("link", { name: "General", exact: true }).click()
   const skeleton = page.locator('[data-slot="skeleton"]')
   await expect(skeleton.first()).toBeVisible()
 
@@ -315,8 +315,8 @@ test("Cursor CLI is included with separate usage buckets", async ({ page }) => {
     }),
   )
   await page.goto("/")
-  await page.getByRole("link", { name: "Usage", exact: true }).click()
-  await page.getByRole("navigation", { name: "Usage" }).getByRole("link", { name: /^Limits/ }).click()
+  await page.getByRole("link", { name: "System", exact: true }).click()
+  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /^Limits/ }).click()
 
   await expect(page.getByRole("heading", { name: "Cursor CLI", exact: true })).toBeVisible()
   await expect(page.getByRole("meter", { name: "Auto models remaining" })).toHaveAttribute("value", "60")
