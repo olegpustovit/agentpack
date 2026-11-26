@@ -514,7 +514,7 @@ test("Vault lists agent sign-ins, opens the sign-in sheet and tolerates an older
 
 const secret = (id: string, label: string, name: string, plugins: string[] = []) => ({ id, match: "", kind: "env", label, status: "connected", names: [name], plugins })
 
-test("adding a shared secret refuses unsafe names and shows a refused grant under the variables", async ({ page }) => {
+test("adding a shared secret refuses reserved names and shows a refused grant under the variables", async ({ page }) => {
   await mockGateway(page)
   let refuse = true
   await page.route("**/api/mcp/credentials", (route) => answer(route, route.request().method() === "GET"
@@ -534,10 +534,10 @@ test("adding a shared secret refuses unsafe names and shows a refused grant unde
   await sheet.getByLabel("Name", { exact: true }).fill("cloudflare")
   await sheet.getByLabel("Variable 1").fill("LD_PRELOAD")
   await sheet.getByLabel("Value 1").fill("x")
-  await agents.click()
   await sheet.getByRole("button", { name: "Save" }).click()
-  await expect(sheet.getByRole("alert")).toHaveText([/A secret named cloudflare exists/, /LD_PRELOAD can’t be given to agents/])
+  await expect(sheet.getByRole("alert")).toHaveText([/A secret named cloudflare exists/, /LD_PRELOAD is reserved/])
   expect(calls).toEqual([])
+  await agents.click()
 
   await sheet.getByLabel("Name", { exact: true }).fill("node")
   await sheet.getByLabel("Variable 1").fill("NODE_OPTIONS")

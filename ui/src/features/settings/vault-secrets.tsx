@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { api, errorText } from "@/lib/api"
 import type { Connection } from "./connections-model"
-import { AGENTS_MODULE, changesAgent, refusedForAgents } from "./vault-model"
+import { AGENTS_MODULE, changesAgent, reservedName } from "./vault-model"
 
 // Shared secrets are the mesh's env credentials; the pane passes one row per secret.
 export function SecretsGroup({ secrets, children }: { secrets: Connection[]; children: ReactNode }) {
@@ -45,7 +45,7 @@ export function SecretSheet({ secret, taken = [], onDone }: { secret?: Connectio
   // Saving under an existing name replaces that secret, so adding must not reuse one.
   const duplicate = !secret && label.trim() !== saved && taken.includes(label.trim())
   const repeated = new Set(names).size !== names.length
-  const refused = agents ? names.filter(refusedForAgents) : []
+  const reserved = names.filter(reservedName)
   const warned = agents ? names.filter(changesAgent) : []
   const save = useMutation<void, Error, void>({
     mutationFn: async () => {
@@ -64,7 +64,7 @@ export function SecretSheet({ secret, taken = [], onDone }: { secret?: Connectio
   function submit(event: FormEvent) {
     event.preventDefault()
     setTried(true)
-    if (!duplicate && !repeated && !refused.length) save.mutate()
+    if (!duplicate && !repeated && !reserved.length) save.mutate()
   }
   return (
     <SheetContent>
@@ -97,7 +97,7 @@ export function SecretSheet({ secret, taken = [], onDone }: { secret?: Connectio
             </div>
           ))}
           {tried && repeated && <FieldError>Give each variable its own name.</FieldError>}
-          {tried && refused.length > 0 && <FieldError>{`${refused.join(", ")} can’t be given to agents. Rename it or turn the switch off.`}</FieldError>}
+          {tried && reserved.length > 0 && <FieldError>{`${reserved.join(", ")} ${reserved.length > 1 ? "are" : "is"} reserved. Choose another name.`}</FieldError>}
           {save.error && <FieldError>{errorText(save.error)}</FieldError>}
           <div><Button type="button" size="sm" onClick={() => setPairs((list) => [...list, { id: (list.at(-1)?.id ?? 0) + 1, name: "", value: "" }])}><Plus aria-hidden className="size-3.5" />Add variable</Button></div>
         </fieldset>
