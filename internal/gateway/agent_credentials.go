@@ -6,11 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/network"
 	"github.com/olegpustovit/agentpack/internal/obs"
@@ -169,9 +169,10 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 		ctx := context.WithoutCancel(ctx)
 		renewed, err := agent.Login.Refresh(ctx, local)
 		// shortcut: only the renewing gateway reports it; elsewhere expires_at shows the expiry
-		// A network error says nothing about the sign-in, so only the provider's refusal marks it expired.
-		var transport net.Error
-		if err != nil && !errors.As(err, &transport) {
+		// Only the provider's refusal marks the sign-in expired: after a network error or an outage
+		// the token may still work.
+		var refused harness.RefreshRefused
+		if errors.As(err, &refused) {
 			g.refreshFailed.LoadOrStore(signInRevision{key, shared.Rev}, time.Now())
 		} else if err == nil {
 			g.refreshFailed.Delete(signInRevision{key, shared.Rev})

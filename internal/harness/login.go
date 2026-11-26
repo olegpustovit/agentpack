@@ -96,11 +96,20 @@ func RefreshToken(ctx context.Context, endpoint string, grant map[string]string,
 		return err
 	}
 	defer response.Body.Close()
+	if response.StatusCode/100 == 4 {
+		return RefreshRefused{response.Status}
+	}
 	if response.StatusCode/100 != 2 {
 		return fmt.Errorf("token refresh answered %s", response.Status)
 	}
 	return json.NewDecoder(response.Body).Decode(reply)
 }
+
+// RefreshRefused is a token endpoint's 4xx answer: the provider turned the sign-in down, unlike a
+// network error or an outage, after which the token may still work.
+type RefreshRefused struct{ Status string }
+
+func (e RefreshRefused) Error() string { return "token refresh answered " + e.Status }
 
 // LoginSpec is how the gateway reads and signs in one agent on this machine.
 type LoginSpec struct {

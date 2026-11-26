@@ -75,7 +75,7 @@ const shortcuts: [string, string][] = [
   ["Toggle terminal", `${mod}J / Ctrl+\``],
   ["New shell", "Ctrl+Shift+`"],
   ["Next session that needs you", isMac ? "⌘⇧J" : "Ctrl+Shift+J"],
-  ["Sessions, Library, System", isMac ? "⌥⌘1–3 (or ⌘1–3 where the browser allows)" : "Ctrl+1–3"],
+  ["Sessions, Library, System", isMac ? "G then 1–3, ⌥⌘1–3, or ⌘1–3 where the browser allows" : "G then 1–3, or Ctrl+1–3"],
   ["Toggle the sidebar", isMac ? "⌥⌘\\ or ⌘\\" : "Ctrl+\\"],
   ["Filter the list", `${mod}F`],
   ["Rename a session", "F2"],

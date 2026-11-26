@@ -94,7 +94,7 @@ func TestSharedAgentsReportsMetadataOnly(t *testing.T) {
 	saved := network.Agents
 	t.Cleanup(func() { network.Agents = saved })
 	expiry := time.Now().Add(6 * time.Hour).UTC().Truncate(time.Second)
-	failing := errors.New("invalid_grant")
+	var failing error = harness.RefreshRefused{Status: "400 Bad Request"}
 	file := func(name string) func() string {
 		return func() string { return filepath.Join(home, name, "auth.json") }
 	}
@@ -180,6 +180,14 @@ func TestSharedAgentsReportsMetadataOnly(t *testing.T) {
 	}
 	if _, _, rows := call("owner"); rows["claude"].State != "shared" {
 		t.Fatalf("a network error marked the sign-in expired: %+v", rows["claude"])
+	}
+	// So does an outage at the provider.
+	failing = errors.New("token refresh answered 503 Service Unavailable")
+	if _, err := g.syncAgentCredential(ctx, claude, claude.Login.Credential(), node, false); !errors.Is(err, failing) {
+		t.Fatal("renewal during an outage", err)
+	}
+	if _, _, rows := call("owner"); rows["claude"].State != "shared" {
+		t.Fatalf("an outage marked the sign-in expired: %+v", rows["claude"])
 	}
 	failing = refused
 	if _, err := g.syncAgentCredential(ctx, claude, claude.Login.Credential(), node, false); !errors.Is(err, failing) {

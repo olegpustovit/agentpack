@@ -93,7 +93,18 @@ function useShellShortcuts() {
   const navigate = useNavigate()
   const { toggle } = useSidebar()
   useEffect(() => {
+    // G then 1–3, outside text fields: plain keys, which no browser, OS or password manager takes.
+    let goAt = -Infinity
     const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.metaKey && !event.ctrlKey && !event.altKey) {
+        if (event.repeat || (event.target as Element | null)?.closest?.("input, textarea, select, [contenteditable='true'], .xterm")) return
+        const view = event.timeStamp - goAt < 1500 ? views[Number(/^(?:Digit|Numpad)([1-9])$/.exec(event.code)?.[1]) - 1] : undefined
+        goAt = event.code === "KeyG" && !event.shiftKey ? event.timeStamp : -Infinity
+        if (!view) return
+        event.preventDefault()
+        void navigate({ to: view.to })
+        return
+      }
       if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.repeat) return
       // ⌥⌘ as well: Safari keeps ⌘1–9, macOS ⌃1–9 (Desktops) and 1Password ⌘\ for themselves. Ctrl+Alt off Mac is AltGr.
       if (event.altKey && !event.metaKey) return
