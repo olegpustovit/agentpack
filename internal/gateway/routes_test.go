@@ -85,10 +85,10 @@ func TestRoutePoliciesArePinned(t *testing.T) {
 		"DELETE /api/agents/{harness}/login/{id}", "POST /api/agents/{harness}/logout", "GET /api/agents/shared",
 		"PUT /api/agents/defaults", "PUT /api/omp/settings/{key}", "DELETE /api/omp/settings/{key}", "POST /api/worktrees/remove", "POST /api/worktrees/push",
 	}
-	cliRoutes := []string{"GET /api/debug/pprof/{name...}", "POST /api/local/sessions/{id}/presence", "DELETE /api/local/sessions/{id}/presence"}
+	cliRoutes := []string{"GET /api/debug/pprof/{name...}", "POST /api/local/sessions/{id}/presence", "DELETE /api/local/sessions/{id}/presence", "GET /api/sessions/{id}/agent-env"}
 	// A peer may call these with its verified identity alone; every other peer route needs a forwarded account.
 	identityOnly := []string{"POST /api/library/latest", "POST /api/library/draft-state", "POST /api/logs/ingest", "POST /api/mcp/credentials/{id}/refresh", "POST /api/sync/main/release"}
-	noETag := []string{"GET /api/events", "GET /api/sync/events", "GET /api/status", "GET /api/config", "GET /api/sessions/{id}/terminal", "GET /api/sessions/{id}/output"}
+	noETag := []string{"GET /api/events", "GET /api/sync/events", "GET /api/status", "GET /api/config", "GET /api/sessions/{id}/terminal", "GET /api/sessions/{id}/output", "GET /api/sessions/{id}/agent-env"}
 	for _, row := range routeTable {
 		want := account
 		switch {
@@ -116,7 +116,8 @@ func TestRoutePoliciesArePinned(t *testing.T) {
 		}
 		// routeMeshRequest used to resolve every /api/sessions/<id>/... route and every non-GET /api/sessions/<id>.
 		_, path, _ := strings.Cut(row.pattern, " ")
-		wantSession := strings.HasPrefix(path, "/api/sessions/{id}") && row.pattern != "GET /api/sessions/{id}"
+		// agent-env answers this machine's worker with secrets, so it is never routed to another node.
+		wantSession := strings.HasPrefix(path, "/api/sessions/{id}") && row.pattern != "GET /api/sessions/{id}" && row.pattern != "GET /api/sessions/{id}/agent-env"
 		if row.session != wantSession {
 			t.Errorf("%s: session %t, want %t", row.pattern, row.session, wantSession)
 		}

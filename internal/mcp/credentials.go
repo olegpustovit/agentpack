@@ -22,6 +22,9 @@ const (
 	CredentialEnv    = "env"
 )
 
+// AgentsModule is the approval that gives an env credential's variables to the owning account's agents.
+const AgentsModule = "agentpack:agents"
+
 // CredentialRef is one stored credential as staging sees it: never a secret value.
 // The gateway writes them to the credential index for the account bound to this machine.
 type CredentialRef struct {

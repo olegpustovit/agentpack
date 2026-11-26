@@ -59,6 +59,11 @@ func (actor Actor) CanStartNewFolder() bool {
 	return actor.Kind == "browser" || actor.Kind == "peer" && actor.Account && actor.ForwardedBrowser
 }
 
+// HasAccount reports whether User names a gateway account rather than an OS or tailnet user.
+func (actor Actor) HasAccount() bool {
+	return actor.Account || actor.Kind == "browser" || actor.Kind == "mcp"
+}
+
 // CanWriteSession separates peer ownership from same-host local transports.
 func (actor Actor) CanWriteSession(session SessionInfo) bool {
 	owner := session.StartedBy
@@ -69,8 +74,7 @@ func (actor Actor) CanWriteSession(session SessionInfo) bool {
 		return actor.NativeUser != "" && actor.NativeUser == owner.User && actor.Node == owner.Node
 	}
 	if actor.Account || owner.Account {
-		account := func(a Actor) bool { return a.Account || a.Kind == "browser" || a.Kind == "mcp" }
-		return account(actor) && account(*owner) && actor.User != "" && actor.User == owner.User
+		return actor.HasAccount() && owner.HasAccount() && actor.User != "" && actor.User == owner.User
 	}
 	if owner.Kind == "peer" || actor.Kind == "peer" {
 		return owner.Kind == "peer" && actor.Kind == "peer" &&

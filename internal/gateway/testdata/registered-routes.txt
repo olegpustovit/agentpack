@@ -55,6 +55,7 @@ GET /api/push/key
 GET /api/recent
 GET /api/sessions
 GET /api/sessions/{id}
+GET /api/sessions/{id}/agent-env
 GET /api/sessions/{id}/blobs/{sha}
 GET /api/sessions/{id}/blobs/{sha}/held
 GET /api/sessions/{id}/conversation

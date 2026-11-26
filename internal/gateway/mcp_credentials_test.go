@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -547,5 +549,298 @@ func TestMCPCredentialRefreshSurvivesCancel(t *testing.T) {
 	current, err := g.loadMCPCredential(t.Context(), id)
 	if err != nil || current.State.Generation != 2 || current.State.Token.RefreshToken != "rt-1" {
 		t.Fatalf("rotated token lost: generation %d, %v", current.State.Generation, err)
+	}
+}
+
+// setEnvCredential saves an env credential directly, as a replicated row would arrive, and gives it to agents.
+func setEnvCredential(t *testing.T, g *Gateway, account, label string, values map[string]string, toAgents bool) string {
+	t.Helper()
+	id, err := g.saveMCPCredential(t.Context(), mcpCredential{Kind: mcp.CredentialEnv, Label: label, Account: account,
+		State: mcpCredentialState{Generation: 1, Status: mcpStatusConnected, Env: values}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if toAgents {
+		if err := g.store.Credentials().Approve(t.Context(), id, mcp.AgentsModule); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return id
+}
+
+func TestMCPCredentialAgentsApprovalAndReservedNames(t *testing.T) {
+	g, home := startCredentialGateway(t)
+	post := func(path string, input any) error {
+		body, _ := json.Marshal(input)
+		_, err := NodeRequest(t.Context(), home, http.MethodPost, path, bytes.NewReader(body))
+		return err
+	}
+	save := func(label, name string) (string, error) {
+		body, _ := json.Marshal(map[string]any{"kind": "env", "label": label, "values": map[string]string{name: "x"}})
+		data, err := NodeRequest(t.Context(), home, http.MethodPost, "/api/mcp/credentials", bytes.NewReader(body))
+		var created struct {
+			ID string `json:"id"`
+		}
+		if err == nil {
+			err = json.Unmarshal(data, &created)
+		}
+		return created.ID, err
+	}
+	approve := func(id string) error {
+		return post("/api/mcp/credentials/"+id+"/approvals", map[string]string{"module": mcp.AgentsModule})
+	}
+	given, err := save("given", "PATHFINDER_KEY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := approve(given); err != nil {
+		t.Fatal(err)
+	}
+	for i, name := range []string{"PATH", "Path", "HOME", "SHELL", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "AGENTPACK_HOME", "agentpack_trace"} {
+		// A local MCP server may need such a name; only agents never get it.
+		label := fmt.Sprintf("server-%d", i)
+		id, err := save(label, name)
+		if err != nil {
+			t.Fatalf("%s not saved: %v", name, err)
+		}
+		if _, err := save(label, name); err != nil {
+			t.Fatalf("%s not replaced: %v", name, err)
+		}
+		if err := approve(id); err == nil || !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("%s given to agents: %v", name, err)
+		}
+		if _, err := save("given", name); err == nil || !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("%s saved into a credential agents get: %v", name, err)
+		}
+	}
+	var header struct {
+		ID string `json:"id"`
+	}
+	localCall(t, home, http.MethodPost, "/api/mcp/credentials", map[string]any{"kind": "header", "url": "https://x.example/mcp", "values": map[string]string{"Authorization": "Bearer v"}}, &header)
+	if err := approve(header.ID); err == nil {
+		t.Fatal("a header credential was given to agents")
+	}
+	// A row from another machine may hold a name this one refuses.
+	if err := approve(setEnvCredential(t, g, testBrowserEmail, "replicated", map[string]string{"LD_PRELOAD": "x"}, false)); err == nil {
+		t.Fatal("a reserved variable was given to agents")
+	}
+}
+
+// Each way of starting a session records its actor in StartedBy; that actor's account alone decides.
+func TestAgentEnvFollowsTheSessionsAccount(t *testing.T) {
+	g, home := startCredentialGateway(t)
+	const other = "other@example.com"
+	testBrowserSession(t, g.auth, other, "other-cookie")
+	mine := setEnvCredential(t, g, testBrowserEmail, "mine", map[string]string{"VAULT_TOKEN": "s3cret-value", "PATH": "/evil", "ld_preload": "x", "NUL": "a\x00b"}, true)
+	setEnvCredential(t, g, testBrowserEmail, "bridge-only", map[string]string{"BRIDGE_TOKEN": "bridge-value"}, false)
+	// The machine's local binding is another account; it must not matter.
+	if _, err := g.store.DB.Exec("UPDATE local_node SET account_email=? WHERE id=1", other); err != nil {
+		t.Fatal(err)
+	}
+	browser := session.BrowserActor(testBrowserEmail)
+	agent := browser
+	agent.Agent = "claude"
+	sessions := 0
+	read := func(startedBy *session.Actor, transport string) network.AgentSecrets {
+		t.Helper()
+		sessions++
+		id := fmt.Sprintf("session-env-%d", sessions)
+		if err := session.UpsertSession(t.Context(), g.store.DB, session.SessionInfo{ID: id, Harness: "claude", Transport: transport, StartedBy: startedBy}); err != nil {
+			t.Fatal(err)
+		}
+		var secrets network.AgentSecrets
+		localCall(t, home, http.MethodGet, "/api/sessions/"+id+"/agent-env", nil, &secrets)
+		return secrets
+	}
+	for name, actor := range map[string]session.Actor{
+		"browser": browser,
+		"agent":   agent,
+		"mcp":     {Kind: "mcp", User: testBrowserEmail},
+		"peer":    {Kind: "peer", User: testBrowserEmail, Account: true},
+		"local":   {Kind: "local", User: testBrowserEmail, Account: true},
+	} {
+		for _, transport := range []string{"acp", "terminal"} {
+			got := read(&actor, transport)
+			if len(got.Env) != 1 || got.Env["VAULT_TOKEN"] != "s3cret-value" || len(got.Credentials) != 1 || got.Credentials[0] != mine {
+				t.Fatalf("%s %s: %+v", name, transport, got)
+			}
+		}
+	}
+	nothing := func(why string, startedBy *session.Actor, transport string) {
+		t.Helper()
+		if got := read(startedBy, transport); len(got.Env) != 0 || len(got.Credentials) != 0 {
+			t.Fatalf("%s got %+v", why, got)
+		}
+	}
+	second := session.BrowserActor(other)
+	nothing("a second account", &second, "acp")
+	nothing("a shell", &browser, "shell")
+	nothing("an unverified peer user", &session.Actor{Kind: "peer", User: testBrowserEmail}, "acp")
+	nothing("an OS user", &session.Actor{Kind: "cli", User: testBrowserEmail}, "terminal")
+	nothing("no actor", nil, "acp")
+	if _, err := g.store.DB.Exec("UPDATE users SET disabled=1 WHERE email=?", testBrowserEmail); err != nil {
+		t.Fatal(err)
+	}
+	nothing("a disabled account", &browser, "acp")
+}
+
+func TestAgentEnvAndSecretRefuseEveryoneButTheCLI(t *testing.T) {
+	g, home := startCredentialGateway(t)
+	id := setEnvCredential(t, g, testBrowserEmail, "mine", map[string]string{"VAULT_TOKEN": "s3cret-value"}, true)
+	owner := session.BrowserActor(testBrowserEmail)
+	if err := session.UpsertSession(t.Context(), g.store.DB, session.SessionInfo{ID: "session-env", Transport: "acp", StartedBy: &owner}); err != nil {
+		t.Fatal(err)
+	}
+	testBrowserSession(t, g.auth, testBrowserEmail, "cookie")
+	for _, path := range []string{"/api/sessions/session-env/agent-env", "/api/mcp/credentials/" + id + "/secret"} {
+		var secrets any
+		localCall(t, home, http.MethodGet, path, nil, &secrets) // the CLI may
+		request := func(actor session.Actor) *http.Request {
+			r := httptest.NewRequest(http.MethodGet, g.origin.String()+path, nil)
+			return r.WithContext(session.WithActor(r.Context(), actor))
+		}
+		browser := httptest.NewRequest(http.MethodGet, g.origin.String()+path, nil)
+		browser.AddCookie(&http.Cookie{Name: "agentpack_session", Value: "cookie"})
+		peer := request(session.Actor{Kind: "peer", User: testBrowserEmail, Account: true, StableNodeID: "peer"})
+		peer.Header.Set("Authorization", "Bearer "+g.local.Secret)
+		peer = peer.WithContext(withCaller(peer.Context(), callerPeer))
+		refused := map[string]func(http.ResponseWriter){
+			"browser": func(w http.ResponseWriter) { g.Handler().ServeHTTP(w, browser) },
+			"peer":    func(w http.ResponseWriter) { g.Handler().ServeHTTP(w, peer) },
+			"mcp": func(w http.ResponseWriter) {
+				g.ServeAPI(w, request(session.Actor{Kind: "mcp", User: testBrowserEmail}), "")
+			},
+			// A chat started on this machine's CLI route acts as a local actor through its tools.
+			"chat agent": func(w http.ResponseWriter) {
+				g.ServeAPI(w, request(session.Actor{Kind: "local", User: testBrowserEmail, Account: true, Agent: "claude", Chat: "session-env"}), "")
+			},
+		}
+		for caller, serve := range refused {
+			w := httptest.NewRecorder()
+			serve(w)
+			if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "s3cret-value") {
+				t.Fatalf("%s %s: %d %s", caller, path, w.Code, w.Body)
+			}
+		}
+	}
+}
+
+// A real terminal worker: the agent has the value, a shell does not, and agentpack stores it nowhere.
+func TestVaultSecretsReachOnlyTheAgentProcess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses /bin/sh")
+	}
+	g, home := startCredentialGateway(t)
+	credential := setEnvCredential(t, g, testBrowserEmail, "mine", map[string]string{"VAULT_TOKEN": "s3cret-first"}, true)
+	for _, transport := range []string{"", "shell"} {
+		t.Run("transport="+transport, func(t *testing.T) {
+			out := t.TempDir()
+			ctx, cancel := context.WithCancel(t.Context())
+			ready, stopped := make(chan string, 1), make(chan struct{})
+			owner := session.BrowserActor(testBrowserEmail)
+			go func() {
+				defer close(stopped)
+				_, err := network.RunWorker(ctx, home, "test", network.WorkerLaunch{
+					Transport: transport, Program: "/bin/sh",
+					// Each start writes what it saw to a new numbered file.
+					Arguments: []string{"-c", `n=1; while [ -e "$OUT/$n" ]; do n=$((n+1)); done; printf %s "${VAULT_TOKEN-unset}" >"$OUT/tmp" && mv "$OUT/tmp" "$OUT/$n"; exec sleep 30`},
+					Directory: out, Environment: []string{"PATH=" + os.Getenv("PATH"), "OUT=" + out}, Rows: 24, Columns: 80,
+					Session: session.SessionInfo{Harness: "claude", Transport: transport, Directory: out, StartedBy: &owner},
+				}, func(id string) error { ready <- id; return nil })
+				if err != nil && !errors.Is(err, context.Canceled) {
+					t.Error(err)
+				}
+			}()
+			defer func() { cancel(); <-stopped }()
+			var id string
+			select {
+			case id = <-ready:
+			case <-stopped:
+				t.Fatal("worker did not start")
+			}
+			seen := func(name string) string {
+				t.Helper()
+				for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+					if data, err := os.ReadFile(filepath.Join(out, name)); err == nil {
+						return string(data)
+					}
+				}
+				t.Fatal("the process never wrote " + name)
+				return ""
+			}
+			want := "s3cret-first"
+			if transport == "shell" {
+				want = "unset"
+			}
+			if got := seen("1"); got != want {
+				t.Fatalf("first start saw %q, want %q", got, want)
+			}
+			if transport == "shell" {
+				return
+			}
+			// A replaced value applies at the next start.
+			setEnvCredential(t, g, testBrowserEmail, "mine", map[string]string{"VAULT_TOKEN": "s3cret-second"}, true)
+			record, err := network.ReadWorkerRecord(home, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := network.WorkerRequest(ctx, record, http.MethodPost, "/restart", "vault-restart-operation")
+			if err != nil {
+				t.Fatal(err)
+			}
+			response.Body.Close()
+			if got := seen("2"); got != "s3cret-second" {
+				t.Fatalf("restart saw %q", got)
+			}
+			cancel()
+			<-stopped
+			rows, err := g.store.Reader.Query("SELECT * FROM sessions")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			columns, err := rows.Columns()
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for rows.Next() {
+				values := make([]any, len(columns))
+				for i := range values {
+					values[i] = new(sql.RawBytes)
+				}
+				if err := rows.Scan(values...); err != nil {
+					t.Fatal(err)
+				}
+				for i, value := range values {
+					if bytes.Contains(*value.(*sql.RawBytes), []byte("s3cret")) {
+						t.Fatal("a session row holds a value in " + columns[i])
+					}
+				}
+				count++
+			}
+			if count == 0 || rows.Err() != nil {
+				t.Fatal("no session row to check", rows.Err())
+			}
+			// Everything agentpack wrote, apart from the database that stores the credential itself.
+			recorded := false
+			err = filepath.WalkDir(home, func(path string, entry os.DirEntry, err error) error {
+				if err != nil || !entry.Type().IsRegular() || strings.HasPrefix(entry.Name(), "state.db") {
+					return err
+				}
+				data, err := os.ReadFile(path)
+				if bytes.Contains(data, []byte("s3cret")) {
+					t.Error("a value was written to " + path)
+				}
+				recorded = recorded || bytes.Contains(data, []byte(`"vault"`)) && bytes.Contains(data, []byte(credential))
+				return err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !recorded {
+				t.Error("no vault.use event with the connection ID was recorded")
+			}
+		})
 	}
 }
