@@ -1564,3 +1564,19 @@ func TestVaultSecretsInACPAgentEnvironment(t *testing.T) {
 		t.Fatal("a refused answer was used")
 	}
 }
+
+func TestDropSharedEnvRemovesAnAgentsSecrets(t *testing.T) {
+	t.Setenv("STRIPE_API_KEY", "sk")
+	t.Setenv("OTHER", "kept")
+	t.Setenv(sharedEnvMarker, "STRIPE_API_KEY")
+	DropSharedEnv()
+	if _, ok := os.LookupEnv("STRIPE_API_KEY"); ok {
+		t.Fatal("secret survived")
+	}
+	if _, ok := os.LookupEnv(sharedEnvMarker); ok {
+		t.Fatal("marker survived")
+	}
+	if os.Getenv("OTHER") != "kept" {
+		t.Fatal("unrelated variable removed")
+	}
+}

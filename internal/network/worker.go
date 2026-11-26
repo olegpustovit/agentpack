@@ -367,11 +367,32 @@ func agentSecretEnvironment(ctx context.Context, home, id string) []string {
 	event.Set("connections", secrets.Credentials) // IDs only; obs would redact a key named credentials
 	event.Fail(err)
 	event.End()
-	environment := make([]string, 0, len(secrets.Env))
+	environment := make([]string, 0, len(secrets.Env)+1)
+	names := make([]string, 0, len(secrets.Env))
 	for name, value := range secrets.Env {
 		environment = append(environment, name+"="+value)
+		names = append(names, name)
+	}
+	if len(names) > 0 {
+		slices.Sort(names)
+		environment = append(environment, sharedEnvMarker+"="+strings.Join(names, ","))
 	}
 	return environment
+}
+
+// sharedEnvMarker names the variables an agent got from shared secrets. The AGENTPACK_ prefix is
+// reserved, so no secret can set it.
+const sharedEnvMarker = "AGENTPACK_SHARED_ENV"
+
+// DropSharedEnv removes an agent's shared secrets from this process, so a gateway that an agent
+// started never hands them to other accounts' agents and shells.
+func DropSharedEnv() {
+	for name := range strings.SplitSeq(os.Getenv(sharedEnvMarker), ",") {
+		if name != "" {
+			_ = os.Unsetenv(name)
+		}
+	}
+	_ = os.Unsetenv(sharedEnvMarker)
 }
 
 func (worker *workerRuntime) sessionRecord(ctx context.Context) (WorkerRecord, error) {

@@ -343,6 +343,8 @@ func (runner Runner) runSessionSignal(arguments []string) (int, error) {
 }
 
 func (runner Runner) serveGateway(ctx context.Context, home, executable, address string) (int, error) {
+	// An agent may have started this gateway: its shared secrets must not reach other sessions.
+	network.DropSharedEnv()
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	// launchd, systemd and whatever process started it at boot can hand the gateway a minimal PATH,

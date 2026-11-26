@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -171,6 +172,16 @@ func TestSharedAgentsReportsMetadataOnly(t *testing.T) {
 	if err := os.WriteFile(claude.Login.Credential(), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A network error leaves the sign-in shared: the token may still be fine.
+	refused := failing
+	failing = &url.Error{Op: "Post", URL: "https://example.invalid/token", Err: errors.New("no route to host")}
+	if _, err := g.syncAgentCredential(ctx, claude, claude.Login.Credential(), node, false); !errors.Is(err, failing) {
+		t.Fatal("offline renewal", err)
+	}
+	if _, _, rows := call("owner"); rows["claude"].State != "shared" {
+		t.Fatalf("a network error marked the sign-in expired: %+v", rows["claude"])
+	}
+	failing = refused
 	if _, err := g.syncAgentCredential(ctx, claude, claude.Login.Credential(), node, false); !errors.Is(err, failing) {
 		t.Fatal("renewal", err)
 	}

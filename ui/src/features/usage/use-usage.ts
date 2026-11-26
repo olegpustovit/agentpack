@@ -51,7 +51,6 @@ export function useNames() {
     of: (kind: keyof typeof names, id: string) => names[kind](id),
     // The Sessions route names this machine "local".
     machineId,
-    online: (node: string) => machines.find((machine) => machine.id === machineId(node))?.online === true,
   }
 }
 

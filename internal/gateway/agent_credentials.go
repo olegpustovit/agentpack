@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -154,9 +155,9 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 			return false, err
 		}
 		return true, g.recordAgentCredential(ctx, key, shared)
-	case (shared.Node == "" || shared.Node != node && roles.ActsAsMain(node)) && localUsable && same:
-		// Main claims every row it holds; so does any holder of a row published before rows named
-		// their publisher. That is hours before a renewal is due, so the replicated choice settles first.
+	case (shared.Node == "" || agent.Login.Refresh != nil && shared.Node != node && roles.ActsAsMain(node)) && localUsable && same:
+		// Main claims every row it renews, so Vault names the machine that signed in to the others;
+		// any holder claims a row published before rows named their publisher. That is hours before a renewal is due, so the replicated choice settles first.
 		shared.Node = node
 		return false, g.publishAgentCredential(ctx, key, shared)
 	case localUsable && same && (!known || localChanged || sharedNewer):
@@ -168,9 +169,11 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 		ctx := context.WithoutCancel(ctx)
 		renewed, err := agent.Login.Refresh(ctx, local)
 		// shortcut: only the renewing gateway reports it; elsewhere expires_at shows the expiry
-		if err != nil {
+		// A network error says nothing about the sign-in, so only the provider's refusal marks it expired.
+		var transport net.Error
+		if err != nil && !errors.As(err, &transport) {
 			g.refreshFailed.LoadOrStore(signInRevision{key, shared.Rev}, time.Now())
-		} else {
+		} else if err == nil {
 			g.refreshFailed.Delete(signInRevision{key, shared.Rev})
 		}
 		if renewed == nil || err != nil {
