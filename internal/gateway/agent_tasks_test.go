@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -616,7 +617,7 @@ func meshPair(t *testing.T) (*oauthHarness, *oauthHarness, string, string) {
 					return
 				}
 				actor, _ := session.ActorFrom(r.Context())
-				r = r.WithContext(session.WithActor(r.Context(), session.Actor{Kind: "peer", Account: true, User: actor.User, StableNodeID: fromID}))
+				r = r.WithContext(session.WithActor(r.Context(), session.Actor{Kind: "peer", Account: true, User: actor.User, Agent: actor.Agent, StableNodeID: fromID}))
 				r.Header.Set("Authorization", "Bearer "+to.gateway.local.Secret)
 				to.gateway.Handler().ServeHTTP(w, r)
 			})
@@ -686,6 +687,37 @@ func TestAgentsMessageAcrossMachines(t *testing.T) {
 	one.gateway.mcpNodes = func(string) http.Handler { return http.NotFoundHandler() }
 	if _, text, failed := structured[taskAsked](t, one, tokenA, "ask", map[string]any{"session_id": "session-b", "node": idTwo, "text": "hi"}); !failed || !strings.Contains(text, "update it") {
 		t.Fatal("old peer:", text)
+	}
+}
+
+func TestAgentsStartHelpersOnAnotherMachine(t *testing.T) {
+	one, two, _, idTwo := meshPair(t)
+	token := chatFixture(t, one, "session-a", "")
+	directory := filepath.Join(two.gateway.options.Home, "project")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := remember(two.gateway.options.Home, session.SessionInfo{Directory: directory, Harness: "codex"}); err != nil {
+		t.Fatal(err)
+	}
+	var started atomic.Pointer[session.SessionInfo]
+	two.gateway.options.Start = func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
+		started.Store(&info)
+		return info.ID, nil
+	}
+	result, text := callTool(t, mcpClient(t, one, token), "start_session", map[string]any{"directory": directory, "agent": "codex", "node": idTwo})
+	two.gateway.starting.Wait()
+	info := started.Load()
+	if result.IsError || info == nil || info.ParentID != "session-a" || info.NodeID != idTwo || info.StartedBy.Agent != "claude" {
+		t.Fatalf("remote helper: %s %+v", text, info)
+	}
+	// Replication brings the helper's row back, which is what lets its parent stop it.
+	row := *info
+	if err := session.UpsertSession(t.Context(), one.gateway.store.DB, row); err != nil {
+		t.Fatal(err)
+	}
+	if _, text := callTool(t, mcpClient(t, one, token), "cancel", map[string]any{"session_id": info.ID, "node": idTwo}); text == agentScopeRefusal {
+		t.Fatal("an agent may change its own remote helper:", text)
 	}
 }
 

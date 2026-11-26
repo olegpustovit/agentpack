@@ -31,7 +31,7 @@ var (
 	errChatCredential = errors.New("invalid chat credential")
 	errChatToolsOff   = errors.New("agentpack tools are off for this chat")
 	errAgentAnswer    = errors.New("only a person can answer permission prompts and questions")
-	errAgentScope     = errors.New("a chat's agent can change only itself and the helper chats it started on this machine, and cannot use terminals")
+	errAgentScope     = errors.New("a chat's agent can change only itself and the helper chats it started, and cannot use terminals")
 )
 
 // Helper limits per root chat: how deep helpers may start helpers, and how many may run at once.
@@ -115,6 +115,7 @@ func (m *Server) helperAllowed(ctx context.Context, parent string) error {
 		root, id = id, next
 	}
 	var running int
+	// shortcut: another machine's helpers are counted once their rows replicate, so a fast burst can pass the cap.
 	err := m.store.Reader.QueryRowContext(ctx, `WITH RECURSIVE tree(id) AS (
  SELECT id FROM sessions WHERE parent_id=? UNION SELECT sessions.id FROM sessions JOIN tree ON sessions.parent_id=tree.id)
  SELECT count(*) FROM sessions WHERE id IN (SELECT id FROM tree) AND ended_at=0 AND archived_at=0 AND conversation_state<>'idle'`, root).Scan(&running)
@@ -141,15 +142,12 @@ func (m *Server) startHelper(ctx context.Context, parent *string, start func() (
 }
 
 // agentMayChange keeps an in-chat agent to its own tree: it may read every session, but it stops,
-// restarts and cancels only itself and its helpers on this machine. It messages other chats only with ask.
+// restarts and cancels only itself and its helpers, on any machine. It messages other chats only with ask.
 // restart_session's revival of a stopped chat is the one exception.
 func (m *Server) agentMayChange(ctx context.Context, node, id string) error {
 	actor, _ := session.ActorFrom(ctx)
 	if actor.Chat == "" || id == actor.Chat && node == "" {
 		return nil
-	}
-	if node != "" {
-		return errAgentScope
 	}
 	for depth := 0; depth <= maxHelperDepth && id != ""; depth++ {
 		info, err := session.StoredSession(ctx, m.store.Reader, id)
@@ -281,8 +279,12 @@ func (m *Server) postWhileStarting(ctx context.Context, node, id, path string, b
 
 func (m *Server) startSession(ctx context.Context, _ *mcp.CallToolRequest, in mcpStartInput) (*mcp.CallToolResult, mcpSession, error) {
 	actor, _ := session.ActorFrom(ctx)
-	if actor.Chat != "" && (in.Terminal || in.Node != "") {
+	if actor.Chat != "" && in.Terminal {
 		return nil, mcpSession{}, errAgentScope
+	}
+	var err error
+	if _, in.Node, err = m.localNode(ctx, in.Node); err != nil {
+		return nil, mcpSession{}, err
 	}
 	if in.Terminal && in.Prompt != "" {
 		return nil, mcpSession{}, errors.New("a terminal session takes no prompt")
@@ -308,7 +310,8 @@ func (m *Server) startSession(ctx context.Context, _ *mcp.CallToolRequest, in mc
 	}
 	if in.Terminal {
 		body.Transport = ""
-	} else if actor.Chat == "" || in.TopLevel {
+	} else if actor.Chat == "" || in.TopLevel && in.Node == "" {
+		// An agent's first message to another machine goes through ask, which names this chat.
 		body.ID = "session-" + network.RandomToken()[:32]
 		body.FirstMessage = in.Prompt
 	}
@@ -316,15 +319,14 @@ func (m *Server) startSession(ctx context.Context, _ *mcp.CallToolRequest, in mc
 		return callAPI[session.SessionInfo](ctx, m, in.Node, "POST", "/api/sessions", body)
 	}
 	var info session.SessionInfo
-	var err error
 	if in.TopLevel && actor.Chat != "" {
 		helperStarts.Lock()
 		defer helperStarts.Unlock()
 		var running int
 		err = m.store.Reader.QueryRowContext(ctx, `SELECT count(*) FROM sessions AS s JOIN sessions AS caller
-			ON caller.id=? AND s.node_id=caller.node_id AND s.owner_email=caller.owner_email
-			WHERE s.parent_id='' AND s.ended_at=0 AND s.archived_at=0 AND s.conversation_state<>'idle'
-			AND json_extract(s.started_by,'$.agent')<>''`, actor.Chat).Scan(&running)
+			ON caller.id=? AND s.owner_email=caller.owner_email
+			WHERE s.node_id=COALESCE(NULLIF(?,''),caller.node_id) AND s.parent_id='' AND s.ended_at=0 AND s.archived_at=0 AND s.conversation_state<>'idle'
+			AND json_extract(s.started_by,'$.agent')<>''`, actor.Chat, in.Node).Scan(&running)
 		if err == nil && running >= maxHelpers {
 			err = fmt.Errorf("this account already runs %d top-level chats started by agents", maxHelpers)
 		}
@@ -724,9 +726,6 @@ func (m *Server) chatTools(server *mcp.Server) {
 		return nil, out, err
 	})
 	addTool(server, "fork_session", "Fork a chat into a new chat that continues from its conversation so far, using the agent's own session fork.", mutating, func(ctx context.Context, _ *mcp.CallToolRequest, in mcpSessionInput) (*mcp.CallToolResult, mcpSession, error) {
-		if actor, _ := session.ActorFrom(ctx); actor.Chat != "" && in.Node != "" {
-			return nil, mcpSession{}, errAgentScope
-		}
 		parent := ""
 		info, err := m.startHelper(ctx, &parent, func() (session.SessionInfo, error) {
 			var body any

@@ -81,9 +81,14 @@ func ProxyTo(w http.ResponseWriter, r *http.Request, host Host, id string, targe
 		request.Header.Del("Cookie")
 		request.Header.Del("X-Agentpack-User")
 		request.Header.Del("X-Agentpack-Browser")
+		request.Header.Del("X-Agentpack-Agent")
 		if actor, ok := session.ActorFrom(r.Context()); ok && (actor.Account || actor.Kind == "browser" || actor.Kind == "mcp") {
 			request.Header.Set("X-Agentpack-User", actor.User)
-			if actor.CanStartNewFolder() {
+			if actor.Agent != "" {
+				request.Header.Set("X-Agentpack-Agent", actor.Agent)
+			}
+			// An agent never carries the person's right to start in a new folder.
+			if actor.Agent == "" && actor.CanStartNewFolder() {
 				request.Header.Set("X-Agentpack-Browser", "1")
 			}
 		}

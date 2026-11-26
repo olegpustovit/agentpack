@@ -249,9 +249,9 @@ For routine messages and replies, use normal delivery. A busy chat takes the mes
 
 Messages travel as `POST /api/sessions/{id}/conversation/message` on the machine that runs the chat, through the same owner check and mesh routing as prompts. Each machine keeps its side of a task in its local `agent_tasks` table: `out` rows for chats that asked, `in` rows for chats that were asked. A gateway pass every 2 s marks tasks working, answers tasks whose turn ended, and retries answers a machine could not take, for up to a day. The sender is recorded in the prompt's log entry (`from`); only the gateway sets it. A request asked while answering another counts one hop more and is refused beyond 4 hops, a chat sends at most 20 messages a minute, and rows are deleted after 7 days.
 
-An agent can start chats in previously used folders on its own machine. Starts and forks are helpers of its chat unless the person asks for a standalone chat with `start_session(top_level: true)`. Up to six agent-started standalone chats per account and machine can be active at once. Helpers can run two levels below the root, with up to six active helpers per root. Idle or stopped chats free their slots.
+An agent can start chats in previously used folders on any machine of the mesh (`node` from `list_nodes`); terminal sessions stay for people. Starts and forks are helpers of its chat unless the person asks for a standalone chat with `start_session(top_level: true)`. Up to six agent-started standalone chats per account and machine can be active at once. Limits count another machine's chats once its session rows replicate. A first message to another machine is delivered as an `ask`, so it names the sending chat and the answer returns to it. Helpers can run two levels below the root, with up to six active helpers per root. Idle or stopped chats free their slots.
 
-Permission and question answers come from the person. An agent can stop, restart or cancel its own chat and its helpers on its machine. It can also use `restart_session` to resume a stopped chat on its account anywhere on the mesh.
+Permission and question answers come from the person. An agent can stop, restart or cancel its own chat and its helpers, on any machine. It can also use `restart_session` to resume a stopped chat on its account anywhere on the mesh.
 
 ## Toggling servers per mode
 

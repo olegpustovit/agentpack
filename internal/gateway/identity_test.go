@@ -646,7 +646,9 @@ func TestForwardedAccountRequiresExplicitMeshAndOwnsOnlyItsChats(t *testing.T) {
 func TestProxyUsesAuthenticatedAccountInsteadOfCallerHeader(t *testing.T) {
 	for _, account := range []bool{false, true} {
 		got := make(chan string, 1)
+		agentHeaders := make(chan string, 1)
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			agentHeaders <- r.Header.Get("X-Agentpack-Agent") + "/" + r.Header.Get("X-Agentpack-Browser")
 			got <- r.Header.Get("X-Agentpack-User")
 			w.WriteHeader(204)
 		}))
@@ -654,11 +656,19 @@ func TestProxyUsesAuthenticatedAccountInsteadOfCallerHeader(t *testing.T) {
 		g, _ := identityGateway(t, t.TempDir(), nil)
 		r := httptest.NewRequest("POST", "http://localhost/api/sessions/session-example/stop", nil)
 		r.Header.Set("X-Agentpack-User", "forged@example.com")
+		r.Header.Set("X-Agentpack-Agent", "forged")
+		wantAgent := "/"
 		if account {
-			r = r.WithContext(session.WithActor(r.Context(), session.BrowserActor(testBrowserEmail)))
+			// A browser account's agent is named, and does not carry the browser's new-folder right.
+			actor := session.BrowserActor(testBrowserEmail)
+			actor.Agent, wantAgent = "claude", "claude/"
+			r = r.WithContext(session.WithActor(r.Context(), actor))
 		}
 		mesh.ProxyTo(httptest.NewRecorder(), r, g, "remote", target)
 		email := <-got
+		if headers := <-agentHeaders; headers != wantAgent {
+			t.Fatalf("forwarded agent/browser=%q want %q", headers, wantAgent)
+		}
 		server.Close()
 		want := ""
 		if account {

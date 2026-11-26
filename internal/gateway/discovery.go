@@ -68,10 +68,14 @@ func (g *Gateway) ServePeer(w http.ResponseWriter, r *http.Request, self *mesh.P
 		return
 	}
 	actor.ForwardedBrowser = actor.Account && r.Header.Get("X-Agentpack-Browser") == "1"
+	if actor.Account {
+		actor.Agent = r.Header.Get("X-Agentpack-Agent")
+	}
 	request := r.Clone(withCaller(session.WithActor(context.WithValue(r.Context(), replicaPeerKey{}, identity.Node.StableID), actor), callerPeer))
 	request.Header = r.Header.Clone()
 	request.Header.Del("X-Agentpack-User")
 	request.Header.Del("X-Agentpack-Browser")
+	request.Header.Del("X-Agentpack-Agent")
 	request.Header.Del("Cookie")
 	request.Header.Set("Authorization", "Bearer "+g.local.Secret)
 	request.Host = g.origin.Host

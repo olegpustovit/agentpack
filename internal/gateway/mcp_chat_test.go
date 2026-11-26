@@ -183,7 +183,7 @@ func chatFixture(t *testing.T, h *oauthHarness, id, parent string) string {
 // What the tools answer an agent that oversteps; the person reads these.
 const (
 	agentAnswerRefusal  = "only a person can answer permission prompts and questions"
-	agentScopeRefusal   = "a chat's agent can change only itself and the helper chats it started on this machine, and cannot use terminals"
+	agentScopeRefusal   = "a chat's agent can change only itself and the helper chats it started, and cannot use terminals"
 	agentSendRefusal    = "send_prompt is for people; an agent messages a chat with ask, which names this chat as the sender and returns the answer here as a task"
 	chatToolsOffRefusal = "agentpack tools are off for this chat"
 )
@@ -226,7 +226,7 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 			t.Fatalf("%s accepted from an agent: %s", call.name, text)
 		}
 	}
-	// An agent stays in its own tree: no terminals, other machines or a person's chats.
+	// An agent stays in its own tree: no terminals or a person's chats.
 	chatFixture(t, h, "session-person", "")
 	for _, call := range []struct {
 		name string
@@ -234,7 +234,6 @@ func TestChatAgentToolsGuardrails(t *testing.T) {
 	}{
 		{"write_terminal", map[string]any{"session_id": "session-person", "input": "1\r"}},
 		{"start_session", map[string]any{"directory": "/tmp", "agent": "codex", "terminal": true}},
-		{"start_session", map[string]any{"directory": "/tmp", "agent": "codex", "node": "peer"}},
 		{"stop_session", map[string]any{"session_id": "session-person"}},
 		{"cancel", map[string]any{"session_id": "session-person"}},
 	} {
