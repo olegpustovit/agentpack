@@ -60,7 +60,7 @@ var targetSpecs = [...]targetSpec{
 		target: Agy, binaryEnv: "AGY_PATH", displayName: "Antigravity",
 		externalStatus: workspaceWrite, externalNote: "writes .agents/plugins/agentpack-bundle",
 		// Antigravity's hook renderer writes hooks.json at the plugin root.
-		rawPluginSubdirs: []string{"commands", "agents", "rules", "skills"},
+		rawPluginSubdirs: []string{"agents", "rules", "skills"},
 	},
 	{
 		target: OMP, binaryEnv: "OMP_PATH", displayName: "Oh My Pi",
