@@ -21,12 +21,12 @@ Every harness names and formats the same ideas differently. agentpack does not c
 
 | Source | Claude | Cursor | OpenCode | Codex | Grok | Antigravity |
 |---|---|---|---|---|---|---|
-| command | command frontmatter | plain markdown | command markdown | skill fallback | command | command |
+| command | command frontmatter | plain markdown | command markdown | skill fallback | command | skill fallback |
 | agent | agent frontmatter | agent markdown | agent markdown | custom agent (`agents/<name>.toml`) and skill fallback | agent | agent |
 | skill | normalized skill | skill | skill | Codex skill | skill | skill |
 | rule | skill fallback | `.mdc` (preserved) | skill fallback | skill fallback | skill fallback | rule (preserved) |
 
-Two harnesses have first-class rules — Cursor and Antigravity — so rules are preserved there. Everywhere else, a rule becomes a best-effort skill, with its original rule scope noted so the intent survives. Codex gets commands as skills. A subagent is staged for Codex twice: as a custom agent file, `$CODEX_HOME/agents/<name>.toml` with `name` (the file name), `description` and `developer_instructions` (the agent's body), which is what Codex documents for custom agents, and as a skill of the same name, which Codex versions without custom agents still find.
+Two harnesses have first-class rules — Cursor and Antigravity — so rules are preserved there. Everywhere else, a rule becomes a best-effort skill, with its original rule scope noted so the intent survives. Codex gets commands as skills, and so does Antigravity, which never loads a plugin's `commands/`. A subagent is staged for Codex twice: as a custom agent file, `$CODEX_HOME/agents/<name>.toml` with `name` (the file name), `description` and `developer_instructions` (the agent's body), which is what Codex documents for custom agents, and as a skill of the same name, which Codex versions without custom agents still find.
 
 Where a command, agent or rule becomes a skill, it keeps its name. If the same package already has a skill of that name (or another converted item took it), the converted item is staged as `<name>-command`, `<name>-agent` or `<name>-rule`, then with `-2`, `-3`, and a warning says so. Nothing is overwritten.
 
