@@ -44,7 +44,7 @@ type mcpLoginInput struct {
 	ClientID     string   `json:"client_id"`
 	ClientSecret string   `json:"client_secret"`
 	Scopes       []string `json:"scopes"`
-	// ReturnTo is the gateway page the browser comes back to; Settings → Connections by default.
+	// ReturnTo is the gateway page the browser comes back to; Settings → Vault by default.
 	ReturnTo string `json:"return_to"`
 }
 
@@ -217,7 +217,7 @@ func authorizeMCP(ctx context.Context, handler *auth.AuthorizationCodeHandler, e
 			return fmt.Errorf("the authorization server refused the login (%s)", retrieve.ErrorCode)
 		}
 		if strings.Contains(err.Error(), "no configured client registration methods") {
-			return errors.New("this server does not register clients automatically: enter the client ID of an OAuth app registered with the redirect URL shown in Settings → Connections, or add a token header")
+			return errors.New("this server does not register clients automatically: enter the client ID of an OAuth app registered with the redirect URL shown in Settings → Vault, or add a token header")
 		}
 		return fmt.Errorf("OAuth login failed: %s", obs.Redact(err.Error()))
 	}

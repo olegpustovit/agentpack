@@ -47,7 +47,7 @@ func (c *bridgeCredential) request(ctx context.Context, method, path string, bod
 			return mcpBridgeSecret{}, errors.New("the agentpack gateway is not running; run `ap`, then retry")
 		}
 		if strings.Contains(err.Error(), "needs login") {
-			return mcpBridgeSecret{}, errors.New("this MCP credential needs login; reconnect it in the gateway under Settings → Connections")
+			return mcpBridgeSecret{}, errors.New("this MCP credential needs login; reconnect it in the gateway under Settings → Vault")
 		}
 		return mcpBridgeSecret{}, fmt.Errorf("MCP credential unavailable: %w", err)
 	}

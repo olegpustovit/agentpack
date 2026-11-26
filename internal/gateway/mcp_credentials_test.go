@@ -211,7 +211,7 @@ func TestMCPCredentialOAuthLoginBridgeAndSingleRefresh(t *testing.T) {
 		AuthorizeURL string `json:"authorize_url"`
 	}
 	localCall(t, home, http.MethodPost, "/api/mcp/logins", map[string]string{"url": fake.URL + "/mcp", "label": "Fake"}, &started)
-	browser, err := http.Get(started.AuthorizeURL) // consent, gateway callback, then the Connections page
+	browser, err := http.Get(started.AuthorizeURL) // consent, gateway callback, then the Vault page
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestMCPCredentialOAuthLoginBridgeAndSingleRefresh(t *testing.T) {
 		t.Fatalf("browser ended at %s", browser.Request.URL)
 	}
 	if got := browser.Request.URL.Query().Get("oauth_login"); got != started.Login {
-		t.Fatal("Connections could not retrieve the login outcome")
+		t.Fatal("Vault could not retrieve the login outcome")
 	}
 	var status map[string]string
 	localCall(t, home, http.MethodGet, "/api/mcp/logins/"+started.Login, nil, &status)
