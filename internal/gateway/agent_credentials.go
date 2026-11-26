@@ -40,6 +40,7 @@ func (g *Gateway) runAgentCredentials(ctx context.Context, interval time.Duratio
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
+		g.noticeWake()
 		g.syncAgentCredentials(ctx, "")
 		select {
 		case <-ctx.Done():
@@ -146,7 +147,7 @@ func (g *Gateway) syncAgentCredential(ctx context.Context, agent registry.Entry,
 		return false, g.publishAgentCredential(ctx, key, shared)
 	case localUsable && same && (!known || localChanged || sharedNewer):
 		return false, g.recordAgentCredential(ctx, key, shared)
-	case agent.Login.Refresh != nil && shared.Node == node && localUsable && same:
+	case agent.Login.Refresh != nil && shared.Node == node && localUsable && same && g.caughtUp():
 		// Once sent, the server may rotate the token whatever happens here: a shutdown must not drop the answer.
 		ctx := context.WithoutCancel(ctx)
 		renewed, err := agent.Login.Refresh(ctx, local)

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -362,6 +363,88 @@ func (g *Gateway) wakeStatePeer(peer string) {
 		default:
 		}
 	}
+}
+
+// A gateway does not renew a rotating token until it has caught up after a start or a wake: the row it
+// holds may name a token the mesh has already spent.
+const (
+	catchUpLimit = 3 * time.Minute  // then renew anyway, so an all-offline mesh keeps working
+	wakeGap      = 90 * time.Second // more than this between two looks means the machine slept
+)
+
+// wallNow drops the monotonic reading, which does not advance while the machine sleeps.
+func (g *Gateway) wallNow() time.Time {
+	if g.clock != nil {
+		return g.clock().Round(0)
+	}
+	return time.Now().Round(0)
+}
+
+// noticeWake restarts the catch-up wait, and pulls at once, when the wall clock jumped since the last look.
+func (g *Gateway) noticeWake() {
+	now := g.wallNow()
+	last := g.lastLook.Swap(now.UnixNano())
+	if last == 0 || now.Sub(time.Unix(0, last)) <= wakeGap {
+		return
+	}
+	g.syncSince.Store(now.UnixNano())
+	g.statePulls.Range(func(peer, _ any) bool {
+		g.wakeStatePeer(peer.(string))
+		return true
+	})
+}
+
+// caughtUp reports that state has been pulled since the start or last wake (from Main, when another
+// machine is Main), that there is nothing to pull from, or that catchUpLimit passed without it.
+func (g *Gateway) caughtUp() bool {
+	g.noticeWake()
+	if g.options.Library.Store == nil {
+		return true
+	}
+	since := time.Unix(0, g.syncSince.Load())
+	if g.wallNow().Sub(since) >= catchUpLimit {
+		return true
+	}
+	peers, err := g.options.Library.Store.ListPeers()
+	if err != nil {
+		return false
+	}
+	self, err := g.nodeID(context.Background())
+	if err != nil {
+		return false
+	}
+	roles, err := g.store.Main(context.Background())
+	if err != nil {
+		return false
+	}
+	enrolled := false
+	for _, peer := range peers {
+		if !peer.Mesh {
+			continue
+		}
+		enrolled = true
+		if roles.MainNode != "" && roles.MainNode != self && roles.MainNode != peer.Node {
+			continue
+		}
+		if value, ok := g.replicaStatus.Load(peer.Node); ok && value.(replicaContact).LastSuccess.After(since) {
+			return true
+		}
+	}
+	return !enrolled
+}
+
+// awaitCaughtUp polls caughtUp for at most limit. It reports false when ctx or the gateway ended.
+func (g *Gateway) awaitCaughtUp(ctx context.Context, limit time.Duration) bool {
+	for deadline := g.wallNow().Add(limit); !g.caughtUp() && g.wallNow().Before(deadline); {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-g.done:
+			return false
+		case <-time.After(cmp.Or(g.catchUpPoll, time.Second)):
+		}
+	}
+	return true
 }
 
 // The manager owns worker lifetimes; each peer pulls independently so one offline node cannot stall the mesh.

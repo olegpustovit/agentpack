@@ -325,6 +325,9 @@ func (g *Gateway) mcpRefresher(ctx context.Context, credential mcpCredential) (r
 	return refresher, refresher == "" || refresher == self && (roles.MainNode != self || roles.ActsAsMain(self)), nil
 }
 
+// onDemandCatchUp plus the 30 s token call stays inside the bridge's one-minute request.
+const onDemandCatchUp = 20 * time.Second
+
 // freshMCPSecret returns a credential ready to send, refreshing an OAuth token that expired or that failedGeneration was rejected with.
 func (g *Gateway) freshMCPSecret(ctx context.Context, id string, failedGeneration int64) (mcpBridgeSecret, error) {
 	credential, err := g.loadMCPCredential(ctx, id)
@@ -355,6 +358,8 @@ func (g *Gateway) freshMCPSecret(ctx context.Context, id string, failedGeneratio
 		}
 		return secret, err
 	}
+	// A newer token may still be on its way after a start or wake; an agent is waiting, so not for long.
+	g.awaitCaughtUp(ctx, onDemandCatchUp)
 	credential, err = g.refreshMCPToken(ctx, id, max(failedGeneration, secret.Generation))
 	if err != nil {
 		return g.bridgeSecret(credential), err
@@ -909,6 +914,9 @@ func (g *Gateway) runMCPCredentials(ctx context.Context, interval time.Duration)
 }
 
 func (g *Gateway) renewMCPTokens(ctx context.Context) {
+	if !g.caughtUp() {
+		return
+	}
 	rows, err := g.store.Credentials().MCPOfKind(ctx, mcp.CredentialOAuth)
 	if err != nil {
 		return
