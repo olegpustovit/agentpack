@@ -295,6 +295,28 @@ test.describe("kit styling", () => {
 
 // Behaviour of the conversation pane: Chromium only, it cannot differ by engine.
 test.describe("conversation pane", () => {
+  test("a long answer option wraps inside its card on a phone", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await mockAPI(page)
+    const label = "Keep one scratchpad per artifact and carry it across every published version of it"
+    const body = `${JSON.stringify({ seq: 1, ts: 1, kind: "elicitation", payload: { elicitationId: "q1", prompt: "Where should notes live?", fields: [{ key: "where", options: [{ value: "a", label, description: "Survives republishing" }, { value: "b", label: "Nowhere" }] }] } })}\n`
+    await page.route("**/api/sessions", (route) => {
+      if (route.request().method() !== "GET") return route.fallback()
+      return route.fulfill({ json: [{ ...session, transport: "acp" }] })
+    })
+    await page.route("**/api/sessions/*/conversation**", (route) => route.fulfill({ body, contentType: "application/x-ndjson" }))
+    await page.route("**/api/sessions/*/conversation/config-options", (route) => route.fulfill({ json: [] }))
+    await page.goto("/sessions/local/local-one")
+    const card = page.getByRole("region", { name: "Requests from the agent" }).locator('[data-slot="elicitation-card"]')
+    const option = card.getByRole("button", { name: /Keep one scratchpad/ })
+    await expect(option).toHaveCSS("white-space", "normal")
+    await expect(option).toContainText("Survives republishing")
+    const [inner, outer] = [(await option.boundingBox())!, (await card.boundingBox())!]
+    expect(inner.x + inner.width).toBeLessThanOrEqual(outer.x + outer.width)
+    expect(inner.height).toBeGreaterThan(40) // more than one line
+    expect(await option.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0)
+  })
+
   test("bypass mode is red, menus use NSMenu metrics, and the composer is focused close under the thread", async ({ page }) => {
     await desktop(page)
     await page.route("**/api/sessions", (route) => {

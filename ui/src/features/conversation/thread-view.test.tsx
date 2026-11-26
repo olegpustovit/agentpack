@@ -3,7 +3,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { ThreadItem } from "./model"
-import { latestUserPrompt, quoteMessage, ThreadView } from "./thread-view"
+import { latestUserPrompt, noticeText, quoteMessage, ThreadView } from "./thread-view"
 
 const items: ThreadItem[] = [
   { kind: "user_message_chunk", data: { text: { text: "Run the tests" } } },
@@ -23,6 +23,13 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount())
   container.remove()
+})
+
+describe("noticeText", () => {
+  it("replaces agy's refusal of a steer, session ID and all", () => {
+    const raw = "Can't add this prompt to session 29c65021-35fe-4cc6-a422-0bb531fa18f7: the running prompt is waiting for a permission or question answer; answer it or send session/cancel, then send this prompt again"
+    expect(noticeText(raw)).toBe("This message wasn't delivered because the agent was waiting for your answer. Send it again.")
+  })
 })
 
 describe("conversation message actions", () => {

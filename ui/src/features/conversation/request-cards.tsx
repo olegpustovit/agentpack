@@ -11,6 +11,10 @@ import { conversationErrorMessage, conversationNeedsUpdate } from "./queries"
 
 const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform)
 
+// Buttons never wrap, so long answers get a full-width row each that does.
+const stackedOption = "h-auto w-full justify-start py-(--s2) text-start whitespace-normal"
+const long = (label: string) => label.length > 40
+
 // Answer cards for permission and elicitation requests. The sessions home renders them too,
 // so this file must stay free of markdown, diff and highlight imports (check-size.ts enforces it).
 type RequestCardProps = {
@@ -52,6 +56,7 @@ export function ElicitationCard({ item, machine, sessionId, readOnly, onAnswer }
   const result = ask.result
   // Older workers logged the URL as the prompt.
   const link = ask.agentElicitationId ? ask.url ?? ask.prompt : undefined
+  const stacked = (ask.choices ?? []).some(long)
   return (
     <div data-slot="elicitation-card" className="rounded-(--r-sheet) border-[0.5px] border-(--warn) bg-(--window) px-(--s5) pt-(--s5) pb-(--s4) shadow-(--shadow-card)">
       <p className="text-(length:--fs) font-semibold text-(--fg)">{ask.prompt ?? "Input needed"}</p>
@@ -76,7 +81,7 @@ export function ElicitationCard({ item, machine, sessionId, readOnly, onAnswer }
         </div>
       ) : (
         <div
-          className="mt-(--s3) flex flex-wrap gap-(--s2)"
+          className={`mt-(--s3) flex gap-(--s2) ${stacked ? "flex-col items-start" : "flex-wrap"}`}
           onKeyDown={ask.allowMultiple ? (event) => {
             if (event.nativeEvent.isComposing || event.keyCode === 229) return
             if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && ask.elicitationId && !answer.isPending && selected.length > 0) {
@@ -93,6 +98,7 @@ export function ElicitationCard({ item, machine, sessionId, readOnly, onAnswer }
                 type="button"
                 size="sm"
                 variant={ask.allowMultiple && selected.includes(value) ? "primary" : "default"}
+                className={stacked ? stackedOption : undefined}
                 aria-pressed={ask.allowMultiple ? selected.includes(value) : undefined}
                 disabled={!ask.elicitationId || answer.isPending}
                 onClick={() => {
@@ -145,6 +151,8 @@ function ElicitationForm({ fields, disabled, onSubmit }: { fields: ElicitationFi
     >
       {fields.map((field) => {
         const current = values[field.key]
+        // Descriptions are text, not only a tooltip: a phone has no hover.
+        const stacked = field.options?.some((option) => long(option.label) || option.description)
         return (
           <div key={field.key} className="flex flex-col gap-(--s2)">
             {(field.title || field.description) && (
@@ -155,7 +163,7 @@ function ElicitationForm({ fields, disabled, onSubmit }: { fields: ElicitationFi
               </p>
             )}
             {field.options?.length ? (
-              <div className="flex flex-wrap gap-(--s2)">
+              <div className={`flex gap-(--s2) ${stacked ? "flex-col" : "flex-wrap"}`}>
                 {field.options.map((option) => {
                   const picked = Array.isArray(current) ? current.includes(option.value) : current === option.value
                   return (
@@ -165,7 +173,7 @@ function ElicitationForm({ fields, disabled, onSubmit }: { fields: ElicitationFi
                       size="sm"
                       variant={picked ? "primary" : "default"}
                       aria-pressed={quick ? undefined : picked}
-                      title={option.description}
+                      className={stacked ? stackedOption : undefined}
                       disabled={disabled}
                       onClick={() => {
                         if (quick) return onSubmit(JSON.stringify({ [field.key]: option.value }))
@@ -177,7 +185,12 @@ function ElicitationForm({ fields, disabled, onSubmit }: { fields: ElicitationFi
                         })
                       }}
                     >
-                      {option.label}
+                      {stacked ? (
+                        <span className="min-w-0 [overflow-wrap:anywhere]">
+                          {option.label}
+                          {option.description && <span className={`block text-(length:--fs-sm) ${picked ? "opacity-80" : "text-(--fg2)"}`}>{option.description}</span>}
+                        </span>
+                      ) : option.label}
                     </Button>
                   )
                 })}
