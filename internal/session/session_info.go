@@ -59,6 +59,9 @@ type SessionInfo struct {
 
 	// WorktreeOf is the main folder of the agentpack worktree Directory is in. Older peers omit it.
 	WorktreeOf string `json:"worktree_of,omitempty"`
+	// ResumePending marks a cut-off chat that resumes once sign-ins have synced. The owning gateway
+	// sets it on reads; it is not stored. Older peers omit it.
+	ResumePending bool `json:"resume_pending,omitempty"`
 }
 
 // TerminalState contains no command arguments, environment, or credentials.

@@ -112,6 +112,9 @@ func (g *Gateway) serveSessions(w http.ResponseWriter, r *http.Request) {
 		meshReadError(w, r, err)
 		return
 	}
+	for i := range value {
+		value[i].ResumePending = g.ResumePending(value[i].ID)
+	}
 	network.WriteJSON(w, value)
 }
 
@@ -139,6 +142,7 @@ func (g *Gateway) serveSessionRow(w http.ResponseWriter, r *http.Request) {
 	if !info.EndedAt.IsZero() {
 		info.State.Running, info.State.Restarting = false, false
 	}
+	info.ResumePending = g.ResumePending(info.ID)
 	network.WriteJSON(w, publicSession(info))
 }
 

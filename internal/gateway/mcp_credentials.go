@@ -359,7 +359,7 @@ func (g *Gateway) freshMCPSecret(ctx context.Context, id string, failedGeneratio
 		return secret, err
 	}
 	// A newer token may still be on its way after a start or wake; an agent is waiting, so not for long.
-	g.awaitCaughtUp(ctx, onDemandCatchUp)
+	g.awaitCaughtUp(ctx, g.wallNow().Add(onDemandCatchUp))
 	credential, err = g.refreshMCPToken(ctx, id, max(failedGeneration, secret.Generation))
 	if err != nil {
 		return g.bridgeSecret(credential), err

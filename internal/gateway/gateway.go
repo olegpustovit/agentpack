@@ -99,6 +99,8 @@ type Gateway struct {
 	lastLook    atomic.Int64     // wall time of the last wake check
 	clock       func() time.Time // nil: time.Now; tests move it
 	catchUpPoll time.Duration    // zero: one second
+	// resumePending holds the IDs of cut-off chats waiting to resume.
+	resumePending sync.Map
 
 	worktreeHistoryMu sync.Mutex
 	worktreeHistory   map[string]worktreeDivergence

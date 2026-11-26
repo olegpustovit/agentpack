@@ -2,13 +2,20 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/harness"
 	"github.com/olegpustovit/agentpack/internal/harness/registry"
 	"github.com/olegpustovit/agentpack/internal/mcp"
+	"github.com/olegpustovit/agentpack/internal/network"
+	"github.com/olegpustovit/agentpack/internal/session"
 )
 
 // startCatchingUp enrolls two peers on g, which starts now on a clock the test moves.
@@ -160,4 +167,110 @@ func TestMCPCredentialRenewalWaitsUntilCaughtUp(t *testing.T) {
 	if got := fake.refreshes.Load(); got != 2 {
 		t.Fatalf("not renewed after catching up: %d", got)
 	}
+}
+
+// waitingResume is a gateway that restarted with one cut-off chat and has not caught up. Its clock
+// only moves by advance, and every launch reports the sign-in the agent would read.
+func waitingResume(t *testing.T) (g *Gateway, launched chan string, advance func(time.Duration), path string) {
+	t.Helper()
+	home := t.TempDir()
+	path = filepath.Join(t.TempDir(), "token")
+	launched = make(chan string, 4)
+	g, _ = identityGateway(t, home, func(_ context.Context, info session.SessionInfo, _ string) (string, error) {
+		data, _ := os.ReadFile(path)
+		launched <- string(data)
+		return info.ID, nil
+	})
+	// The resume syncs sign-ins: never let a test reach this machine's real ones.
+	saved := network.Agents
+	t.Cleanup(func() { network.Agents = saved })
+	network.Agents = []registry.Entry{{Harness: harness.Harness{Target: harness.Agy}, Login: &harness.LoginSpec{Credential: func() string { return path }}}}
+	writeCredential(t, path, []byte(`{"n":1}`))
+	g.syncAgentCredentials(t.Context(), "")
+	startCatchingUp(t, g)
+	var elapsed atomic.Int64
+	start := time.Now().Round(0)
+	g.clock = func() time.Time { return start.Add(time.Duration(elapsed.Load())) }
+	g.syncSince.Store(start.UnixNano())
+	g.catchUpPoll = time.Millisecond
+	advance = func(by time.Duration) {
+		now := start.Add(time.Duration(elapsed.Add(int64(by))))
+		// Until the waiting resume has looked at the new time.
+		for deadline := time.Now().Add(time.Second); g.lastLook.Load() < now.UnixNano() && time.Now().Before(deadline); {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	stuckChat(t, g, seedFolder(t, home), "session-dead")
+	return g, launched, advance, path
+}
+
+func notLaunched(t *testing.T, launched chan string) {
+	t.Helper()
+	select {
+	case got := <-launched:
+		t.Fatal("resumed early with", got)
+	default:
+	}
+}
+
+func TestResumeWaitsUntilCaughtUp(t *testing.T) {
+	g, launched, advance, _ := waitingResume(t)
+	events, unsubscribe := g.listen()
+	defer unsubscribe()
+	g.reapStoppedChats(t.Context())
+	g.reapStoppedChats(t.Context()) // the 15 s reaper sees it again
+	if message := <-events; message.Topic != "sessions" {
+		t.Fatalf("event %+v", message)
+	}
+	row := httptest.NewRequest("GET", "/api/sessions/session-dead", nil)
+	row.SetPathValue("id", "session-dead")
+	one, all := httptest.NewRecorder(), httptest.NewRecorder()
+	g.serveSessionRow(one, row)
+	g.serveSessions(all, httptest.NewRequest("GET", "/api/sessions", nil))
+	if !strings.Contains(one.Body.String(), `"resume_pending":true`) || !strings.Contains(all.Body.String(), `"resume_pending":true`) {
+		t.Fatalf("pending not shown: %s %s", one.Body, all.Body)
+	}
+	advance(resumeCatchUp - time.Second)
+	notLaunched(t, launched)
+
+	// The peer's newer sign-in arrives with the pull, and is installed before the agent starts.
+	_, peerPublish := credentialRow(t, g, "agy/token")
+	value, _ := json.Marshal(map[string]int{"n": 2})
+	peerPublish(sharedAgentCredential{Data: value, Rev: 2, Node: "birch"})
+	g.replicaStatus.Store("birch", replicaContact{LastSuccess: g.wallNow()})
+	g.starting.Wait()
+	if got := <-launched; got != `{"n":2}` {
+		t.Fatal("resumed with", got)
+	}
+	notLaunched(t, launched)
+	if g.ResumePending("session-dead") {
+		t.Fatal("still pending after the resume")
+	}
+}
+
+func TestResumeHappensAnywayAtTheLimit(t *testing.T) {
+	g, launched, advance, _ := waitingResume(t)
+	g.reapStoppedChats(t.Context())
+	notLaunched(t, launched)
+	advance(resumeCatchUp)
+	g.starting.Wait()
+	if got := <-launched; got != `{"n":1}` {
+		t.Fatal("resumed with", got)
+	}
+}
+
+func TestResumeByHandEndsTheWait(t *testing.T) {
+	g, launched, advance, _ := waitingResume(t)
+	g.reapStoppedChats(t.Context())
+	if _, err := g.resumeSession(t.Context(), "session-dead", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	<-launched
+	// The chat stops again before the wait is over; it is left alone.
+	if _, err := g.store.DB.Exec("UPDATE sessions SET ended_at=2 WHERE id='session-dead'"); err != nil {
+		t.Fatal(err)
+	}
+	advance(resumeCatchUp)
+	g.starting.Wait()
+	notLaunched(t, launched)
 }

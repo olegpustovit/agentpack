@@ -63,8 +63,9 @@ const (
 	// no machine took within a day is given up.
 	agentTaskDeliveryTimeout = 15 * time.Second
 	agentTaskDeliveryWindow  = 24 * time.Hour
-	// A chat cut off mid-turn may resume by itself (the gateway's reaper, every 15 s); its task stays open that long.
-	agentTaskResumeGrace = time.Minute
+	// A chat cut off mid-turn may resume by itself (the gateway's reaper, every 15 s, then up to 75 s
+	// waiting for sign-ins to sync); its task stays open that long.
+	agentTaskResumeGrace = 3 * time.Minute
 	// AutoResumePrompt is what the gateway's reaper sends a chat whose turn a dead worker cut off.
 	AutoResumePrompt = "Your last turn was cut off because this machine went offline or restarted. Continue where you left off."
 	// AutoResumeWindow keeps a chat whose agent dies again right after resuming from resuming forever;
@@ -730,6 +731,8 @@ func (m *Server) TaskPass(ctx context.Context) error {
 		if previous, ok := m.agentTaskSeen[task.id]; ok && previous == task.last && task.end == 0 && task.progress == "" {
 			continue
 		}
+		// Read before the log: a resume claimed in between shows there as queued.
+		pending := m.host.ResumePending(task.session)
 		turn, err := turnAnswer(ctx, m.store.Reader, task.id, task.session, task.since)
 		if err != nil {
 			failures = append(failures, err)
@@ -758,7 +761,7 @@ func (m *Server) TaskPass(ctx context.Context) error {
 			if strings.TrimSpace(answer) == "" {
 				state, answer = taskFailed, "The agent ended its turn without a message."
 			}
-		case stopped && (turn.resuming || time.Since(time.Unix(0, task.end)) < agentTaskResumeGrace):
+		case stopped && (turn.resuming || pending || time.Since(time.Unix(0, task.end)) < agentTaskResumeGrace):
 			continue // a turn cut off by a dead worker resumes by itself (the reaper queues it), and then answers
 		case stopped:
 			state, answer = taskFailed, "The chat stopped before answering. restart_session resumes its conversation; ask again after."

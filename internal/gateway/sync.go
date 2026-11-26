@@ -433,9 +433,9 @@ func (g *Gateway) caughtUp() bool {
 	return !enrolled
 }
 
-// awaitCaughtUp polls caughtUp for at most limit. It reports false when ctx or the gateway ended.
-func (g *Gateway) awaitCaughtUp(ctx context.Context, limit time.Duration) bool {
-	for deadline := g.wallNow().Add(limit); !g.caughtUp() && g.wallNow().Before(deadline); {
+// awaitCaughtUp polls caughtUp until deadline. It reports false when ctx or the gateway ended.
+func (g *Gateway) awaitCaughtUp(ctx context.Context, deadline time.Time) bool {
+	for !g.caughtUp() && g.wallNow().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return false

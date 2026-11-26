@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -419,6 +420,35 @@ func TestTaskSurvivesAChatThatResumesAfterItsWorkerDied(t *testing.T) {
 	if last := lastPrompt(t, toA); !strings.HasSuffix(last.text, "All 32 links resolve.") {
 		t.Fatalf("A received %+v", last)
 	}
+}
+
+// A resume waits for sign-ins to sync before it queues anything, and the chat may have stopped long
+// before the gateway came back: the task stays open meanwhile.
+func TestAgentTaskStaysOpenThroughADelayedResume(t *testing.T) {
+	h := newOAuthHarness(t)
+	tokenA := chatFixture(t, h, "session-a", "")
+	chatFixture(t, h, "session-b", "")
+	fakeChatWorker(t, h, "session-a")
+	fakeChatWorker(t, h, "session-b")
+	asked, _, _ := structured[taskAsked](t, h, tokenA, "ask", map[string]any{"session_id": "session-b", "text": "Check the links"})
+	appendEvents(t, h, "session-b", taskPrompt(1, asked.TaskID), message(2, "Checking."), acp.LogEntry{Seq: 3, Kind: "agent_exit", Payload: json.RawMessage(`{}`)})
+	stoppedFor := func(ago time.Duration, want ...string) {
+		t.Helper()
+		if _, err := h.gateway.store.DB.Exec("UPDATE sessions SET ended_at=? WHERE id='session-b'", time.Now().Add(-ago).UnixNano()); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.gateway.mcp.TaskPass(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if state, _ := taskRow(t, h, asked.TaskID, "in"); !slices.Contains(want, state) {
+			t.Fatal("stopped for", ago, "state", state)
+		}
+	}
+	stoppedFor(2*time.Minute, "submitted", "working") // longer than the 75 s wait
+	h.gateway.resumePending.Store("session-b", struct{}{})
+	stoppedFor(time.Hour, "submitted", "working")
+	h.gateway.resumePending.Delete("session-b")
+	stoppedFor(time.Hour, "failed")
 }
 
 func TestCancelTaskStopsTheWorkAndRefusesTheAnswer(t *testing.T) {
