@@ -173,7 +173,12 @@ func (cs *ConversationSession) Submit(ctx context.Context, input acp.PromptInput
 	}
 	// An agent message must not wait out a long turn if the agent cannot take it queued.
 	steer = steer || input.From != nil && cs.steer != nil && !cs.queuesPrompts
-	if !idempotent && !cs.starting && !cs.running && len(cs.Queue) == 0 && (!steer || cs.steer == nil) {
+	// While the person owes an answer, only they may dismiss the request.
+	held := cs.state == string(StateNeedsYou)
+	if held && input.From != nil {
+		steer = false
+	}
+	if !idempotent && !cs.starting && !cs.running && !held && len(cs.Queue) == 0 && (!steer || cs.steer == nil) {
 		cs.running, cs.userCancelled = true, false
 		cs.mu.Unlock()
 		result := make(chan error, 1)
@@ -209,11 +214,12 @@ func (cs *ConversationSession) Submit(ctx context.Context, input acp.PromptInput
 	return item.ID, nil, nil
 }
 
-// afterQueued starts the queue, delivers an agent message, or falls back to cancellation on an
-// adapter without native steering. The caller holds queueMu.
+// afterQueued starts the queue, delivers an agent message, or cancels the turn so a steered
+// prompt goes next: on an adapter without native steering, or to dismiss an open request.
+// The caller holds queueMu.
 func (cs *ConversationSession) afterQueued(ctx context.Context, steer bool) {
 	cs.mu.Lock()
-	running, broker, nativeSteering := cs.running, cs.broker, cs.steer != nil
+	running, broker, nativeSteering := cs.running, cs.broker, cs.steer != nil && cs.state != string(StateNeedsYou)
 	cs.mu.Unlock()
 	if !running {
 		cs.maybeDrain()
@@ -247,7 +253,8 @@ func (cs *ConversationSession) trySteer(ctx context.Context, item QueuedPrompt) 
 	}
 	cs.mu.Lock()
 	steerTurn := cs.steer
-	ready := !cs.starting && cs.closedErr() == nil
+	// A steer behind an open request is refused or held by the agent, so none is sent.
+	ready := !cs.starting && cs.closedErr() == nil && cs.state != string(StateNeedsYou)
 	// Codex interprets /goal pause in session/prompt. In a steer it becomes ordinary model input.
 	pauseCommand := (cs.nativeGoalPause || cs.nativeGoalReports) && item.Input.From == nil && item.Input.Text == "/goal pause"
 	cs.mu.Unlock()

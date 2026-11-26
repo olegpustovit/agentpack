@@ -98,7 +98,8 @@ func (cs *ConversationSession) dropGoal(now int64) {
 // when the goal blocks every stop.
 func (cs *ConversationSession) pauseNativeGoal(ctx context.Context) {
 	cs.mu.Lock()
-	command, steer := "/goal pause", cs.steer != nil
+	// A goal command never dismisses an open question: it queues behind it.
+	command, steer := "/goal pause", cs.steer != nil && cs.state != string(StateNeedsYou)
 	if !cs.canPauseGoal() {
 		command = "/goal clear"
 	}
