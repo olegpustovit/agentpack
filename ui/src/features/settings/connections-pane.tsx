@@ -17,6 +17,8 @@ import { hud } from "@/lib/hud"
 import { connectionsQuery, loginsFor, serverName, signInOutcome, startSignIn, type Connection } from "./connections-model"
 import { LoadError, Pane } from "./panes"
 import { VaultAgents } from "./vault-agents"
+import { AGENTS_MODULE, secretReach } from "./vault-model"
+import { SecretsGroup, SecretSheet } from "./vault-secrets"
 
 const route = getRouteApi("/_app/settings/$pane")
 const returningConnectionKey = "agentpack.mcp.returning-connection"
@@ -51,11 +53,12 @@ export function ConnectionsPane() {
   return (
     <Pane title="Vault">
       <VaultAgents />
-      <Section title="MCP connections"><MCPConnections /></Section>
+      <MCPConnections />
     </Pane>
   )
 }
 
+// Remote MCP logins, then the shared secrets (env credentials).
 function MCPConnections() {
   const [adding, setAdding] = useState<string>()
   const [returning] = useState(returningConnection)
@@ -76,8 +79,9 @@ function MCPConnections() {
   useEffect(() => {
     if (connected) void queryClient.invalidateQueries({ queryKey: ["mcp-credentials"] })
   }, [connected, queryClient])
-  if (connections.error) return <LoadError what="MCP connections" error={connections.error} retry={() => void connections.refetch()} />
-  if (!connections.data) return <RowSkeleton lines={2} />
+  const section = (children: ReactNode) => <Section title="MCP connections">{children}</Section>
+  if (connections.error) return section(<LoadError what="MCP connections" error={connections.error} retry={() => void connections.refetch()} />)
+  if (!connections.data) return section(<RowSkeleton lines={2} />)
   const remote = connections.data.credentials.filter((connection) => connection.match)
   const servers = [...new Set(remote.map((connection) => connection.match))]
   const local = connections.data.credentials.filter((connection) => !connection.match)
@@ -98,28 +102,28 @@ function MCPConnections() {
     void navigate({ replace: true, search: (previous) => ({ ...previous, callback: undefined, oauth_login: undefined, connection: undefined }) })
   }
   return (
-    <div className="flex flex-col gap-(--s7)">
-      {feedback && !target && <Banner tone={feedback.retry ? "warn" : "info"} action={
-        <div className="flex flex-wrap gap-(--s2)">
-          {feedback.retry && <Button size="sm" onClick={() => { dismissFeedback(); setAdding("") }}>Try again</Button>}
-          <Button size="sm" variant="ghost" onClick={dismissFeedback}>{feedback.pending ? "Dismiss" : "Done"}</Button>
-        </div>
-      }>{feedback.message}</Banner>}
-      {connections.data.credentials.length === 0 && (
-        <Empty title="No connections">Add a server below, or run <code>agentpack mcp login</code>.</Empty>
-      )}
-      {servers.map((match) => <ServerGroup key={match} match={match} logins={loginsFor(match, remote)} onAdd={() => setAdding(match)} targetID={target?.id} feedback={feedback} dismissFeedback={dismissFeedback} />)}
-      {local.length > 0 && (
-        <FormGroup title="Local servers">
-          <ul>{local.map((connection) => <ConnectionRow key={connection.id} connection={connection} single />)}</ul>
-        </FormGroup>
-      )}
-      <div><Button onClick={() => setAdding("")}><Plus aria-hidden className="size-3.5" />Add connection…</Button></div>
-      <Sheet open={adding !== undefined} onOpenChange={(open) => !open && setAdding(undefined)}>
-        {adding !== undefined && <AddConnection key={adding} initialURL={adding} remote={remote} callbackURL={connections.data.callbackURL} onDone={() => setAdding(undefined)} />}
-      </Sheet>
-      {connections.data.credentials.some((connection) => connection.kind === "oauth") && <RevokeAll />}
-    </div>
+    <>
+      {section(<div className="flex flex-col gap-(--s7)">
+        {feedback && !target && <Banner tone={feedback.retry ? "warn" : "info"} action={
+          <div className="flex flex-wrap gap-(--s2)">
+            {feedback.retry && <Button size="sm" onClick={() => { dismissFeedback(); setAdding("") }}>Try again</Button>}
+            <Button size="sm" variant="ghost" onClick={dismissFeedback}>{feedback.pending ? "Dismiss" : "Done"}</Button>
+          </div>
+        }>{feedback.message}</Banner>}
+        {remote.length === 0 && (
+          <Empty title="No connections">Add a server below, or run <code>agentpack mcp login</code>.</Empty>
+        )}
+        {servers.map((match) => <ServerGroup key={match} match={match} logins={loginsFor(match, remote)} onAdd={() => setAdding(match)} targetID={target?.id} feedback={feedback} dismissFeedback={dismissFeedback} />)}
+        <div><Button onClick={() => setAdding("")}><Plus aria-hidden className="size-3.5" />Add connection…</Button></div>
+        <Sheet open={adding !== undefined} onOpenChange={(open) => !open && setAdding(undefined)}>
+          {adding !== undefined && <AddConnection key={adding} initialURL={adding} remote={remote} callbackURL={connections.data.callbackURL} onDone={() => setAdding(undefined)} />}
+        </Sheet>
+        {connections.data.credentials.some((connection) => connection.kind === "oauth") && <RevokeAll />}
+      </div>)}
+      <SecretsGroup secrets={local}>
+        {local.map((connection) => <ConnectionRow key={connection.id} connection={connection} single />)}
+      </SecretsGroup>
+    </>
   )
 }
 
@@ -143,6 +147,8 @@ function ConnectionRow({ connection, single, first = false, feedback, dismissFee
   const queryClient = useQueryClient()
   const [removing, setRemoving] = useState(false)
   const [revoking, setRevoking] = useState("")
+  const [replacing, setReplacing] = useState(false)
+  const secret = connection.kind === "env"
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["mcp-credentials"] })
   const remove = useMutation<unknown, Error, void>({
     mutationFn: () => api(`/api/mcp/credentials/${encodeURIComponent(connection.id)}`, { method: "DELETE" }),
@@ -162,22 +168,25 @@ function ConnectionRow({ connection, single, first = false, feedback, dismissFee
     onError: (error) => hud.error(`Couldn't reconnect ${connection.label}: ${errorText(error)}`, () => reconnect.mutate()),
   })
   const problem = connection.status === "needs_login"
-  const kind = { oauth: "Signed in", header: "Token header", env: "Variable" }[connection.kind] ?? connection.kind
-  const plugins = connection.plugins.map((module) => module.split("/").pop() ?? module)
+  const kind = { oauth: "Signed in", header: "Token header" }[connection.kind] ?? connection.kind
+  const plugins = connection.plugins.filter((module) => module !== AGENTS_MODULE).map((module) => module.split("/").pop() ?? module)
+  const moduleName = (module: string) => (module === AGENTS_MODULE ? "agent access" : module.split("/").pop())
   return (
     <li ref={feedback ? (element) => element?.scrollIntoView({ block: "nearest" }) : undefined} className="group/row flex min-w-0 items-center gap-(--s4) border-t-[0.5px] border-(--sep-soft) px-(--s5) py-(--s3) first:border-t-0">
-      <LoginGlyph login={problem ? "needs_login" : "connected"} />
+      {!secret && <LoginGlyph login={problem ? "needs_login" : "connected"} />}
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-(--s3)">
           <span className="truncate font-medium">{connection.label}</span>
           {first && !single && <Tag>Default</Tag>}
         </div>
-        <p className={problem ? "truncate text-(length:--fs-xs) text-(--danger-word)" : "truncate text-(length:--fs-xs) text-(--fg2)"}>
+        {secret ? <>
+          <p className="break-words text-(length:--fs-xs) text-(--fg2)">{connection.names.join(", ")}</p>
+          <p className="text-(length:--fs-xs) text-(--fg2)">{secretReach(connection.plugins)}</p>
+        </> : <p className={problem ? "truncate text-(length:--fs-xs) text-(--danger-word)" : "truncate text-(length:--fs-xs) text-(--fg2)"}>
           {problem ? "Needs sign-in" : `${kind} · shared with every machine`}
-          {!connection.match && ` · credential = "${connection.label}" · ${connection.names.join(", ")}`}
-        </p>
+        </p>}
         {plugins.length > 0 && (
-          <p className="truncate text-(length:--fs-xs) text-(--fg3)" title={connection.plugins.join(", ")}>
+          <p className="truncate text-(length:--fs-xs) text-(--fg3)" title={connection.plugins.filter((module) => module !== AGENTS_MODULE).join(", ")}>
             {`${plugins.join(", ")} may use it`}
           </p>
         )}
@@ -192,11 +201,12 @@ function ConnectionRow({ connection, single, first = false, feedback, dismissFee
       )}
       <Menu>
         <MenuTrigger render={<RowMoreButton aria-label={`${connection.label} actions`} className="opacity-100 data-popup-open:opacity-100" />} />
-        <MenuContent align="end">
+        <MenuContent align="end" className="w-max">
           {connection.kind === "oauth" && <MenuItem onClick={() => reconnect.mutate()}>Reconnect…</MenuItem>}
+          {secret && <MenuItem onClick={() => setReplacing(true)}>Replace values…</MenuItem>}
           {connection.plugins.length > 0 && <DropdownMenuSeparator className="mx-[11px] my-[5px]" />}
           {connection.plugins.map((module) => (
-            <MenuItem key={module} onClick={() => setRevoking(module)}>{`Revoke ${module.split("/").pop()}…`}</MenuItem>
+            <MenuItem key={module} onClick={() => setRevoking(module)}>{`Revoke ${moduleName(module)}…`}</MenuItem>
           ))}
           <DropdownMenuSeparator className="mx-[11px] my-[5px]" />
           <MenuItem danger onClick={() => setRemoving(true)}>Remove…</MenuItem>
@@ -204,16 +214,23 @@ function ConnectionRow({ connection, single, first = false, feedback, dismissFee
       </Menu>
       <ConfirmAlert open={Boolean(revoking)} onOpenChange={(open) => !open && setRevoking("")}>
         {revoking && <ConfirmAlertContent
-          title={`Revoke ${revoking.split("/").pop()}?`}
-          description={`Remove its approval to use ${connection.label} on every machine. You can approve it again the next time a project requests this login.`}
+          title={`Revoke ${moduleName(revoking)}?`}
+          description={revoking === AGENTS_MODULE
+            ? `Agents on every machine stop receiving ${connection.label} at their next start. Values they already printed are not erased.`
+            : `Remove its approval to use ${connection.label} on every machine. You can approve it again the next time a project requests this login.`}
           destructiveLabel="Revoke approval"
           onConfirm={() => { revoke.mutate(revoking); setRevoking("") }}
         />}
       </ConfirmAlert>
+      <Sheet open={replacing} onOpenChange={setReplacing}>
+        {replacing && <SecretSheet secret={connection} onDone={() => setReplacing(false)} />}
+      </Sheet>
       <ConfirmAlert open={removing} onOpenChange={setRemoving}>
         {removing && <ConfirmAlertContent
           title={connection.match ? `Remove the ${serverName(connection.match)} login “${connection.label}”?` : `Remove “${connection.label}”?`}
-          description={first && !single
+          description={secret
+            ? "Every machine stops receiving these variables at the next start. Copies already printed or replicated are not erased: rotate the values at their providers."
+            : first && !single
             ? "Agents on every machine lose this login at their next launch, and the next login becomes the default. A signed-in token is also revoked where the server supports it."
             : "Agents on every machine lose this login at their next launch. A signed-in token is also revoked where the server supports it."}
           destructiveLabel="Remove"
