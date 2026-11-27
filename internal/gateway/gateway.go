@@ -456,7 +456,7 @@ func (g *Gateway) serveRoute(row route, handler http.Handler) http.Handler {
 			}
 		}
 		if node := r.URL.Query().Get("node"); node != "" && strings.HasPrefix(r.URL.Path, "/api/") &&
-			!(r.Method == http.MethodGet && meshListRoute(r.URL.Path) && g.peer(node).Mesh) {
+			!(r.Method == http.MethodGet && meshListRoute(r.URL.Path) && (isSessionHistory(r) || g.peer(node).Mesh)) {
 			w.Header().Del("Cache-Control") // the peer's Cache-Control passes through unchanged
 			g.tailnet.Proxy(w, r, g.store, g, node)
 			return

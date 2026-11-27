@@ -10,7 +10,7 @@ import type { SessionInfo } from "@/lib/api-types"
 import { basename } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import type { ListedSession } from "./group"
-import { projectHistoryKey, sessionsQuery } from "./queries"
+import { projectHistoryKey, sessionHistoryKey, sessionsQuery } from "./queries"
 
 export type SaveTarget = Pick<ListedSession, "machine" | "machineName" | "directory" | "mode">
 export type SheetState = { kind: "rename"; row: ListedSession }
@@ -57,6 +57,7 @@ function RenameForm({ row, onDone }: { row: ListedSession; onDone: () => void })
       setListedName(updated.name)
       queryClient.setQueriesData<SessionInfo[]>({ queryKey: projectHistoryKey }, (items) => withName(items, updated.name))
       void queryClient.invalidateQueries({ queryKey: projectHistoryKey })
+      void queryClient.invalidateQueries({ queryKey: sessionHistoryKey })
       void queryClient.invalidateQueries({ queryKey: ["m", LOCAL, "session-row", row.machine, row.id] })
       hud.success("Session renamed")
       onDone()
