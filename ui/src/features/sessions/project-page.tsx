@@ -28,6 +28,7 @@ import { projectsQuery, selectedProjectQuery, sessionsQuery } from "./queries"
 // One change to PUT /api/projects/settings. The endpoint takes a batch; here every gesture sends its own.
 type Patch = {
   remove_mcp?: string[]
+  rename_mcp?: Record<string, string>
   servers?: MCPServerInput[]
   logins?: Record<string, string>
   plugin_logins?: Record<string, { module: string; url: string; credential: string }>
@@ -39,6 +40,7 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const shortSource = (module: string) => module.replace(/^github\.com\//i, "")
 const moduleOf = (spec: string) => spec.split("@")[0]!.toLowerCase()
 // A server is named for agents by the project; anything that runs it from a package manager or a container is a command.
+const mcpNamePattern = /^[a-z0-9_-]+$/i
 const runner = /^(npx|bunx|uvx|uv|pnpm|yarn|bun|deno|docker|node|python3?)\s/
 
 // A new credential can reach the project's machine just after the browser's OAuth callback, so a
@@ -83,7 +85,7 @@ export function serverFrom(input: string, name: string, taken: string[]): MCPSer
   }
   const base = name.trim() || server.name.replace(/[^\w-]+/g, "-") || "server"
   let unique = base
-  for (let number = 2; !name.trim() && taken.includes(unique); number++) unique = `${base}-${number}`
+  for (let number = 2; !name.trim() && taken.some((existing) => existing.toLowerCase() === unique.toLowerCase()); number++) unique = `${base}-${number}`
   return { ...server, name: unique }
 }
 
@@ -157,20 +159,25 @@ export function ProjectPage({ machine, directory, install, find }: { machine: st
   }
 
   // `undo` reverses the change from the activity viewer, as Close does.
-  function apply(key: string, patch: Patch, outcome?: { message: string; undo: Patch }, afterSignIn = false) {
-    changeProject(key, () => putSettings(machine, directory, patch, afterSignIn), failure, outcome && {
+  function apply(key: string, patch: Patch, outcome?: { message: string; undo: Patch }, afterSignIn = false, done?: () => void) {
+    // An older gateway refuses the unknown rename_mcp field as an invalid request.
+    const describe = (error: unknown) => patch.rename_mcp && error instanceof ApiError && error.status === 400 && error.message === "invalid request"
+      ? `Update agentpack on ${machineName} to rename servers`
+      : failure(error)
+    changeProject(key, () => putSettings(machine, directory, patch, afterSignIn), describe, outcome && {
       message: outcome.message,
       undo: () => putSettings(machine, directory, outcome.undo),
-    })
+    }, done)
   }
 
-  function changeProject(key: string, change: () => Promise<unknown>, describeFailure: (error: unknown) => string, outcome?: { message: string; undo: () => Promise<unknown> }) {
+  function changeProject(key: string, change: () => Promise<unknown>, describeFailure: (error: unknown) => string, outcome?: { message: string; undo: () => Promise<unknown> }, done?: () => void) {
     setBusy((current) => ({ ...current, [key]: true }))
     setErrors((current) => without(current, key))
     void change().then(
       async () => {
         await refresh()
         settle(key)
+        done?.()
         if (outcome) hud.success(outcome.message, () => void outcome.undo().then(refresh, (error: unknown) => hud.error(failure(error))))
       },
       (error: unknown) => settle(key, describeFailure(error)),
@@ -262,11 +269,12 @@ export function ProjectPage({ machine, directory, install, find }: { machine: st
 
   // A found entry turns into its installed row in place; a pasted one clears the search, since its new row is
   // named differently from what was typed. A failure stays on the row with the text kept.
-  function installEntry(entry: Entry) {
+  function installEntry(entry: Entry, namedServer?: MCPServerInput) {
+    const server = namedServer ?? entry.add
     const { key } = entry
     const done = () => { if (entry.pasted) setText("") }
     // The install routes, not a settings edit: they resolve and record the pin (npm version, commit) in pack.lock.
-    const install = entry.add ? installMCP(machine, directory, entry.add, false) : entry.spec ? installPackage(machine, directory, entry.spec, false) : undefined
+    const install = server ? installMCP(machine, directory, server, false) : entry.spec ? installPackage(machine, directory, entry.spec, false) : undefined
     if (install) {
       setBusy((current) => ({ ...current, [key]: true }))
       setErrors((current) => without(current, key))
@@ -274,7 +282,7 @@ export function ProjectPage({ machine, directory, install, find }: { machine: st
         await refresh()
         settle(key)
         done()
-      }, (error: unknown) => settle(key, `Couldn't install ${entry.name}. ${failure(error)}`))
+      }, (error: unknown) => settle(key, `Couldn't install ${server?.name ?? entry.name}. ${failure(error)}`))
     }
   }
 
@@ -337,17 +345,16 @@ export function ProjectPage({ machine, directory, install, find }: { machine: st
     if (server) {
       const on = toggled[key] ?? !server.disabled
       const { url } = server
-      if (editing === server.name && url) {
+      const manifest = server.source === "manifest"
+      if (manifest && editing === server.name) {
         return <ServerForm key={key} server={server} busy={busy[key]} error={errors[key]} onCancel={() => setEditing(undefined)} onRemove={() => removeServer(server)}
-          onSave={(next) => {
-            setEditing(undefined)
-            apply(key, { servers: [{ ...next, type: server.transport }] })
+          onSave={(name, next) => {
+            const rename_mcp = name !== server.name ? { [server.name]: name } : undefined
+            if (!rename_mcp && !next) return setEditing(undefined)
+            apply(key, { rename_mcp, servers: next ? [{ ...next, type: server.transport }] : [] }, undefined, false, () => setEditing(undefined))
           }} />
       }
-      const manifest = server.source === "manifest"
-      const action = !manifest ? undefined
-        : url ? <Button type="button" variant="ghost" size="sm" aria-label={`Edit ${server.name}`} onClick={() => setEditing(server.name)}>Edit…</Button>
-        : <Button type="button" variant="ghost" size="sm" aria-label={`Remove ${server.name}`} onClick={() => removeServer(server)}>Remove</Button>
+      const action = manifest && <Button type="button" variant="ghost" size="sm" aria-label={`Edit ${server.name}`} onClick={() => setEditing(server.name)}>Edit…</Button>
       return (
         <Row key={key} {...common} dim={!on} action={action}>
           {url && on && <ServerLogin server={server} url={url} credentials={credentials} canConnect={connections.isSuccess}
@@ -358,6 +365,10 @@ export function ProjectPage({ machine, directory, install, find }: { machine: st
           }} />
         </Row>
       )
+    }
+    if (entry.pasted && entry.add) {
+      const server = entry.add
+      return <PastedServerRow key={text} {...common} name={server.name} taken={taken} onInstall={(name) => installEntry(entry, { ...server, name })} />
     }
     if (entry.included) return <Row key={key} {...common}><span className="text-(length:--fs-sm) text-(--fg2)">Included by a plugin</span></Row>
     return <Row key={key} {...common}><Button type="button" size="sm" disabled={busy[key]} aria-label={`Install ${entry.name}`} onClick={() => installEntry(entry)}>{busy[key] ? "Installing…" : "Install"}</Button></Row>
@@ -456,7 +467,7 @@ export function ProjectPage({ machine, directory, install, find }: { machine: st
 // Two lines: the name with what it is and where it comes from, then its description. `action` is the rarer
 // control and shows on hover or focus (on touch, once the row is tapped); `children` always show.
 function Row({ title, meta, tooltip, description, dim, busy, error, action, children }: {
-  title: string
+  title: ReactNode
   meta?: string
   tooltip?: string
   description?: string
@@ -524,34 +535,67 @@ function ServerLogin({ server, url, credentials, canConnect, pending, onChoose, 
   )
 }
 
-// Edits a project server's URL in place of its row; Remove sits beside it.
+function PastedServerRow({ name, taken, onInstall, ...row }: {
+  name: string
+  taken: string[]
+  onInstall: (name: string) => void
+  meta?: string
+  description?: string
+  busy?: boolean
+  error?: string
+}) {
+  const [draft, setDraft] = useState(name)
+  const [problem, setProblem] = useState("")
+  const next = draft.trim()
+  return <Row {...row} error={problem || row.error}
+    title={<Input aria-label="Server name" className="max-w-36" disabled={row.busy} value={draft} onChange={(event) => {
+      setDraft(event.target.value)
+      setProblem("")
+    }} />}>
+    <Button type="button" size="sm" disabled={row.busy} aria-label={`Install ${next || name}`} onClick={() => {
+      if (!mcpNamePattern.test(next)) return setProblem("Use only letters, numbers, hyphens, or underscores.")
+      if (taken.some((existing) => existing.toLowerCase() === next.toLowerCase())) return setProblem("That server name is already in use.")
+      onInstall(next)
+    }}>{row.busy ? "Installing…" : "Install"}</Button>
+  </Row>
+}
+
+// Edits a project server in place of its row.
 function ServerForm({ server, busy, error, onCancel, onSave, onRemove }: {
   server: ProjectMCP
   busy?: boolean
   error?: string
   onCancel: () => void
-  onSave: (server: MCPServerInput) => void
+  onSave: (name: string, server?: MCPServerInput) => void
   onRemove: () => void
 }) {
+  const [name, setName] = useState(server.name)
   const [source, setSource] = useState(server.url ?? "")
   const [problem, setProblem] = useState("")
 
   function submit(event: FormEvent) {
     event.preventDefault()
-    const next = serverFrom(source, server.name, [])
-    const message = next?.url ? "" : "Enter an http or https URL."
+    const trimmed = name.trim()
+    const changedURL = server.url && source.trim() !== server.url
+    const next = changedURL ? serverFrom(source, trimmed, []) : undefined
+    const message = trimmed !== server.name && !mcpNamePattern.test(trimmed) ? "Use only letters, numbers, hyphens, or underscores."
+      : changedURL && !next?.url ? "Enter an http or https URL." : ""
     setProblem(message)
-    if (next && !message) onSave(next)
+    if (!message) onSave(trimmed, next)
   }
 
   return (
     <form onSubmit={submit} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onCancel() } }}
       aria-label={`Edit ${server.name}`} className="flex flex-col gap-(--s3) border-t-[0.5px] border-(--sep-soft) bg-(--raised) px-(--s5) py-(--s4) first:border-t-0">
-      <p className="font-medium">{server.name}</p>
-      <Input autoFocus disabled={busy} aria-label="URL" value={source} onChange={(event) => setSource(event.target.value)} placeholder="https://…" />
+      <label className="flex flex-col gap-(--s1)">Name
+        <Input autoFocus disabled={busy} value={name} onChange={(event) => setName(event.target.value)} />
+      </label>
+      {server.url && <label className="flex flex-col gap-(--s1)">URL
+        <Input disabled={busy} value={source} onChange={(event) => setSource(event.target.value)} placeholder="https://…" />
+      </label>}
       {(problem || error) && <FieldError>{problem || error}</FieldError>}
       <div className="flex items-center gap-(--s3)">
-        <Button type="button" size="sm" variant="ghost" className="text-(--danger-word)" onClick={onRemove}>Remove server</Button>
+        <Button type="button" size="sm" variant="ghost" className="text-(--danger-word)" disabled={busy} onClick={onRemove}>Remove server</Button>
         <Button type="button" size="sm" className="ms-auto" onClick={onCancel}>Cancel</Button>
         <Button type="submit" size="sm" variant="primary" disabled={busy}>Save</Button>
       </div>

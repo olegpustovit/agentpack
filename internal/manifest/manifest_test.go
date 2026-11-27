@@ -146,6 +146,27 @@ func TestDependencyAppendPreservesEveryUnrelatedByte(t *testing.T) {
 	}
 }
 
+func TestRenameMCPPreservesInlineManifest(t *testing.T) {
+	root := t.TempDir()
+	const original = `mcp = { servers = { "old" = { command = "tool" } }, enabled = { "old" = false } }
+modes = { default = { disable = ['mcp: old', 'package:github.com/acme/tools'] } }
+`
+	const want = `mcp = { servers = { new = { command = "tool" } }, enabled = { new = false } }
+modes = { default = { disable = ["mcp:new", 'package:github.com/acme/tools'] } }
+`
+	path := filepath.Join(root, "agentpack.toml")
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RenameMCPServers(root, map[string]string{"old": "new"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != want {
+		t.Fatalf("renamed manifest: %s %v", data, err)
+	}
+}
+
 func TestMCPReplacementPreservesEveryUnrelatedByte(t *testing.T) {
 	root := t.TempDir()
 	original := "name = \"proj\"\n\n[mcp.servers]\n# keep before\nserver = { command = \"old\" } # replaced\n# keep after\n\n[other]\nodd   =   true # exact\n"

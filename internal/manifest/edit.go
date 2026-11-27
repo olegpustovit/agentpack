@@ -86,6 +86,84 @@ func nodeKey(node *unstable.Node) []string {
 	return key
 }
 
+// Edit keys and values in place to preserve server settings and comments.
+func editMCPSettings(data []byte, names, urls map[string]string) ([]byte, error) {
+	type edit struct {
+		raw  unstable.Range
+		text string
+	}
+	var edits []edit
+	rewrite := func(table []string, node *unstable.Node) []string {
+		keys := node.Key()
+		path := append([]string(nil), table...)
+		for keys.Next() {
+			key := keys.Node()
+			path = append(path, string(key.Data))
+			if len(path) == 3 && path[0] == "mcp" && (path[1] == "servers" || path[1] == "enabled") {
+				if name, ok := names[path[2]]; ok {
+					edits = append(edits, edit{key.Raw, quoteKeySegment(name)})
+				}
+			}
+		}
+		return path
+	}
+	var assignment func([]string, *unstable.Node)
+	assignment = func(table []string, node *unstable.Node) {
+		path := rewrite(table, node)
+		value := node.Value()
+		switch value.Kind {
+		case unstable.String:
+			if len(path) == 4 && path[0] == "mcp" && path[1] == "servers" && path[3] == "url" {
+				if url, ok := urls[path[2]]; ok {
+					edits = append(edits, edit{value.Raw, quoteString(url)})
+				}
+			}
+		case unstable.InlineTable:
+			children := value.Children()
+			for children.Next() {
+				assignment(path, children.Node())
+			}
+		case unstable.Array:
+			if len(path) != 3 || path[0] != "modes" || (path[2] != "enable" && path[2] != "disable") {
+				return
+			}
+			items := value.Children()
+			for items.Next() {
+				item := items.Node()
+				selector, err := mode.ParseSelector(string(item.Data))
+				if name, ok := names[selector.MCPName]; err == nil && selector.Kind == mode.SelectorMCP && ok {
+					edits = append(edits, edit{item.Raw, quoteString("mcp:" + name)})
+				}
+			}
+		}
+	}
+
+	var parser unstable.Parser
+	parser.Reset(data)
+	var table []string
+	for parser.NextExpression() {
+		node := parser.Expression()
+		switch node.Kind {
+		case unstable.Table, unstable.ArrayTable:
+			table = rewrite(nil, node)
+		case unstable.KeyValue:
+			assignment(table, node)
+		}
+	}
+	if err := parser.Error(); err != nil {
+		return nil, fmt.Errorf("parse editable TOML: %w", err)
+	}
+	var result bytes.Buffer
+	end := 0
+	for _, edit := range edits {
+		result.Write(data[end:edit.raw.Offset])
+		result.WriteString(edit.text)
+		end = int(edit.raw.Offset + edit.raw.Length)
+	}
+	result.Write(data[end:])
+	return result.Bytes(), nil
+}
+
 func insertAssignment(data []byte, table []string, key string, value string, onlyIfMissing bool) ([]byte, error) {
 	expressions, err := parseDocument(data)
 	if err != nil {

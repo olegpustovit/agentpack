@@ -153,6 +153,103 @@ func TestSaveNetworkProjectRemovesOnlyDirectDependencies(t *testing.T) {
 	}
 }
 
+func TestSaveNetworkProjectRenamesMCP(t *testing.T) {
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	root := t.TempDir()
+	const original = `mcp = { servers = { docs = { url = "https://example.com/mcp", type = "http" }, shell = { command = "bunx", args = ["tool"] } }, enabled = { docs = false } } # preserve this setting
+
+[modes.lean]
+base = "none"
+enable = ["mcp:docs", "mcp:shell"]
+
+[modes.quiet]
+disable = ["mcp:docs"] # preserve this selector
+`
+	if err := os.WriteFile(paths.ManifestPath(root), []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, ".agents"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".agents", "mcp.json"), []byte(`{"external":{"command":"example"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	project, err := manifest.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := mcp.Describe("shell", mcp.Entry{Source: mcp.Manifest, Server: project.MCP.Servers["shell"]})
+	pin.Status, pin.Version, pin.Integrity = lockfile.MCPPinned, "1.2.3", "sha512-example"
+	lock := lockfile.EmptyForProject(root)
+	lock.MCPServers = []lockfile.MCPServer{pin}
+	if err := lock.Save(root); err != nil {
+		t.Fatal(err)
+	}
+	const url = "https://example.com/mcp"
+	loginPath, err := paths.ProjectMCPLoginsPath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mcp.SaveProjectLogin(loginPath, url, "work"); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := NewRunner()
+	for _, rejected := range []struct{ old, name, message string }{
+		{"docs", "bad name", "must contain only"},
+		{"docs", "SHELL", "already in use"},
+		{"external", "owned", "project manifest"},
+	} {
+		err := runner.saveNetworkProject(t.Context(), gateway.ProjectSettingsInput{
+			Directory: root, RenameMCP: map[string]string{rejected.old: rejected.name},
+		})
+		var rejection gateway.ProjectMCPRenameError
+		if !errors.As(err, &rejection) || !strings.Contains(rejection.Error(), rejected.message) {
+			t.Fatalf("renaming %q to %q: %v", rejected.old, rejected.name, err)
+		}
+	}
+	unchanged, err := os.ReadFile(paths.ManifestPath(root))
+	if err != nil || string(unchanged) != original {
+		t.Fatalf("rejected rename changed manifest: %s %v", unchanged, err)
+	}
+
+	if err := runner.saveNetworkProject(t.Context(), gateway.ProjectSettingsInput{
+		Directory: root, RenameMCP: map[string]string{"docs": "handbook", "shell": "tools"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(paths.ManifestPath(root))
+	want := strings.NewReplacer("docs", "handbook", "shell", "tools").Replace(original)
+	if err != nil || string(data) != want {
+		t.Fatalf("renamed manifest: %s %v", data, err)
+	}
+	logins, err := mcp.ReadProjectLogins(root)
+	if err != nil || logins.URLs[url] != "work" {
+		t.Fatalf("renamed server lost the URL's login: %+v %v", logins, err)
+	}
+	locked, err := runner.Service.LoadLock(root)
+	if err != nil || len(locked.MCPServers) != 1 || locked.MCPServers[0].Name != "tools" || locked.MCPServers[0].Version != pin.Version {
+		t.Fatalf("rename lost the command server's lock pin: %+v %v", locked.MCPServers, err)
+	}
+
+	const nextURL = "https://example.org/mcp"
+	if err := runner.saveNetworkProject(t.Context(), gateway.ProjectSettingsInput{
+		Directory: root, RenameMCP: map[string]string{"handbook": "manual"},
+		Servers: []registry.MCPServerInput{{Name: "manual", URL: nextURL, Type: "http"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	project, err = manifest.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := project.MCP.Servers["manual"]
+	enabled, hasOverride := project.MCP.Enabled["manual"]
+	if server.URL == nil || *server.URL != nextURL || !hasOverride || enabled {
+		t.Fatalf("combined rename and URL update: %+v, enabled settings %+v", server, project.MCP.Enabled)
+	}
+}
+
 func TestSaveNetworkProjectChecksThePluginMCPSource(t *testing.T) {
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	root := t.TempDir()
@@ -174,6 +271,7 @@ func TestSaveNetworkProjectChecksThePluginMCPSource(t *testing.T) {
 	if err := runner.saveNetworkProject(t.Context(), input); !errors.Is(err, gateway.ErrProjectPluginServerChanged) {
 		t.Fatalf("wrong module: %v", err)
 	}
+
 	if _, err := os.Stat(paths.ManifestPath(root)); !os.IsNotExist(err) {
 		t.Fatalf("failed approval left changes in the manifest: %v", err)
 	}
@@ -181,6 +279,12 @@ func TestSaveNetworkProjectChecksThePluginMCPSource(t *testing.T) {
 	input.PluginLogins["linear"] = login
 	if err := runner.saveNetworkProject(t.Context(), input); err != nil {
 		t.Fatal(err)
+	}
+	var rejection gateway.ProjectMCPRenameError
+	if err := runner.saveNetworkProject(t.Context(), gateway.ProjectSettingsInput{
+		Directory: root, RenameMCP: map[string]string{"linear": "work"},
+	}); !errors.As(err, &rejection) || !strings.Contains(rejection.Error(), "project manifest") {
+		t.Fatalf("renaming a plugin server: %v", err)
 	}
 	logins, err := mcp.ReadProjectLogins(root)
 	if err != nil || logins.Plugins["linear"] != login {

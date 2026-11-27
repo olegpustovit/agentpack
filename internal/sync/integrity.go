@@ -292,7 +292,7 @@ func (service Service) reportMCPServers(lock lockfile.PackLock) {
 // resolving packages. With pin set it also records servers that are new or
 // changed (`mcp add`); without it it only drops records that no longer match
 // (`mcp remove`), which needs no network.
-func (service Service) RefreshMCPRecords(ctx context.Context, projectRoot string, pin, allowUnpinned bool) error {
+func (service Service) RefreshMCPRecords(ctx context.Context, projectRoot string, pin, allowUnpinned bool, renames map[string]string) error {
 	project, err := manifest.Load(projectRoot)
 	if err != nil {
 		return err
@@ -307,6 +307,12 @@ func (service Service) RefreshMCPRecords(ctx context.Context, projectRoot string
 	pinMode := mcpCarry
 	if pin {
 		pinMode = mcpResolve
+	}
+	for index := range lock.MCPServers {
+		record := &lock.MCPServers[index]
+		if name, ok := renames[record.Name]; ok && record.Source == string(mcp.Manifest) {
+			record.Name = name
+		}
 	}
 	records, err := service.settleMCPServers(ctx, projectRoot, project, lock, lock.MCPServers, pinMode, allowUnpinned, false)
 	if err != nil {

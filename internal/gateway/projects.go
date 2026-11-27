@@ -355,11 +355,17 @@ type ProjectSettingsInput struct {
 	Add          []string                   `json:"add"`
 	RemoveModule string                     `json:"-"`
 	Servers      []registry.MCPServerInput  `json:"servers"`
+	RenameMCP    map[string]string          `json:"rename_mcp,omitempty"`
 	RemoveMCP    []string                   `json:"remove_mcp"`
 	Logins       map[string]string          `json:"logins"`
 	PluginLogins map[string]mcp.PluginLogin `json:"plugin_logins"`
 	MCPEnabled   map[string]bool            `json:"mcp_enabled"`
 }
+
+// ProjectMCPRenameError carries a user-facing rejection from the settings transaction.
+type ProjectMCPRenameError string
+
+func (err ProjectMCPRenameError) Error() string { return string(err) }
 
 var ErrProjectPluginServerChanged = errors.New("the MCP server changed. Reopen Project Settings and choose it again")
 var ErrPackageNotDirect = errors.New("package is not a direct dependency of this project")
@@ -427,6 +433,11 @@ func (g *Gateway) applyProjectSettings(w http.ResponseWriter, r *http.Request, i
 	if err := g.options.SaveProject(r.Context(), input); err != nil {
 		if errors.Is(err, ErrPackageNotDirect) {
 			badRequest(w, ErrPackageNotDirect.Error())
+			return
+		}
+		var renameError ProjectMCPRenameError
+		if errors.As(err, &renameError) {
+			badRequest(w, renameError.Error())
 			return
 		}
 		if errors.Is(err, ErrProjectPluginServerChanged) {

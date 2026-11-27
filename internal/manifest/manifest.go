@@ -190,6 +190,31 @@ func AddMCPServer(projectRoot, name string, server mcp.Server) error {
 	})
 }
 
+// ValidMCPName reports whether a name is a bare manifest key.
+func ValidMCPName(name string) bool {
+	return quoteKeySegment(name) == name
+}
+
+func RenameMCPServers(projectRoot string, names map[string]string) error {
+	return mutateMCPSettings(projectRoot, names, nil)
+}
+
+// UpdateMCPServerURL changes the URL of an existing remote server in place.
+func UpdateMCPServerURL(projectRoot, name, url string) error {
+	return mutateMCPSettings(projectRoot, nil, map[string]string{name: url})
+}
+
+func mutateMCPSettings(projectRoot string, names, urls map[string]string) error {
+	return mutateDocument(projectRoot, func(data []byte) ([]byte, error) {
+		updated, err := editMCPSettings(data, names, urls)
+		if err != nil {
+			return nil, err
+		}
+		_, err = parse(updated, projectRoot)
+		return updated, err
+	})
+}
+
 func SetMCPEnabled(projectRoot string, enabled map[string]bool) error {
 	return mutateDocument(projectRoot, func(data []byte) ([]byte, error) {
 		for _, name := range slices.Sorted(maps.Keys(enabled)) {

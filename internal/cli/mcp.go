@@ -40,7 +40,7 @@ func (runner Runner) runMCP(ctx context.Context, root string, invocation Invocat
 		if !removed {
 			return fmt.Errorf("no MCP server named %q in agentpack.toml [mcp.servers]", args[0])
 		}
-		return runner.Service.RefreshMCPRecords(ctx, root, false, false)
+		return runner.Service.RefreshMCPRecords(ctx, root, false, false, nil)
 	case "list":
 		if err := noArgs(args); err != nil {
 			return err
@@ -90,7 +90,7 @@ func (runner Runner) addMCPServer(ctx context.Context, root, name string, server
 	if !quiet {
 		fmt.Fprintf(runner.Stdout, "Added MCP server %q to agentpack.toml\n", name)
 	}
-	return runner.Service.RefreshMCPRecords(ctx, root, true, allowUnpinned)
+	return runner.Service.RefreshMCPRecords(ctx, root, true, allowUnpinned, nil)
 }
 
 // mcpServerFrom applies parseMCPAdd's rules to the gateway's structured input.
