@@ -30,6 +30,7 @@ func (g *Gateway) registerProjects(mux routeRegistrar) {
 	mux.HandleFunc("POST /api/folders", serveCreateFolder)
 	mux.HandleFunc("GET /api/folders/found", g.serveFoundFolders)
 	mux.HandleFunc("POST /api/packages", g.serveInstallPackage)
+	mux.HandleFunc("DELETE /api/packages", g.serveRemovePackage)
 	mux.HandleFunc("POST /api/mcp/servers", g.serveInstallMCP)
 }
 
@@ -109,6 +110,25 @@ func (g *Gateway) serveInstallPackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	network.WriteJSON(w, map[string]bool{"installed": true})
+}
+
+func (g *Gateway) serveRemovePackage(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Directory string `json:"directory"`
+		Module    string `json:"module"`
+	}
+	if !network.ReadJSON(w, r, &input) {
+		return
+	}
+	if !g.knownDirectory(r.Context(), input.Directory) {
+		http.Error(w, "project folder not found", http.StatusNotFound)
+		return
+	}
+	if strings.TrimSpace(input.Module) == "" {
+		badRequest(w, "choose a direct package dependency")
+		return
+	}
+	g.applyProjectSettings(w, r, ProjectSettingsInput{Directory: input.Directory, RemoveModule: input.Module})
 }
 
 func (g *Gateway) serveInstallMCP(w http.ResponseWriter, r *http.Request) {
@@ -333,7 +353,7 @@ func projectRows(ctx context.Context, folders []network.RecentFolder, contents f
 type ProjectSettingsInput struct {
 	Directory    string                     `json:"directory"`
 	Add          []string                   `json:"add"`
-	Remove       []string                   `json:"remove"`
+	RemoveModule string                     `json:"-"`
 	Servers      []registry.MCPServerInput  `json:"servers"`
 	RemoveMCP    []string                   `json:"remove_mcp"`
 	Logins       map[string]string          `json:"logins"`
@@ -342,6 +362,7 @@ type ProjectSettingsInput struct {
 }
 
 var ErrProjectPluginServerChanged = errors.New("the MCP server changed. Reopen Project Settings and choose it again")
+var ErrPackageNotDirect = errors.New("package is not a direct dependency of this project")
 var ErrProjectReload = errors.New("project settings saved, but a session could not reload")
 
 func (g *Gateway) saveProjectSettings(w http.ResponseWriter, r *http.Request) {
@@ -395,11 +416,19 @@ func (g *Gateway) saveProjectSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	g.applyProjectSettings(w, r, input)
+}
+
+func (g *Gateway) applyProjectSettings(w http.ResponseWriter, r *http.Request, input ProjectSettingsInput) {
 	if g.options.SaveProject == nil {
 		http.Error(w, "project settings are unavailable on this machine", http.StatusServiceUnavailable)
 		return
 	}
 	if err := g.options.SaveProject(r.Context(), input); err != nil {
+		if errors.Is(err, ErrPackageNotDirect) {
+			badRequest(w, ErrPackageNotDirect.Error())
+			return
+		}
 		if errors.Is(err, ErrProjectPluginServerChanged) {
 			http.Error(w, ErrProjectPluginServerChanged.Error(), http.StatusConflict)
 			return
@@ -408,7 +437,11 @@ func (g *Gateway) saveProjectSettings(w http.ResponseWriter, r *http.Request) {
 			if event := obs.From(r.Context()); event != nil {
 				event.Fail(err)
 			}
-			http.Error(w, ErrProjectReload.Error()+". Save again to retry.", http.StatusBadGateway)
+			message := ErrProjectReload.Error() + ". Save again to retry."
+			if input.RemoveModule != "" {
+				message = "Package removed, but a session could not reload."
+			}
+			http.Error(w, message, http.StatusBadGateway)
 			return
 		}
 		fail(w, r, err)

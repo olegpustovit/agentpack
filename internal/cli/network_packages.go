@@ -196,12 +196,12 @@ func (runner Runner) saveNetworkProject(ctx context.Context, input gateway.Proje
 		if err != nil {
 			return err
 		}
-		for _, module := range input.Remove {
+		if module := input.RemoveModule; module != "" {
 			if project == nil {
-				continue
+				return gateway.ErrPackageNotDirect
 			}
 			if _, exists := project.Dependencies[module]; !exists {
-				continue
+				return gateway.ErrPackageNotDirect
 			}
 			if _, err := runner.Service.Remove(ctx, root, module); err != nil {
 				return err

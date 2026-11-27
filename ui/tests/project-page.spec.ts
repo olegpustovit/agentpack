@@ -79,3 +79,46 @@ test("a pasted MCP URL installs a custom server immediately", async ({ page }) =
   expect(requests.find(({ method, path }) => method === "POST" && path === "/api/mcp/servers")?.body)
     .toMatchObject({ directory, url, restart: false })
 })
+
+test("a project package can be removed and reinstalled from Activity", async ({ page }) => {
+  const requests = await mockAPI(page)
+  let present = true
+  await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow(directory, [], { packages: present ? [installed] : [] })] }))
+  await page.route("**/api/packages", (route) => {
+    const method = route.request().method()
+    if (method === "DELETE" || method === "POST") present = method === "POST"
+    return route.fallback()
+  })
+  await page.goto(projectURL)
+  const remove = page.getByRole("button", { name: "Remove Docs Local" })
+  await remove.click()
+  await expect(remove).toHaveCount(0)
+  await page.getByRole("button", { name: /Removed Docs Local.*Show activity/ }).click()
+  await page.getByRole("listitem").filter({ hasText: "Removed Docs Local" }).getByRole("button", { name: "Undo" }).click()
+  await expect(remove).toBeVisible()
+  expect(requests.filter(({ method, path }) => method !== "GET" && path === "/api/packages")
+    .map(({ method, body }) => [method, body])).toEqual([
+    ["DELETE", { directory, module: installed.module }],
+    ["POST", { directory, spec: `${installed.module}@${installed.commit}`, restart: true }],
+  ])
+})
+
+test("an older peer shows an update message when package removal is unavailable", async ({ page }) => {
+  await mockAPI(page, { fleet: true })
+  await page.route((url) => url.pathname === "/api/projects", (route) =>
+    route.fulfill({ json: [projectRow(directory, [], { packages: [installed] })] }))
+  const statuses = [404, 405]
+  await page.route((url) => url.pathname === "/api/packages" && url.searchParams.get("node") === "peer-1", (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback()
+    const status = statuses.shift()
+    return route.fulfill({ status, body: status === 404 ? "404 page not found" : "Method Not Allowed" })
+  })
+  await page.goto(`/sessions/project/peer-1/${encodeURIComponent(directory)}`)
+  const remove = page.getByRole("button", { name: "Remove Docs Local" })
+  for (const status of [404, 405]) {
+    const response = page.waitForResponse((res) => res.request().method() === "DELETE" && res.status() === status)
+    await remove.click()
+    await response
+    await expect(page.getByText("Update agentpack on Build server to remove packages")).toBeVisible()
+  }
+})

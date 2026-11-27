@@ -176,6 +176,49 @@ func TestGatewayPackageRestartChoice(t *testing.T) {
 	}
 }
 
+func TestGatewayRemovePackageAsMember(t *testing.T) {
+	home, directory, unknown := t.TempDir(), t.TempDir(), t.TempDir()
+	g, origin := identityGateway(t, home, nil)
+	testBrowserSession(t, g.auth, "member@example.com", "remove-package")
+	if err := remember(home, session.SessionInfo{Directory: directory, Harness: "claude", Mode: "default"}); err != nil {
+		t.Fatal(err)
+	}
+	const direct = "github.com/example/direct"
+	const transitive = "github.com/example/transitive"
+	var calls []string
+	g.options.SaveProject = func(_ context.Context, input ProjectSettingsInput) error {
+		if input.Directory != directory {
+			t.Fatalf("attempted to remove from %q", input.Directory)
+		}
+		calls = append(calls, input.RemoveModule)
+		if input.RemoveModule == transitive {
+			return ErrPackageNotDirect
+		}
+		return nil
+	}
+	handler := g.Handler()
+	for _, tt := range []struct {
+		directory, module string
+		status            int
+	}{{directory, direct, http.StatusNoContent}, {directory, transitive, http.StatusBadRequest}, {unknown, direct, http.StatusNotFound}} {
+		data, err := json.Marshal(map[string]string{"directory": tt.directory, "module": tt.module})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest(http.MethodDelete, origin.String()+"/api/packages", bytes.NewReader(data))
+		r.Header.Set("Origin", origin.String())
+		r.AddCookie(&http.Cookie{Name: "agentpack_session", Value: "remove-package"})
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != tt.status {
+			t.Fatalf("remove %s from %s: got %d, want %d (%s)", tt.module, tt.directory, w.Code, tt.status, w.Body)
+		}
+	}
+	if len(calls) != 2 || calls[0] != direct || calls[1] != transitive {
+		t.Fatalf("unexpected removal calls: %v", calls)
+	}
+}
+
 func TestGatewayInstallsMCPServerIntoRecentFolder(t *testing.T) {
 	home, directory := t.TempDir(), t.TempDir()
 	auth, err := testGatewayAuth(t, home)

@@ -13,6 +13,9 @@ import (
 )
 
 func ResolveRemoveSpec(cwd, rawSpec string, project *manifest.Manifest) (string, error) {
+	if _, exists := project.Dependencies[rawSpec]; exists {
+		return rawSpec, nil
+	}
 	spec := strings.TrimSpace(rawSpec)
 	if spec == "" {
 		return "", fmt.Errorf("empty remove spec")

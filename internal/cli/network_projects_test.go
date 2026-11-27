@@ -123,6 +123,36 @@ func TestSaveNetworkProjectCommitsTheBatchOrRestoresTheDefinition(t *testing.T) 
 	}
 }
 
+func TestSaveNetworkProjectRemovesOnlyDirectDependencies(t *testing.T) {
+	t.Setenv("AGENTPACK_HOME", t.TempDir())
+	root := t.TempDir()
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte("---\nname: example\ndescription: Example skill\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner()
+	if err := runner.installNetworkPackage(t.Context(), root, source, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	module := filepath.Base(source)
+	input := gateway.ProjectSettingsInput{Directory: root, RemoveModule: "github.com/example/" + module}
+	if err := runner.saveNetworkProject(t.Context(), input); !errors.Is(err, gateway.ErrPackageNotDirect) {
+		t.Fatalf("remove non-direct module: %v", err)
+	}
+	input.RemoveModule = module
+	if err := runner.saveNetworkProject(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+	project, err := manifest.Load(root)
+	if err != nil || project == nil || len(project.Dependencies) != 0 {
+		t.Fatalf("manifest after removal: %+v %v", project, err)
+	}
+	locked, err := lockfile.LoadFromPath(paths.LockPath(root))
+	if err != nil || len(locked.Packages) != 0 {
+		t.Fatalf("lock after removal: %+v %v", locked, err)
+	}
+}
+
 func TestSaveNetworkProjectChecksThePluginMCPSource(t *testing.T) {
 	t.Setenv("AGENTPACK_HOME", t.TempDir())
 	root := t.TempDir()

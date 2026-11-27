@@ -27,8 +27,6 @@ import { projectsQuery, selectedProjectQuery, sessionsQuery } from "./queries"
 
 // One change to PUT /api/projects/settings. The endpoint takes a batch; here every gesture sends its own.
 type Patch = {
-  add?: string[]
-  remove?: string[]
   remove_mcp?: string[]
   servers?: MCPServerInput[]
   logins?: Record<string, string>
@@ -46,7 +44,7 @@ const runner = /^(npx|bunx|uvx|uv|pnpm|yarn|bun|deno|docker|node|python3?)\s/
 // A new credential can reach the project's machine just after the browser's OAuth callback, so a
 // login change right after signing in retries a plain 404 (never a missing route) a few times.
 async function putSettings(machine: string, directory: string, patch: Patch, afterSignIn = false): Promise<unknown> {
-  const body = { directory, add: [], remove: [], remove_mcp: [], servers: [], logins: {}, ...patch }
+  const body = { directory, remove_mcp: [], servers: [], logins: {}, ...patch }
   for (let attempt = 0; ; attempt++) {
     const result = await api("/api/projects/settings", { machine, method: "PUT", body }).then((value) => ({ value }), (error: unknown) => ({ error }))
     if (!("error" in result)) return result.value
@@ -158,17 +156,23 @@ export function ProjectPage({ machine, directory, install }: { machine: string; 
   }
 
   // `undo` reverses the change from the activity viewer, as Close does.
-  function apply(key: string, patch: Patch, outcome?: { message: string; undo: Patch }, afterSignIn = false, done?: () => void) {
+  function apply(key: string, patch: Patch, outcome?: { message: string; undo: Patch }, afterSignIn = false) {
+    changeProject(key, () => putSettings(machine, directory, patch, afterSignIn), failure, outcome && {
+      message: outcome.message,
+      undo: () => putSettings(machine, directory, outcome.undo),
+    })
+  }
+
+  function changeProject(key: string, change: () => Promise<unknown>, describeFailure: (error: unknown) => string, outcome?: { message: string; undo: () => Promise<unknown> }) {
     setBusy((current) => ({ ...current, [key]: true }))
     setErrors((current) => without(current, key))
-    void putSettings(machine, directory, patch, afterSignIn).then(
+    void change().then(
       async () => {
         await refresh()
         settle(key)
-        done?.()
-        if (outcome) hud.success(outcome.message, () => void putSettings(machine, directory, outcome.undo).then(refresh, (error: unknown) => hud.error(failure(error))))
+        if (outcome) hud.success(outcome.message, () => void outcome.undo().then(refresh, (error: unknown) => hud.error(failure(error))))
       },
-      (error: unknown) => settle(key, failure(error)),
+      (error: unknown) => settle(key, describeFailure(error)),
     )
   }
 
@@ -256,6 +260,25 @@ export function ProjectPage({ machine, directory, install }: { machine: string; 
     }
   }
 
+  function removePackage(key: string, pkg: ProjectPackage, title: string) {
+    changeProject(
+      key,
+      () => api("/api/packages", { machine, method: "DELETE", body: { directory, module: pkg.module } }),
+      (error) => routeMissing(error) || (error instanceof ApiError && error.status === 405)
+        ? `Update agentpack on ${machineName} to remove packages`
+        : errorText(error),
+      {
+        message: `Removed ${title} from ${name}`,
+        undo: () => {
+          const spec = pkg.url?.startsWith("file:///")
+            ? decodeURIComponent(new URL(pkg.url).pathname).replace(/^\/([a-z]:\/)/i, "$1")
+            : `${pkg.module}@${pkg.commit}`
+          return installPackage(machine, directory, spec, true)
+        },
+      },
+    )
+  }
+
   function removeServer(server: ProjectMCP) {
     // A command server's arguments are not in the project read, so it cannot be put back: that one asks first.
     if (!server.url) return setConfirm(server)
@@ -287,7 +310,7 @@ export function ProjectPage({ machine, directory, install }: { machine: string; 
     if (pkg) {
       return (
         <Row key={key} {...common} action={<Button type="button" variant="ghost" size="sm" aria-label={`Remove ${entry.name}`}
-          onClick={() => apply(key, { remove: [pkg.module] }, { message: `Removed ${entry.name} from ${name}`, undo: { add: [`${pkg.module}@${pkg.commit}`] } })}>Remove</Button>}>
+          onClick={() => removePackage(key, pkg, entry.name)}>Remove</Button>}>
           {/* Among search results, say which ones are already here; the Packages list needs no such word. */}
           {needle && <span className="text-(length:--fs-sm) text-(--fg2)">Installed</span>}
         </Row>

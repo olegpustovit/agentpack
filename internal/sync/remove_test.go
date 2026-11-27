@@ -32,6 +32,14 @@ func TestResolveRemoveSpecReportsDeterministicAmbiguity(t *testing.T) {
 	}
 }
 
+func TestResolveRemoveSpecPrefersExactModule(t *testing.T) {
+	t.Parallel()
+	project := manifestWithKeys("github.com/acme/repo/demo", "demo")
+	if got, err := ResolveRemoveSpec(t.TempDir(), "demo", project); err != nil || got != "demo" {
+		t.Fatalf("ResolveRemoveSpec = %q, %v", got, err)
+	}
+}
+
 func manifestWithKeys(keys ...string) *manifest.Manifest {
 	dependencies := make(map[string]manifest.Dependency, len(keys))
 	for _, key := range keys {
