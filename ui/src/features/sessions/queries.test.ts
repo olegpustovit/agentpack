@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { LOCAL } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
-import { mergeProvisional, projectFilesQuery } from "./queries"
+import { mergeProvisional, projectFilesQuery, sessionHistoryQuery } from "./queries"
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -44,4 +44,25 @@ describe("projectFilesQuery", () => {
     const result = await projectFilesQuery(LOCAL, "/work/repo").queryFn!({ signal: new AbortController().signal } as never)
     expect(result).toEqual({ files: [], truncated: false })
   })
+})
+
+describe("sessionHistoryQuery", () => {
+  const signal = new AbortController().signal
+
+  it("passes the cursor to the local gateway and reads the page", async () => {
+    const page = { sessions: [row("old-chat")], next: "1:old-chat" }
+    const fetch = vi.fn().mockResolvedValue(Response.json(page))
+    vi.stubGlobal("fetch", fetch)
+    const query = sessionHistoryQuery(true)
+    expect(await query.queryFn!({ signal, pageParam: "2:recent-chat" } as never)).toEqual(page)
+    expect(fetch.mock.calls[0]![0].searchParams.toString()).toBe("history=1&before=2%3Arecent-chat")
+  })
+
+  it.each([() => Response.json([]), () => new Response("not found", { status: 404 })])(
+    "reports an older gateway as missing paged History",
+    async (response) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response()))
+      await expect(sessionHistoryQuery(true).queryFn!({ signal, pageParam: "" } as never)).rejects.toMatchObject({ status: 404 })
+    },
+  )
 })

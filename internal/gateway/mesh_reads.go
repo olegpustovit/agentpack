@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/olegpustovit/agentpack/internal/network"
@@ -86,7 +88,6 @@ func (g *Gateway) listSessions(ctx context.Context, node, directory string, rece
 	states := network.WorkerStates(ctx, g.options.Home, localEntries)
 	for i := range entries {
 		info := &entries[i]
-		info.Reachable, info.LastSync = g.nodeContact(info.NodeID, local)
 		if info.NodeID == local && info.Transport != "acp" {
 			if terminal, ok := states[info.ID]; ok {
 				info.State = terminal
@@ -94,18 +95,87 @@ func (g *Gateway) listSessions(ctx context.Context, node, directory string, rece
 				info.State.Running = false
 			}
 		}
-		if !info.EndedAt.IsZero() {
-			info.State.Running = false
-			info.State.Restarting = false
-		}
-		*info = publicSession(*info)
+		*info = g.listedSession(*info, local)
 	}
 	return entries, nil
+}
+
+func (g *Gateway) listedSession(info session.SessionInfo, local string) session.SessionInfo {
+	info.Reachable, info.LastSync = g.nodeContact(info.NodeID, local)
+	if !info.EndedAt.IsZero() {
+		info.State.Running, info.State.Restarting = false, false
+	}
+	return publicSession(info)
+}
+
+type sessionHistoryPage struct {
+	Sessions []session.SessionInfo `json:"sessions"`
+	Next     string                `json:"next"`
+}
+
+const sessionHistorySelect = "SELECT " + session.SessionColumns + " FROM sessions WHERE hidden=0 AND transport='acp'"
+const sessionHistoryBefore = " AND (last_used,id)<(?,?)"
+const sessionHistoryOrder = " ORDER BY last_used DESC,id DESC LIMIT ?"
+
+func (g *Gateway) serveSessionHistory(w http.ResponseWriter, r *http.Request) {
+	params := r.URL.Query()
+	limit := 100
+	if raw := params.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			http.Error(w, "limit must be a positive integer", http.StatusBadRequest)
+			return
+		}
+		limit = min(n, 200)
+	}
+	query := sessionHistorySelect
+	var args []any
+	if before := params.Get("before"); before != "" {
+		stamp, id, ok := strings.Cut(before, ":")
+		lastUsed, err := strconv.ParseInt(stamp, 10, 64)
+		if !ok || err != nil || id == "" {
+			http.Error(w, "invalid history cursor", http.StatusBadRequest)
+			return
+		}
+		query += sessionHistoryBefore
+		args = append(args, lastUsed, id)
+	}
+
+	ctx := r.Context()
+	local, err := g.store.NodeID(ctx)
+	if err != nil {
+		meshReadError(w, r, err)
+		return
+	}
+	entries, err := session.QuerySessions(ctx, g.store.Reader, query+sessionHistoryOrder, append(args, limit+1)...)
+	if err != nil {
+		meshReadError(w, r, err)
+		return
+	}
+	page := sessionHistoryPage{Sessions: entries}
+	if len(entries) > limit {
+		page.Sessions = entries[:limit]
+		last := entries[limit-1]
+		page.Next = strconv.FormatInt(session.SessionTimestamp(last.LastUsed), 10) + ":" + last.ID
+	}
+	for i, info := range page.Sessions {
+		info.ResumePending = g.ResumePending(info.ID)
+		page.Sessions[i] = g.listedSession(info, local)
+	}
+	network.WriteJSON(w, page)
+}
+
+func isSessionHistory(r *http.Request) bool {
+	return r.URL.Path == "/api/sessions" && r.URL.Query().Get("history") == "1"
 }
 
 // An older chat can fall out of the recent list while staying available in its project's history.
 func (g *Gateway) serveSessions(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+	if isSessionHistory(r) {
+		g.serveSessionHistory(w, r)
+		return
+	}
 	directory := query.Get("directory")
 	value, err := g.listSessions(r.Context(), query.Get("node"), directory, directory == "")
 	if err != nil {

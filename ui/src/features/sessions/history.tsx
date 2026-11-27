@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query"
 import { useEffect, useRef, useState, type KeyboardEvent } from "react"
 import { Link, useNavigate } from "@tanstack/react-router"
 import { Copy, Pencil, RotateCcw, SquareArrowOutUpRight } from "lucide-react"
@@ -7,14 +8,16 @@ import { FilterToken } from "@/components/kit/filters"
 import { GroupHeader, SearchField, SourceList, SourceRow } from "@/components/kit/list"
 import { RowContextMenu, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
+import { identityQuery, useMachines } from "@/features/machines/queries"
 import { useIsPhone } from "@/features/shell/use-is-phone"
+import { ApiError, LOCAL } from "@/lib/api"
 import { basename, harnessName } from "@/lib/format"
 import { copyText } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { useSessionCommands } from "./actions"
 import { projectDirectory } from "./git"
-import { lastActivity, matchesSession, rowKey, sessionLabel, type ListedSession } from "./group"
-import { useListedSessions } from "./queries"
+import { matchesSession, rowKey, sessionLabel, type ListedSession } from "./group"
+import { useSessionHistory } from "./queries"
 import { sessionRules } from "./rules"
 import { sessionGlyphState, sessionStatusWord } from "./session-status"
 import { RowSheet, type SheetState } from "./session-sheets"
@@ -23,6 +26,7 @@ import { RowSheet, type SheetState } from "./session-sheets"
 export type HistorySearch = { find?: string; project?: string; on?: string; by?: string }
 type Facet = "project" | "on" | "by"
 
+const SEARCH_LIMIT = 1_000
 const DAY = 86_400_000
 const midnight = (time: number) => new Date(new Date(time).toDateString()).getTime()
 
@@ -44,13 +48,16 @@ function rowTime(time: number, now: number): string {
   return now - time < 7 * DAY ? date.toLocaleTimeString("en", { hour: "numeric", minute: "2-digit" }) : date.toLocaleDateString("en", { month: "short", day: "numeric" })
 }
 
+const historyTime = (session: ListedSession) => Date.parse(session.last_used ?? "") || 0
 const projectOf = (session: ListedSession) => basename(projectDirectory(session)) || "Unknown project"
 
 // The Work page's other view: every chat on every machine, newest first, open, closed and cold-stored.
 // Searched as you type and narrowed with tokens (HIG Search fields). The Work page owns the scroller,
 // so coming back from a session restores the position the way it does for Work.
 export function HistoryView({ search, setSearch }: { search: HistorySearch; setSearch: (patch: HistorySearch) => void }) {
-  const { machines, queries, sessions } = useListedSessions()
+  const machines = useMachines()
+  const localID = useQuery(identityQuery).data?.node.id
+  const { data, error, isPending, isFetching, isFetchingNextPage, hasNextPage, fetchNextPage, refetch } = useSessionHistory()
   const commands = useSessionCommands()
   const navigate = useNavigate()
   const isPhone = useIsPhone()
@@ -60,6 +67,7 @@ export function HistoryView({ search, setSearch }: { search: HistorySearch; setS
   const head = useRef<HTMLDivElement>(null)
   const input = () => head.current?.querySelector("input")
   const list = useRef<HTMLDivElement>(null)
+  const older = useRef<HTMLDivElement>(null)
   const now = Date.now()
 
   // ⌘F searches History here, before the sidebar's own ⌘F sees it.
@@ -76,18 +84,28 @@ export function HistoryView({ search, setSearch }: { search: HistorySearch; setS
     return () => window.removeEventListener("keydown", onFind, true)
   }, [])
 
-  // A terminal has no transcript to come back to, so History lists chats.
-  const all = sessions.filter((session) => session.transport === "acp" && !session.provisionalStart)
-  const machineName = (id: string) => machines.find((machine) => machine.id === id)?.name ?? id
+  const machinesByID = new Map(machines.map((machine) => [machine.id, machine]))
+  const machineName = (id: string) => machinesByID.get(id)?.name ?? id
+  const rows = new Map<string, ListedSession>()
+  for (const page of data?.pages ?? []) {
+    for (const session of page.sessions) {
+      if (rows.has(session.id)) continue
+      const machine = !session.node_id || session.node_id === localID ? LOCAL : session.node_id
+      rows.set(session.id, {
+        ...session, machine, machineName: machineName(machine),
+        offline: session.reachable === false || machinesByID.get(machine)?.online === false,
+      })
+    }
+  }
+  const all = [...rows.values()]
   const filtered = all.filter((session) =>
     (!search.project || projectOf(session) === search.project) &&
     (!search.on || session.machine === search.on) &&
     (!search.by || session.harness === search.by))
   const shown = filtered.filter((session) => matchesSession(session, text) || projectOf(session).toLowerCase().includes(text.trim().toLowerCase()))
-    .sort((a, b) => (Date.parse(lastActivity(b) ?? "") || 0) - (Date.parse(lastActivity(a) ?? "") || 0))
   const sections: { label: string; rows: ListedSession[] }[] = []
   for (const row of shown) {
-    const label = historySection(Date.parse(lastActivity(row) ?? "") || 0, now)
+    const label = historySection(historyTime(row), now)
     if (sections.at(-1)?.label === label) sections.at(-1)!.rows.push(row)
     else sections.push({ label, rows: [row] })
   }
@@ -105,6 +123,27 @@ export function HistoryView({ search, setSearch }: { search: HistorySearch; setS
     ...(search.by ? [{ facet: "by" as const, label: "Agent", value: harnessName(search.by) }] : []),
   ]
   const narrowed = tokens.length > 0 || needle !== ""
+
+  const searchMore = narrowed && all.length < SEARCH_LIMIT
+  const canLoadOlder = hasNextPage && !isFetching
+  useEffect(() => {
+    if (!canLoadOlder || error) return
+    if (searchMore) {
+      void fetchNextPage({ cancelRefetch: false })
+      return
+    }
+    const target = older.current
+    if (!target || typeof IntersectionObserver === "undefined") return
+    // At the search cap, wait for the footer to enter view instead of chaining short pages.
+    let armed = !narrowed
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry) return
+      if (!entry.isIntersecting) armed = true
+      else if (armed) void fetchNextPage({ cancelRefetch: false })
+    }, { rootMargin: "240px" })
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [canLoadOlder, error, fetchNextPage, narrowed, searchMore])
 
   function type(value: string) {
     setText(value)
@@ -129,8 +168,7 @@ export function HistoryView({ search, setSearch }: { search: HistorySearch; setS
     }
   }
 
-  const loading = queries.firstLoadPending
-  const failed = machines.flatMap((machine) => queries.errors[machine.id] ? [machine.name] : [])
+  const needsUpdate = error instanceof ApiError && error.status === 404
 
   return (
     <>
@@ -160,9 +198,12 @@ export function HistoryView({ search, setSearch }: { search: HistorySearch; setS
       </div>
       <div ref={list} className="-mx-(--s3)">
         <div>
-          {failed.length > 0 && <Banner tone="warn">{`Couldn't read history from ${failed.join(", ")}. Showing what this gateway has.`}</Banner>}
-          {loading && [0, 1, 2, 3].map((index) => <RowSkeleton key={index} lines={2} />)}
-          {!loading && shown.length === 0 && (narrowed ? (
+          {needsUpdate && <Empty title="Needs update">Update agentpack to see older history</Empty>}
+          {error && !needsUpdate && <Banner tone="warn">
+            Couldn't load history. {!hasNextPage && <button type="button" className="underline" onClick={() => void refetch()}>Retry</button>}
+          </Banner>}
+          {isPending && [0, 1, 2, 3].map((index) => <RowSkeleton key={index} lines={2} />)}
+          {!isPending && !error && !(hasNextPage && searchMore) && shown.length === 0 && (narrowed ? (
             <Empty title="No matching sessions">
               {needle ? `Nothing in History matches “${text.trim()}”. ` : "Nothing matches these tokens. "}
               <button type="button" onClick={() => { setText(""); setSearch({ find: undefined, project: undefined, on: undefined, by: undefined }) }} className="font-medium text-(--accent) hover:underline">Search everything</button>
@@ -175,13 +216,21 @@ export function HistoryView({ search, setSearch }: { search: HistorySearch; setS
               <section key={section.label} aria-label={section.label} data-work-group={section.label}>
                 <GroupHeader className="sticky top-0 z-1 bg-(--page) px-(--s3)"><h2 tabIndex={-1}>{section.label}</h2></GroupHeader>
                 {section.rows.map((row) => (
-                  <HistoryRow key={rowKey(row)} row={row} time={rowTime(Date.parse(lastActivity(row) ?? "") || 0, now)}
+                  <HistoryRow key={rowKey(row)} row={row} time={rowTime(historyTime(row), now)}
                     onReopen={() => void commands.reopen([row])} onRename={() => setSheet({ kind: "rename", row })}
                     onOpen={() => void navigate({ to: "/sessions/$machine/$sessionId", params: { machine: row.machine, sessionId: row.id } })} />
                 ))}
               </section>
             ))}
           </SourceList>
+          {hasNextPage && <div ref={older} className="flex flex-wrap items-center gap-(--s2) px-(--s3) py-(--s3)">
+            {narrowed && all.length >= SEARCH_LIMIT && (
+              <span role="status" className="text-(length:--fs-xs) text-(--fg2)">{`Showing the newest ${all.length}; scroll for older`}</span>
+            )}
+            <Button type="button" size="sm" disabled={isFetching} onClick={() => void fetchNextPage({ cancelRefetch: false })}>
+              {isFetchingNextPage ? "Loading older…" : "Show older"}
+            </Button>
+          </div>}
         </div>
       </div>
       <RowSheet sheet={sheet} onClose={() => setSheet(null)} />

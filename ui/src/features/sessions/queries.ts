@@ -1,8 +1,9 @@
-import { queryOptions } from "@tanstack/react-query"
+import { infiniteQueryOptions, queryOptions, useInfiniteQuery } from "@tanstack/react-query"
 import { array, boolean, object, optional, string } from "@/lib/validate"
-import { api, LOCAL, routeMissing } from "@/lib/api"
+import { api, ApiError, LOCAL, routeMissing } from "@/lib/api"
 import type { ProjectRow, SessionInfo } from "@/lib/api-types"
 import { useMachines, useReplicatedQueries } from "@/features/machines/queries"
+import { useEventsConnected } from "@/features/events/use-events"
 import type { ListedSession } from "./group"
 
 // Go sends a nil slice as null, and a peer may predate a field. Unknown fields pass through.
@@ -48,6 +49,32 @@ export const sessionsQuery = (live: boolean) =>
     // Events cover changes; polling covers only a dropped stream.
     refetchInterval: live ? false : 15 * 1000,
   })
+
+export const sessionHistoryKey = [...sessionsKey, "history"]
+
+export const sessionHistoryQuery = (live: boolean) =>
+  infiniteQueryOptions({
+    queryKey: sessionHistoryKey,
+    initialPageParam: "",
+    queryFn: async ({ pageParam, signal }) => {
+      const raw = await api<unknown>("/api/sessions", {
+        query: pageParam ? { history: "1", before: pageParam } : { history: "1" },
+        signal,
+      })
+      // Older gateways ignore the query flag and return the recent list.
+      if (raw === null || Array.isArray(raw)) throw new ApiError("not found", 404)
+      const page = object(raw, "history page")
+      return { sessions: array(page.sessions, "history sessions") as SessionInfo[], next: string(page.next, "history cursor") }
+    },
+    getNextPageParam: (page) => page.next || undefined,
+    staleTime: 15_000,
+    refetchInterval: live ? false : 15_000,
+    retry: false,
+  })
+
+export function useSessionHistory() {
+  return useInfiniteQuery(sessionHistoryQuery(useEventsConnected()))
+}
 
 export const projectHistoryQuery = (machine: string, directory: string, live: boolean) =>
   queryOptions({
