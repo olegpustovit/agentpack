@@ -1,179 +1,100 @@
-import { expect, test, type Page } from "@playwright/test"
+import { expect, test } from "@playwright/test"
+import { mockAPI } from "./helpers"
 
-const identity = { node: { id: "n1", name: "host-a", os: "linux", version: "0.9.0" }, auth: "password", tailscale_user: "" }
-const nodes = [
-  { id: "n2", name: "Fast Mac", online: true },
-  { id: "n3", name: "Slow Mac", online: true },
-  { id: "n4", name: "Offline Mac", online: false },
-]
+const NOW = new Date("2026-11-18T15:00:00Z")
 
-const soon = new Date(Date.now() + 2 * 3_600_000).toISOString()
-const codex = (remaining: number) => ({
-  harness: "codex",
-  state: "available",
-  plan: "Pro",
-  windows: [{ id: "session", label: "Session", remaining_percent: remaining, reset_at: soon }],
-})
-
-// Each machine answers with its own limits. `node` selects the machine; the gateway has none.
-let limits: Record<string, object[]> = {}
-// Refresh responses, when they differ from the GET response.
-let refreshed: Record<string, object[]> = {}
-// A held refresh response for a machine, released by the test.
-let gates: Record<string, Promise<void>> = {}
-
-function machineOf(url: string): string {
-  return new URL(url).searchParams.get("node") ?? "local"
-}
-
-test.beforeEach(async ({ page }) => {
-  limits = {
-    local: [codex(72), { harness: "grok", state: "error", error: "grok billing: authentication required", windows: [] }],
-    n2: [{ harness: "codex", state: "available", plan: "Max", windows: [{ id: "weekly", label: "Peer weekly", remaining_percent: 50 }] }],
-    n3: [{ harness: "claude", state: "available", windows: [{ id: "session", label: "Claude session", remaining_percent: 80 }] }],
-  }
-  refreshed = {}
-  gates = {}
-  await page.route("**/api/**", (route) => route.fulfill({ json: [] }))
-  await page.route("**/api/config", (route) => route.fulfill({ json: { ui_build_id: "test-build" } }))
-  await page.route("**/api/status", (route) => route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } }))
-  await page.route("**/api/identity", (route) => route.fulfill({ json: identity }))
-  await page.route("**/api/nodes", (route) => route.fulfill({ json: nodes }))
-  await page.route("**/api/events", (route) => route.abort())
-  await page.route("**/api/usage?**", (route) => route.fulfill({ json: { hourly: [], sessions: [], samples: [] } }))
-  await page.route("**/api/limits**", async (route) => {
-    const machine = machineOf(route.request().url())
-    if (route.request().url().includes("/refresh")) {
-      await gates[machine]
-      limits[machine] = refreshed[machine] ?? limits[machine] ?? []
-      return route.fulfill({ json: { limits: limits[machine] } })
-    }
-    return route.fulfill({ json: { limits: Object.entries(limits).flatMap(([node, snapshots]) => snapshots.map((snapshot) => ({...snapshot, node_id: node === "local" ? identity.node.id : node, reachable: node !== "n4"}))) } })
-  })
-})
-
-function limitRequests(page: Page): string[] {
-  const requests: string[] = []
-  page.on("request", (request) => {
-    const url = new URL(request.url())
-    if (url.pathname === "/api/limits") requests.push(url.searchParams.get("node") ?? "local")
-  })
-  return requests
-}
-
-const grid = (page: Page) => page.getByRole("region", { name: "Provider limits" })
-
-test("Refresh shows each machine's response before the slowest machine answers", async ({ page }) => {
-  let releaseSlow = () => {}
-  gates.n3 = new Promise<void>((resolve) => (releaseSlow = resolve))
-  refreshed = { local: [codex(61)], n3: [{ harness: "claude", state: "available", windows: [{ id: "session", label: "Claude session", remaining_percent: 5 }] }] }
+test("a phone fits one row per agent with its tightest limit and reset", async ({ page }) => {
+  await page.clock.setFixedTime(NOW)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await mockAPI(page)
+  await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "peer-1", name: "Mac Studio", online: true }] }))
+  await page.route("**/api/limits", (route) => route.fulfill({ json: { limits: [
+    { harness: "codex", state: "available", observed_at: "2026-11-18T14:30:00Z", windows: [
+      { id: "session", label: "Session", remaining_percent: 2, reset_at: "2026-11-18T16:00:00Z" },
+    ] },
+    { node_id: "peer-1", harness: "codex", state: "available", observed_at: "2026-11-18T14:59:00Z", windows: [
+      { id: "session", label: "Session", remaining_percent: 75, reset_at: "2026-11-18T16:00:00Z" },
+      { id: "weekly", label: "Weekly", remaining_percent: 36, reset_at: "2026-11-20T15:00:00Z" },
+    ] },
+    { harness: "claude", state: "available", observed_at: "2026-11-18T14:58:00Z", windows: [
+      { id: "session", label: "Session", remaining_percent: 4, reset_at: "2026-11-18T17:00:00Z", duration_seconds: 18_000 },
+    ] },
+    { harness: "grok", state: "error", error: "authentication required", windows: [] },
+    { node_id: "peer-1", harness: "grok", state: "error", error: "authentication required", windows: [] },
+    { harness: "omp", state: "available", windows: [{ id: "weekly", label: "Weekly", remaining_percent: 5 }] },
+    { harness: "cursor", state: "unsupported", error: "cursor CLI not found", windows: [] },
+    { node_id: "peer-1", harness: "cursor", state: "unsupported", error: "cursor CLI not found", windows: [] },
+  ] } }))
 
   await page.goto("/usage/limits")
-  await expect(grid(page).getByText("72% left")).toBeVisible()
 
-  await page.getByRole("button", { name: "Refresh" }).click()
-  await expect(grid(page).getByText("61% left")).toBeVisible()
-  await expect(grid(page).getByText("80% left")).toBeVisible()
-  await expect(grid(page).getByText("5% left")).toHaveCount(0)
+  const list = page.getByRole("list", { name: "Limits", exact: true })
+  const rows = list.getByRole("listitem")
+  await expect(rows).toHaveCount(3)
+  const codex = rows.filter({ has: page.getByText("Codex", { exact: true }) })
+  await expect(codex.getByRole("meter", { name: "Codex left" })).toHaveAttribute("value", "36")
+  await expect(codex.getByText("36%", { exact: true })).toBeVisible()
+  await expect(codex.getByText("resets in 2 d 0 h", { exact: true })).toBeVisible()
 
-  releaseSlow()
-  await expect(grid(page).getByText("5% left")).toBeVisible()
-  await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled()
+  const claude = rows.filter({ has: page.getByText("Claude", { exact: true }) })
+  const pace = claude.getByText("Runs out in about 8 m at this pace · resets in 2 h 0 m")
+  await expect(pace).toBeVisible()
+  expect(await pace.evaluate((element) => {
+    const color = getComputedStyle(element).color
+    const swatch = document.createElement("span")
+    swatch.style.color = "var(--warn-word)"
+    element.append(swatch)
+    const warn = getComputedStyle(swatch).color
+    swatch.remove()
+    return color === warn
+  })).toBe(true)
+
+  const grok = rows.filter({ has: page.getByText("Grok", { exact: true }) })
+  await expect(grok.getByRole("link", { name: "Sign in", exact: true })).toHaveAttribute("href", "/settings/connections")
+  await expect(page.locator('[data-slot="toolbar"]')).toContainText("Updated 1 minute ago")
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 
-test("returning to Limits within a minute makes no request and shows no loader", async ({ page }) => {
-  const requests = limitRequests(page)
+test("a stale reading shows its age", async ({ page }) => {
+  await page.clock.setFixedTime(NOW)
+  await mockAPI(page)
+  await page.route("**/api/limits", (route) => route.fulfill({ json: { limits: [
+    { harness: "codex", state: "available", observed_at: "2026-11-18T06:00:00Z", windows: [
+      { id: "session", label: "Session", remaining_percent: 72, reset_at: "2026-11-18T07:00:00Z" },
+    ] },
+  ] } }))
+
   await page.goto("/usage/limits")
-  await expect(grid(page).getByText("72% left")).toBeVisible()
-  // Opening Limits nudges the peers, and each answer refetches the replicated read; let those finish.
-  await page.waitForLoadState("networkidle")
-  const before = requests.length
-
-  // Views on desktop, the tab bar on phone: the link is the only visible one with this name.
-  await page.getByRole("link", { name: "Sessions", exact: true }).click()
-  await expect(page).toHaveURL(/\/sessions/)
-  await page.getByRole("link", { name: "System", exact: true }).click()
-  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /^Limits/ }).click()
-
-  await expect(grid(page).getByText("72% left")).toBeVisible()
-  await expect(page.locator('[data-slot="skeleton"]')).toHaveCount(0)
-  expect(requests.length).toBe(before)
-  expect(requests).not.toContain("n4")
+  await expect(page.getByRole("list", { name: "Limits", exact: true }).getByText("As of 9 hours ago")).toBeVisible()
 })
 
-test("unavailable providers sit in a dim card below the usable ones, and a missing login links to Vault", async ({ page }) => {
-  limits.local!.push({ harness: "cursor", state: "error", error: "Cursor's keychain login can't be read. Sign in once from Vault to show limits.", windows: [] })
-  await page.goto("/usage/limits")
-  const grok = grid(page).locator('[data-provider="grok"]')
-  await expect(grok.getByText("Sign-in needed", { exact: true })).toBeVisible()
-  await expect(grok).toContainText("Limits need a login on host-a.")
-  await expect(grok).toContainText("One sign-in covers every machine.")
-  await expect(grok.getByRole("link", { name: "Sign in on host-a" })).toHaveAttribute("href", "/settings/connections")
-  await expect(grok.getByRole("button")).toHaveCount(0)
+test("the Limits shortcut opens the page and nudges each online peer at most every five minutes", async ({ page }) => {
+  await page.clock.install({ time: NOW })
+  const requests = await mockAPI(page)
+  await page.route("**/api/nodes", (route) => route.fulfill({ json: [
+    { id: "peer-1", name: "Mac Studio", online: true },
+    { id: "peer-2", name: "Build server", online: true },
+    { id: "offline", name: "Offline Mac", online: false },
+  ] }))
+  const nudged = () => requests.filter(({ method, path }) => method === "POST" && path === "/api/limits/refresh")
+    .map(({ query }) => query.get("node")).sort()
+  const sidebar = page.getByRole("navigation", { name: "System" })
+  const meter = page.getByRole("meter", { name: "Codex left" })
 
-  // A Mac's keychain message already says to sign in, so the row does not repeat it.
-  const cursor = grid(page).locator('[data-provider="cursor"]')
-  await expect(cursor.getByRole("link", { name: "Open Vault" })).toHaveAttribute("href", "/settings/connections")
-  await expect(cursor.getByText(/sign.in/i)).toHaveText(["Sign-in needed", /^Cursor's keychain login/])
+  await page.goto("/limits")
+  await expect(page).toHaveURL(/\/usage\/limits$/)
+  await expect.poll(nudged).toEqual(["peer-1", "peer-2"])
 
-  const providers = await grid(page).locator("[data-provider]").evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.provider))
-  expect(providers).toEqual(["codex", "claude", "grok", "cursor"])
+  await sidebar.getByRole("link", { name: "Usage", exact: true }).click()
+  await page.clock.fastForward(30_000)
+  await sidebar.getByRole("link", { name: "Limits", exact: true }).click()
+  await expect(meter).toBeVisible()
+  expect(nudged()).toEqual(["peer-1", "peer-2"])
 
-  const colors = await grid(page)
-    .locator("[data-provider]")
-    .evaluateAll((cards) => cards.map((card) => getComputedStyle(card).color))
-  expect(colors[2]).not.toBe(colors[0])
-})
+  await page.clock.fastForward(3 * 60_000)
+  await expect(meter).toBeVisible()
+  expect(nudged()).toEqual(["peer-1", "peer-2"])
 
-test("rows from other machines sit under a disclosure", async ({ page }) => {
-  await page.goto("/usage/limits")
-  await expect(grid(page).getByText("72% left")).toBeVisible()
-  await expect(grid(page).getByText("Peer weekly", { exact: true })).toHaveCount(0)
-
-  const disclosure = grid(page).getByRole("button", { name: "Other machines (1)" })
-  await expect(disclosure).toHaveAttribute("aria-expanded", "false")
-  await disclosure.click()
-  await expect(disclosure).toHaveAttribute("aria-expanded", "true")
-  await expect(grid(page).getByText("Peer weekly", { exact: true })).toBeVisible()
-  await expect(grid(page).getByText("Fast Mac · Max", { exact: true })).toBeVisible()
-})
-
-test("the Limits toolbar shows the last report update", async ({ page }) => {
-  await page.goto("/usage/limits")
-  await expect(page.locator('[data-slot="toolbar"]')).toContainText(/updated (now|\d+ seconds? ago|\d+ minutes? ago)/)
-})
-
-test("a slow remote machine does not delay the local replicated read", async ({ page }) => {
-  limits = { local: [], n2: [codex(70)], n3: [] }
-  await page.route("**/api/limits**", (route) => {
-    if (machineOf(route.request().url()) === "n3") return new Promise<void>(() => {})
-    return route.fallback()
-  })
-  await page.goto("/usage/limits")
-  const grid = page.getByRole("region", { name: "Provider limits" })
-  await expect(grid.locator('[data-provider="codex"]')).toBeVisible()
-  const order = await grid.locator("[data-provider]").evaluateAll((cards) => cards.map((card) => (card as HTMLElement).dataset.provider))
-  expect(order).toEqual(["codex"])
-})
-
-test("a phone shows limits as one full-width card, with nothing wider than the screen", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 800 })
-  limits = { local: [], n2: [codex(70)], n3: [codex(40)] }
-  await page.goto("/usage/limits")
-  const card = page.getByRole("region", { name: "Codex" })
-  await expect(card).toContainText("70% left")
-  await expect(card).toContainText("Session")
-  await expect(card).toContainText("resets in 2 h 0 m")
-  expect((await card.boundingBox())!.width).toBeGreaterThan(330)
-  await card.getByRole("button", { name: "Other machines (1)" }).click()
-  await expect(card).toContainText("40% left")
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-})
-
-test("an old reading says which machine it is from", async ({ page }) => {
-  const now = new Date()
-  await page.clock.setFixedTime(now)
-  limits = { local: [{ ...codex(72), observed_at: new Date(now.getTime() - 9 * 3_600_000).toISOString() }] }
-  await page.goto("/usage/limits")
-  await expect(grid(page).getByText("As of 9 hours ago on host-a")).toBeVisible()
+  await page.clock.fastForward(2 * 60_000)
+  await expect.poll(nudged).toEqual(["peer-1", "peer-1", "peer-2", "peer-2"])
 })

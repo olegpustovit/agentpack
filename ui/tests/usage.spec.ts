@@ -99,31 +99,10 @@ test("an old drill-down link opens the filtered page", async ({ page }) => {
   await expect(page).toHaveURL(/\/usage$/)
 })
 
-test("one System sidebar: no sources, no peer project reads, and its search survives navigation", async ({ page }) => {
-  const requests = await open(page, "/usage/limits?machine=peer-1")
-  const sidebar = page.getByRole("navigation", { name: "System" })
-  // Limits has a machine param of its own, which must not become a Usage filter.
-  await sidebar.getByRole("link", { name: "Usage", exact: true }).click()
+test("opening Usage from Limits keeps Usage unfiltered and does not read projects", async ({ page }) => {
+  const requests = await open(page, "/usage/limits")
+  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: "Usage", exact: true }).click()
   await expect(page).toHaveURL(/\/usage$/)
   await expect(hero(page)).toContainText("1.7M")
-  await expect(sidebar.getByRole("link", { name: /agentpack|codemode/ })).toHaveCount(0)
   expect(requests.filter((request) => request.path === "/api/projects")).toEqual([])
-
-  const search = page.getByRole("searchbox", { name: "Search system" })
-  await search.fill("screen reader")
-  await search.press("Enter")
-  await expect(page).toHaveURL(/\/settings\/appearance$/)
-  await expect(search).toHaveValue("screen reader")
-})
-
-test("Limits asks each online peer to refresh once, and /limits lands there", async ({ page }) => {
-  const requests = await open(page, "/limits")
-  await expect(page).toHaveURL(/\/usage\/limits$/)
-  const nudged = () => requests.filter((request) => request.method === "POST" && request.path === "/api/limits/refresh").map((request) => request.query.get("node") ?? "local").sort()
-  await expect.poll(nudged).toEqual(["peer-1", "peer-2"])
-  // Revisiting within the view asks nobody again.
-  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: "Usage", exact: true }).click()
-  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /Limits/ }).click()
-  await expect(page).toHaveURL(/\/usage\/limits/)
-  expect(nudged()).toEqual(["peer-1", "peer-2"])
 })

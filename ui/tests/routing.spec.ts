@@ -30,7 +30,6 @@ async function expectNoCrash(page: Page, errors: string[]) {
 
 const sessionsNav = (page: Page) => page.getByRole("navigation", { name: "Sessions" })
 const libraryNav = (page: Page) => page.getByRole("navigation", { name: "Library" })
-const limitsGrid = (page: Page) => page.getByRole("region", { name: "Provider limits" })
 const usageEmpty = (page: Page) => page.getByText("No usage in this range", { exact: true })
 const topologyHeading = (page: Page) => page.getByRole("heading", { level: 1, name: "Topology" })
 const systemNav = (page: Page) => page.getByRole("navigation", { name: "System" })
@@ -137,7 +136,7 @@ test("unknown limits search key is ignored", async ({ page }) => {
   const errors = trackPageErrors(page)
   await openFleet(page)
   await page.goto("/usage/limits?unexpected=1")
-  await expect(limitsGrid(page)).toBeVisible()
+  await expect(page.getByRole("list", { name: "Limits", exact: true })).toBeVisible()
   await expectNoCrash(page, errors)
 })
 

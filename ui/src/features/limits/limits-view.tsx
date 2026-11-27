@@ -18,7 +18,7 @@ const NUDGE_MS = 5 * 60_000
 
 // Peers write their limits only after their own turns, or when asked. While limits are on screen, ask every
 // online peer to read its CLIs again; a failed nudge leaves the replicated reading, which is dated.
-export function useLimitsNudge(machines: Machine[]) {
+function useLimitsNudge(machines: Machine[], minuteTick: number) {
   const queryClient = useQueryClient()
   const peers = machines.filter((machine) => machine.online && machine.id !== LOCAL).map((machine) => machine.id).join("\n")
   useEffect(() => {
@@ -31,14 +31,14 @@ export function useLimitsNudge(machines: Machine[]) {
         () => undefined,
       )
     }
-  }, [peers, queryClient])
+  }, [peers, queryClient, minuteTick])
 }
 
 // One row per agent: what is left of its tightest window, from the newest reading on any machine.
 export function LimitsView() {
   const { machines, groups, queries } = useLimitGroups()
-  useLimitsNudge(machines)
   const now = useMinuteTick()
+  useLimitsNudge(machines, now)
   const rows = agentLimits(groups, now)
   const latest = Math.max(0, ...rows.map((row) => row.observed))
 

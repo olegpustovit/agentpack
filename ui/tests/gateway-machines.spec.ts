@@ -87,125 +87,7 @@ test("recent folders retain unavailable reasons and only available paths can sta
   }
 })
 
-test("limits view shows each harness with partial failures and no raw CLI output", async ({ page }) => {
-  await mockAPI(page)
-  await page.goto("/")
-  await page.getByRole("link", { name: "System", exact: true }).click()
-  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /^Limits/ }).click()
-
-  const grid = page.getByRole("region", { name: "Provider limits" })
-  await expect(grid).toBeVisible()
-  await expect(page.getByRole("meter", { name: "Codex 5h remaining" })).toHaveAttribute("value", "72")
-  await expect(grid.locator('[data-provider="grok"]')).toContainText("Sign-in needed")
-  await expect(grid.locator('[data-provider="codex"]')).toContainText("Codex")
-})
-
-test("limits shortcut opens the view and a passed reset is labelled refreshing", async ({ page }) => {
-  const past = new Date(Date.now() - 60000).toISOString()
-  await mockAPI(page)
-  await page.setViewportSize({ width: 1280, height: 800 })
-  await page.route(limitsPath, (route) =>
-    route.fulfill({
-      json: { limits: [{ harness: "claude", state: "available", windows: [{ id: "claude/session", label: "Session", remaining_percent: 0, reset_at: past }] }] },
-    }),
-  )
-  await page.goto("/")
-  await expect(page.getByRole("link", { name: "System", exact: true })).toBeVisible()
-  await page.keyboard.press("Meta+3")
-  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /^Limits/ }).click()
-
-  const grid = page.getByRole("region", { name: "Provider limits" })
-  await expect(grid).toBeVisible()
-  const reset = grid.getByText("refreshing…")
-  await expect(reset).toBeVisible()
-  // A passed reset is dimmed: its text colour differs from the window label on the same row.
-  const label = grid.getByText("Session", { exact: true })
-  expect(await reset.evaluate((element) => getComputedStyle(element).color)).not.toBe(await label.evaluate((element) => getComputedStyle(element).color))
-})
-
-test("limits automatically prefers capable nodes and refreshes every source", async ({ page }) => {
-  await mockAPI(page)
-  await page.setViewportSize({ width: 1280, height: 800 })
-  await page.route(nodesPath, (route) =>
-    route.fulfill({
-      json: [
-        { id: "peer-1", name: "Mac Studio", online: true },
-        { id: "peer-2", name: "Offline Mac", online: false },
-        { id: "peer-3", name: "Unavailable node", online: true },
-      ],
-    }),
-  )
-  const calls: { node: string | null; method: string }[] = []
-  await page.route(/\/api\/limits(\/refresh)?(\?.*)?$/, (route) => {
-    const node = new URL(route.request().url()).searchParams.get("node")
-    calls.push({ node, method: route.request().method() })
-    if (node === "peer-3") return route.fulfill({ status: 502, body: "Node is unreachable" })
-    return route.fulfill({
-      json: {
-        limits: ["local", "peer-1"].flatMap((node_id) => {
-          const remote = node_id === "peer-1"
-          return [
-            {
-              node_id,
-              harness: "codex",
-              state: remote ? "available" : "unsupported",
-              plan: remote ? "Pro" : undefined,
-              source: "codex app-server account/rateLimits/read",
-              observed_at: new Date().toISOString(),
-              error: remote ? undefined : "codex CLI not found",
-              windows: remote
-                ? [
-                    { id: "primary", label: "Session", used_percent: 28, remaining_percent: 72, duration_seconds: 18000, reset_at: new Date(Date.now() + 7200000).toISOString() },
-                    { id: "weekly", label: "Weekly", used_percent: 64, remaining_percent: 36, reset_text: "Monday at 09:00" },
-                    { id: "unknown", label: "Additional usage", reset_text: "Not reported" },
-                  ]
-                : [],
-            },
-            {
-              node_id,
-              harness: "claude",
-              state: remote ? "error" : "available",
-              source: "claude -p /usage",
-              error: remote ? "Sign in required" : undefined,
-              windows: remote ? [] : [{ id: "session", label: "Current session", remaining_percent: 81, used_percent: 19 }],
-            },
-          ]
-        }),
-      },
-    })
-  })
-
-  await page.goto("/")
-  await page.getByRole("link", { name: "System", exact: true }).click()
-  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /^Limits/ }).click()
-
-  const grid = page.getByRole("region", { name: "Provider limits" })
-  const codex = grid.locator('[data-provider="codex"]')
-  await expect(codex.locator("header")).toContainText("Mac Studio")
-  await expect(codex.locator("header")).toContainText("Pro")
-  await expect(page.getByRole("meter", { name: "Session remaining", exact: true })).toHaveAttribute("value", "72")
-  await expect(page.getByRole("meter", { name: "Weekly remaining" })).toHaveAttribute("value", "36")
-  await expect(codex.getByText("Unknown", { exact: true })).toBeVisible()
-  await expect(grid.getByRole("meter")).toHaveCount(3)
-  await expect(grid.locator('[data-provider="claude"]').locator("header")).toContainText("Gateway machine")
-  expect(calls.some((call) => call.node === "peer-2")).toBeFalsy()
-
-  // A machine without the CLI says nothing about the account, so it is not offered as another report.
-  await expect(codex.getByRole("button", { name: "Other machines (1)" })).toHaveCount(0)
-  // Reads stay local; a peer's answer to the opening nudge may refetch that local read once more.
-  expect(new Set(calls.filter((call) => call.method === "GET").map((call) => call.node))).toEqual(new Set([null]))
-
-  await page.getByRole("button", { name: "Refresh", exact: true }).click()
-  // Opening Limits already nudged each online peer once; Refresh asks every machine.
-  await expect.poll(() => calls.filter((call) => call.method === "POST").map((call) => call.node).sort()).toEqual([null, "peer-1", "peer-1", "peer-3", "peer-3"].sort())
-  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled()
-
-  await page.setViewportSize({ width: 390, height: 844 })
-  // The grid scrolls inside its own wrapper; the page itself must not widen past the phone viewport.
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy()
-})
-
-test("limits labels replicated reports after machine discovery", async ({ page }) => {
+test("Limits shows replicated readings after machine discovery", async ({ page }) => {
   await mockAPI(page)
   await page.setViewportSize({ width: 1280, height: 800 })
   let releaseNodes!: () => void
@@ -232,10 +114,9 @@ test("limits labels replicated reports after machine discovery", async ({ page }
   await page.goto("/")
   await page.getByRole("link", { name: "System", exact: true }).click()
   await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /^Limits/ }).click()
-  await expect(page.getByText("No provider limits yet")).toBeVisible()
+  await expect(page.getByText("No limits yet")).toBeVisible()
   releaseNodes()
-  await expect(page.getByRole("meter", { name: "Weekly remaining" })).toHaveAttribute("value", "63")
-  await expect(page.locator('[data-provider="codex"]').locator("header")).toContainText("Kyiv grid")
+  await expect(page.getByRole("meter", { name: "Codex left" })).toHaveAttribute("value", "63")
 })
 
 test("startup and machine discovery announce pending work", async ({ page }) => {
@@ -291,35 +172,4 @@ test("settings errors finish loading and offer a working retry", async ({ page }
   await page.getByRole("button", { name: "Retry", exact: true }).click()
   await expect(page.getByText("macOS", { exact: true })).toBeVisible()
   await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeHidden()
-})
-
-test("Cursor CLI is included with separate usage buckets", async ({ page }) => {
-  await mockAPI(page)
-  await page.route(limitsPath, (route) =>
-    route.fulfill({
-      json: {
-        limits: [
-          {
-            harness: "cursor",
-            state: "available",
-            source: "Cursor DashboardService/GetCurrentPeriodUsage",
-            windows: [
-              { id: "cursor/included", label: "Included usage", used_percent: 25, remaining_percent: 75 },
-              { id: "cursor/auto", label: "Auto models", used_percent: 40, remaining_percent: 60 },
-              { id: "cursor/api", label: "API models", used_percent: 0, remaining_percent: 100 },
-              { id: "cursor/on-demand", label: "On-demand spending limit", used_percent: 0, remaining_percent: 100 },
-            ],
-          },
-        ],
-      },
-    }),
-  )
-  await page.goto("/")
-  await page.getByRole("link", { name: "System", exact: true }).click()
-  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /^Limits/ }).click()
-
-  await expect(page.getByRole("heading", { name: "Cursor CLI", exact: true })).toBeVisible()
-  await expect(page.getByRole("meter", { name: "Auto models remaining" })).toHaveAttribute("value", "60")
-  await expect(page.getByRole("meter", { name: "API models remaining" })).toHaveAttribute("value", "100")
-  await expect(page.getByRole("meter")).toHaveCount(4)
 })
