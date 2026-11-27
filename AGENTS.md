@@ -195,8 +195,9 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 |---|---|
 | `/` | none (redirects to `/sessions`) |
 | `/login` | `return_to` |
-| `/sessions` | `q`, `group`, `new` |
+| `/sessions` | `q`, `group`, `new`, `view` (`history`), `find` (text), `project` (folder name), `on` (node ID), `by` (agent) |
 | `/sessions/$machine/$sessionId` | same, plus `sub` (the subagent open in the main view) |
+| `/sessions/project/$machine/$folder` | same, plus `install` (focuses project search) |
 | `/library` | `q`, `type`, `sort`, `add` |
 | `/library/package/$` | same, plus `install` |
 | `/library/mcp/$name` | same |
@@ -215,6 +216,7 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 
 The toolbar and phone tab bar hold three views, Sessions, Library and System (⌘1–3 or ⌥⌘1–3, since Safari keeps ⌘1–9; Ctrl off Mac); System keeps the `/usage`, `/machines` and `/settings` URLs beside one shared sidebar (`ui/src/features/system/`).
 
+- **Session lifecycle:** Close records `closed_at` and keeps the chat in History. Reopen clears it. Chats moved to cold storage show Read-only.
 - **Peers update on their own schedule.** The gateway routinely talks to older peers, so API reads tolerate them: a 404 means `Needs update`, never a raw error, and a response shape that changed is normalized in its query. This is runtime interoperability and is not covered by the pre-release rule. Test new endpoints against a peer without them.
 - **Never use `node` as a search param.** The Go handler treats `?node=` as a proxy instruction on `/api/` paths, and this rule stays in force anyway.
 - Validate search params with `search()` / `looseSearch()` from `ui/src/lib/search.ts` (a string or absent; `"flag"` keys accept the parser's numbers). Never default them to `""`, which makes the param required on every `<Link>`. Apply defaults where the value is read. Response shapes are checked with the small readers in `ui/src/lib/validate.ts`; zod is not a dependency.

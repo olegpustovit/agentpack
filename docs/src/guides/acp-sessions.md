@@ -1,6 +1,6 @@
 # ACP chat sessions
 
-Some harnesses speak the [Agent Client Protocol](https://agentclientprotocol.com/) over stdio. Agentpack runs them in a **worker** (same ownership model as terminal PTY sessions), exposes a **conversation log** on the gateway, and renders chat in the browser or in the **`ap`** Bubble Tea hub.
+Some harnesses speak the [Agent Client Protocol](https://agentclientprotocol.com/) over stdio. Agentpack runs them in a **worker** (same ownership model as terminal PTY sessions), exposes a **conversation log** on the gateway, and renders chat in the gateway web UI.
 
 ## Session transport
 
@@ -13,6 +13,7 @@ Some harnesses speak the [Agent Client Protocol](https://agentclientprotocol.com
 | `waiting` | Background work an `idle` chat will wake for: `{kind, until?, peer?}` with kind `shell`, `monitor`, `agent`, `task`, `wake` (a `ScheduleWakeup`) or `reply` (an `ask` to the chat `peer`). Agentpack advertises the AIR `asyncTasks` capability, so the Claude and Codex adapters report background shells, monitors and self-started turns. It never holds commands or arguments, and `until` bounds every timed item. The UI shows such a chat as Waiting, and push sends "finished" only once the list empties |
 | `last_event_at` | Time of the chat's latest conversation entry; the session list's ages and unread markers use it |
 | `agent_session_id` | Agent-native session id for resume |
+| `closed_at` | Time the session was closed, omitted when open |
 
 Start chat with `POST /api/sessions` and `{ "transport": "acp", ... }`. The gateway answers at once with a gateway-chosen session ID and `conversation_state: "starting"`; pack sync and the agent launch continue in the background, and the worker keeps `starting` until its endpoint serves. A message typed meanwhile is held by the browser and sent once the chat is running. A failed start ends the row and leaves the error in the transcript; a gateway restart ends any chat it was still starting. In the sidebar, "+" on a folder starts a chat with that folder's last agent (⌥-click or right-click picks another); ⌘N opens the full New session sheet. Resume with `agent_session_id` from `GET /api/agent-sessions?directory=&harness=&mode=`. Switching Chat ↔ Terminal in the UI stops the current worker and starts the other transport; resume depends on the agent. A message sent to a stopped chat calls `POST /api/sessions/{id}/resume` with `{ "text": … }`: the gateway claims the ended row, restarts its worker under the same ID (the agent reloads its conversation and the transcript continues), and sends the text once it runs. Every 15 s, and at startup, the gateway ends rows whose worker died and settles chats left working, with a notice in the transcript. A chat whose agent died mid-turn (the machine slept, rebooted or lost its gateway) resumes by itself with a prompt to carry on, once per ten minutes, so an agent that keeps dying is left for you. After a start or a wake it first waits, at most 75 s, until the gateway has pulled state from the mesh (from Main, when another machine is Main), so the agent does not start on a replaced sign-in; the session row reports `resume_pending` meanwhile, and a message you send resumes it at once. A second gateway restart during the wait drops the automatic resume. A chat waiting on you, or one that never started, is only settled. A chat that never started (its agent wasn't signed in, say) starts fresh on resume. When a turn ends on the agent's own connection-error line (Claude's `API Error: Connection error.`, Codex's `stream disconnected …`) or the prompt fails with a network error, the worker sends a "continue" turn after 30 s, 2 min and 8 min, with a notice each time; anything the person sends first cancels it, and a reply that only talks about networking never counts.
 
@@ -43,6 +44,23 @@ Images and other support files remain. Live workers retain their files until a
 later startup. Unreadable sources stay in place and produce a diagnostic without
 preventing gateway startup; unreadable ownership records keep affected resumes
 read-only until the source can be imported.
+
+## Closing and reopening chats
+
+Choose **Close** from a session's menu to take it out of the sidebar. Close
+stops the agent if it is running and asks for confirmation if it would interrupt
+a busy agent. Use the project or machine header menu to close several sessions
+at once. The toolbar activity viewer offers one **Undo** for the whole close.
+
+Work's **History** section shows the three most recently closed chats.
+Select **Show all** to browse chat history by date, search by name or project,
+or filter by project, machine or agent. A project's **History** tab in the
+New session sheet also lists its saved chats.
+
+To return a chat to the sidebar, choose **Reopen** in History or open the chat
+and choose **Reopen** in the **Closed · in History** banner. Resuming the chat or
+sending it a message also reopens it. Older chats moved to cold storage on Main
+are **Read-only**. See [Main gateway and archive](../concepts/state.md#main-gateway-and-archive).
 
 ## Starting in any folder
 

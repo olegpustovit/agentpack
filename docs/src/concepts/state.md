@@ -118,10 +118,11 @@ stay shared. Main fetches and verifies attachments before archiving. Other nodes
 remove their archived attachment files only after verifying Main still has the
 bytes; a paused handover or missing copy leaves local files intact.
 
-Archived chats remain listed, render `Archived, read-only`, and cannot accept
-writes, resume or fork. Any gateway reads their history through Main. If Main or
-its archive is unavailable, the UI shows `Archived on <main>, unavailable right
-now`. There is no restore route.
+Chats in cold storage remain visible in History with the **Read-only** state.
+Any gateway reads their history through Main. If Main or its archive is
+unavailable, a banner names the machine. These chats cannot accept writes,
+resume, fork or reopen. While a closed chat is still in replicated storage,
+**Reopen** returns it to the sidebar. See [Closing and reopening chats](../guides/acp-sessions.md#closing-and-reopening-chats).
 
 To switch Main:
 
