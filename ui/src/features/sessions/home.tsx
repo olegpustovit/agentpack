@@ -160,9 +160,12 @@ export function SessionsHome({ draft, setDraft, onReview, rememberPosition, take
             aside={<button type="button" onClick={() => onView("history")} className="font-normal text-(--accent) hover:underline">Show all</button>}>
             {recentlyClosed.slice(0, 3).map((session) => (
               <HomeRow key={rowKey(session)} session={session} now={now}>
-                <RowAction label={`Reopen “${sessionLabel(session)}”`} onClick={() => void commands.reopen([session])}>
-                  <RotateCcw aria-hidden />
-                </RowAction>
+                {/* A cold-stored chat is read-only: it opens, it can't come back to the sidebar. */}
+                {!session.archived_at && (
+                  <RowAction label={`Reopen “${sessionLabel(session)}”`} onClick={() => void commands.reopen([session])}>
+                    <RotateCcw aria-hidden />
+                  </RowAction>
+                )}
               </HomeRow>
             ))}
           </Section>
