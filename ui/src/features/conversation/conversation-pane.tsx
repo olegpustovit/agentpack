@@ -436,8 +436,15 @@ export default function ConversationPane({
           </Button>
         )}>
           {info?.archived_at
-            ? "Archived · read-only"
+            ? "In History · read-only"
             : `Offline · saved history${lastSync ? ` · Last seen ${relativeTime(new Date(lastSync), waitNow)}` : ""}`}
+        </Banner>
+      )}
+      {/* Opened from History: say so once, with the one action that undoes Close. A message sent here reopens it too. */}
+      {!readOnly && info?.closed_at && (
+        <Banner action={<Button type="button" size="sm" onClick={() => void api(`/api/sessions/${encodeURIComponent(sessionId)}`, { machine, method: "PATCH", body: { closed: false } })
+          .then(() => queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey }), (error: unknown) => hud.error(`Couldn't reopen: ${error instanceof Error ? error.message : String(error)}`))}>Reopen</Button>}>
+          Closed · in History
         </Banner>
       )}
       {archiveUnavailable && <Banner>{archiveUnavailable}</Banner>}

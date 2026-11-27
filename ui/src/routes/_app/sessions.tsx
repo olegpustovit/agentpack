@@ -12,13 +12,19 @@ const NewSessionSheet = lazy(() => import("@/features/sessions/new-session-sheet
 
 function SessionsLayout() {
   const search = Route.useSearch()
-  const { sessionId } = useParams({ strict: false })
+  const { sessionId, folder } = useParams({ strict: false })
   const navigate = useNavigate()
   const isPhone = useIsPhone()
   const [draft, setDraft] = useState("")
   const restore = useRef<WorkPosition | null>(null)
   const all = search.tab === "all" || (search.tab !== "work" && Boolean(search.q || search.group || search.agent || search.status || search.host))
-  const work = <SessionsHome draft={draft} setDraft={setDraft}
+  // History is the Work page's other view; its search lives in the URL so Back and links keep it.
+  const history = {
+    search: { find: search.find, project: search.project, on: search.on, by: search.by },
+    setSearch: (patch: Record<string, string | undefined>) => void navigate({ to: ".", search: (prev) => ({ ...prev, ...patch }), replace: true }),
+  }
+  const work = <SessionsHome draft={draft} setDraft={setDraft} view={search.view === "history" ? "history" : "work"} history={history}
+    onView={(view) => void navigate({ to: "/sessions", search: (prev) => ({ ...prev, view: view === "history" ? "history" : undefined }) })}
     rememberPosition={(position) => { restore.current = position }}
     takePosition={() => {
       const position = restore.current
@@ -43,7 +49,7 @@ function SessionsLayout() {
   return (
     <>
       <ListDetail list={list}>
-        {isPhone || sessionId ? <Outlet /> : work}
+        {isPhone || sessionId || folder ? <Outlet /> : work}
       </ListDetail>
       {search.new === "1" && (
         <Suspense fallback={null}>
@@ -70,6 +76,12 @@ export const Route = createFileRoute("/_app/sessions")({
     new: "flag",
     machine: "text",
     folder: "text",
+    // The Work page's view and History's search: find (text), project (folder name), on (machine id), by (agent).
+    view: "text",
+    find: "text",
+    project: "text",
+    on: "text",
+    by: "text",
   }),
   component: SessionsLayout,
 })

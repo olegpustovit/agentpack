@@ -7,7 +7,7 @@ import { rowKey, sessionLabel, type ListedSession } from "./group"
 import { sessionsQuery } from "./queries"
 import { reusesOperationId, sessionRules } from "./rules"
 
-export function useSessionCommands(onArchivePending?: (session: ListedSession, pending: boolean) => void) {
+export function useSessionCommands(onClosePending?: (session: ListedSession, pending: boolean) => void) {
   const queryClient = useQueryClient()
   const operations = useState(() => new Map<string, string>())[0]
   const refresh = () => queryClient.invalidateQueries({ queryKey: sessionsQuery(false).queryKey })
@@ -43,21 +43,9 @@ export function useSessionCommands(onArchivePending?: (session: ListedSession, p
     accepted: refresh,
     failed: (error, session, retry) => hud.error(`Couldn't resume ${sessionLabel(session)} on ${session.machineName}: ${errorText(error)}`, retry),
   })
-  const archive = useIntent({
-    request: async (session: ListedSession, id) => {
-      const path: `/api/${string}` = `/api/sessions/${encodeURIComponent(session.id)}`
-      const options = { machine: session.machine, idempotencyKey: id }
-      // The row may be stale. The archive endpoint checks that the agent is stopped.
-      if (sessionRules(session).stop) await api(`${path}/stop`, { ...options, method: "POST" }).catch(() => undefined)
-      return api(path, { ...options, method: "PATCH", body: { hidden: true } })
-    },
-    apply: (session) => {
-      onArchivePending?.(session, true)
-      return () => onArchivePending?.(session, false)
-    },
-    accepted: (_result, session) => refresh().finally(() => onArchivePending?.(session, false)),
-    failed: (error, session, retry) => hud.error(`Couldn't archive ${sessionLabel(session)}: ${errorText(error)}`, retry),
-  })
+  const reopen = (rows: ListedSession[]) => reopenRows(rows, refresh)
+  const close = (rows: ListedSession[], name?: string) => closeRows(rows, name, refresh, onClosePending)
+
   const tools = useIntent({
     request: ({ session, enabled }: { session: ListedSession; enabled: boolean }) => api(`/api/sessions/${encodeURIComponent(session.id)}/tools`, { machine: session.machine, method: "POST", body: { enabled } }),
     accepted: refresh,
@@ -74,9 +62,46 @@ export function useSessionCommands(onArchivePending?: (session: ListedSession, p
       restart.mutate(session, id)
     },
     resume: resume.mutate,
-    archive: archive.mutate,
+    close,
+    reopen,
     setTools: async (session: ListedSession, enabled: boolean) => {
       await tools.mutateAsync({ session, enabled }).catch(() => undefined)
     },
+  }
+}
+
+// Project settings and Install package open the project's page in the main pane; Install focuses its search.
+export function projectPage(machine: string, directory: string, install = false) {
+  return { to: "/sessions/project/$machine/$folder", params: { machine, folder: directory }, search: install ? { install: "1" } : {} } as const
+}
+
+const setClosed = (session: ListedSession, closed: boolean) =>
+  api(`/api/sessions/${encodeURIComponent(session.id)}`, { machine: session.machine, method: "PATCH", body: { closed } })
+
+async function reopenRows(rows: ListedSession[], refresh: () => Promise<unknown>) {
+  const results = await Promise.allSettled(rows.map((row) => setClosed(row, false)))
+  await refresh()
+  const failed = rows.filter((_, index) => results[index]!.status === "rejected")
+  if (failed.length) hud.error(`Couldn't reopen ${failed.length === 1 ? sessionLabel(failed[0]!) : `${failed.length} sessions`}`, () => void reopenRows(failed, refresh))
+}
+
+// Close stops the agent and takes the session out of the sidebar; it stays in History. Reopen undoes it.
+// One outcome per gesture, so closing a project reads as one line with one Undo.
+async function closeRows(rows: ListedSession[], name: string | undefined, refresh: () => Promise<unknown>, onPending?: (session: ListedSession, pending: boolean) => void) {
+  const what = name ?? (rows.length === 1 ? `“${sessionLabel(rows[0]!)}”` : `${rows.length} sessions`)
+  for (const row of rows) onPending?.(row, true)
+  const results = await Promise.allSettled(rows.map(async (row) => {
+    // The row may be stale. The close endpoint checks that the agent is stopped.
+    if (sessionRules(row).stop) await api(`/api/sessions/${encodeURIComponent(row.id)}/stop`, { machine: row.machine, method: "POST" }).catch(() => undefined)
+    await setClosed(row, true)
+  }))
+  await refresh()
+  for (const row of rows) onPending?.(row, false)
+  const done = rows.filter((_, index) => results[index]!.status === "fulfilled")
+  const failed = rows.filter((_, index) => results[index]!.status === "rejected")
+  if (done.length) hud.success(`Closed ${failed.length ? `${done.length} of ${rows.length} sessions` : what}`, () => void reopenRows(done, refresh))
+  if (failed.length) {
+    const reason = (results.find((result) => result.status === "rejected") as PromiseRejectedResult).reason
+    hud.error(`Couldn't close ${failed.length === 1 ? sessionLabel(failed[0]!) : `${failed.length} sessions`}: ${errorText(reason)}`, () => void closeRows(failed, undefined, refresh, onPending))
   }
 }

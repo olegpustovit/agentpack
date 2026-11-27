@@ -1,13 +1,14 @@
-import { lazy, Suspense, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react"
+import { lazy, Suspense, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate, useParams, useRouter, useSearch } from "@tanstack/react-router"
-import { Folder, Laptop, Plus, Server } from "lucide-react"
+import { Ellipsis, Folder, History, Laptop, Package, Plus, Server, Settings, X, type LucideIcon } from "lucide-react"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { FilterButton, FilterToken } from "@/components/kit/filters"
 import { GroupHeader } from "@/components/kit/list"
-import { RowContextMenu, RowContextMenuCheckboxItem, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
-import { ContextMenuSeparator } from "@/components/ui/context-menu"
-import { buttonVariants } from "@/components/ui/button"
+import { Menu, MenuContent, MenuItem, MenuTrigger, menuRow, menuSurface, RowContextMenu, RowContextMenuCheckboxItem, RowContextMenuContent, RowContextMenuItem, RowContextMenuTrigger } from "@/components/kit/overlays"
+import { ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger } from "@/components/ui/context-menu"
+import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { useEventsConnected } from "@/features/events/use-events"
 import { nodesQuery } from "@/features/machines/queries"
 import { useIsPhone } from "@/features/shell/use-is-phone"
@@ -17,7 +18,7 @@ import { rememberSession } from "@/features/shell/views"
 import { LOCAL } from "@/lib/api"
 import { basename, harnessName, plural } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { useSessionCommands } from "./actions"
+import { projectPage, useSessionCommands } from "./actions"
 import { clearedFilter, filterSearch, filterTokens, matchesFilter, readFilter, type FilterKey, type SessionFilter } from "./filter"
 import { groupSessions, nestHelpers, rowKey, treeSessions, type GroupMode, type ListedSession, type SessionSubhead } from "./group"
 import { NotifyOffer } from "@/features/shell/attention"
@@ -26,7 +27,8 @@ import { agentIds, defaultAgent, sessionRules } from "./rules"
 import { useListedSessions } from "./queries"
 import { useStartSession } from "./start"
 import { isUnread, sessionGlyphState, useSeen } from "./session-status"
-import { SessionRow, SubagentRow, type GroupActions, type RowActions } from "./session-row"
+import { SessionRow, shownEntries, SubagentRow, type GroupActions, type RowActions } from "./session-row"
+import { projectDirectory } from "./git"
 import { RowSheet, type SheetState } from "./session-sheets"
 import { SessionActionAlert } from "./session-action-alert"
 
@@ -34,7 +36,9 @@ import { SessionActionAlert } from "./session-action-alert"
 // holding a key opens one terminal. `from` is the route the cursor was set under; a route change
 // drops it without an effect.
 type Cursor = { key: string; from: string | undefined }
-type Confirm = { kind: "stop" | "restart" | "archive"; rows: ListedSession[] }
+type Confirm = { kind: "stop" | "restart" | "close"; rows: ListedSession[]; name?: string }
+// A group header's menu. `items` is a one-level submenu in the context menu; the ⋯ menu lists them flat under `long`.
+type HeaderEntry = { label: string; long?: string; icon?: LucideIcon; disabled?: boolean; run: () => void; items?: undefined } | { label: string; icon?: LucideIcon; disabled?: boolean; items: HeaderEntry[] } | "separator"
 
 const SessionView = lazy(() => import("./session-view"))
 
@@ -58,10 +62,10 @@ export function SessionList() {
   const [sheet, setSheet] = useState<SheetState | null>(null)
   const [confirm, setConfirm] = useState<Confirm | null>(null)
   const [stopping, setStopping] = useState<ReadonlySet<string>>(new Set())
-  const [archiving, setArchiving] = useState<ReadonlySet<string>>(new Set())
+  const [closing, setClosing] = useState<ReadonlySet<string>>(new Set())
   const commands = useSessionCommands((session, pending) => {
     const key = rowKey(session)
-    setArchiving((current) => {
+    setClosing((current) => {
       const next = new Set(current)
       if (pending) next.add(key)
       else next.delete(key)
@@ -80,7 +84,8 @@ export function SessionList() {
   const selectedKey = cursor?.from === routeKey ? cursor?.key : routeKey
 
   const filter = readFilter(search)
-  const listed = treeSessions(sessions).filter((session) => !archiving.has(rowKey(session)))
+  // Closed sessions live in History, not here.
+  const listed = treeSessions(sessions).filter((session) => !session.closed_at && !closing.has(rowKey(session)))
   const shown = listed.filter((session) => matchesFilter(session, filter))
   const tokens = filterTokens(filter, (id) => machines.find((machine) => machine.id === id)?.name ?? id)
   const isDefault = tokens.length === 0 && groupMode === "project"
@@ -152,13 +157,13 @@ export function SessionList() {
       if (row && sessionRules(row).rename) setSheet({ kind: "rename", row })
       return
     }
-    // ⌘⌫ archives the marked rows, or the focused one, as Finder moves to Trash. Confirms only when it would interrupt an agent.
+    // ⌘⌫ closes the marked rows, or the focused one, as Finder moves to Trash. Confirms only when it would interrupt an agent.
     if ((event.key === "Backspace" || event.key === "Delete") && (isMac ? event.metaKey : event.ctrlKey)) {
-      const targets = (marked.size > 0 ? markedRows : rows[current] ? [rows[current]] : []).filter((row) => sessionRules(row).archive)
+      const targets = (marked.size > 0 ? markedRows : rows[current] ? [rows[current]] : []).filter((row) => sessionRules(row).close)
       if (targets.length === 0) return
       event.preventDefault()
       setMarked(new Set())
-      requestArchive(targets)
+      requestClose(targets)
       return
     }
     if (event.key === "Escape" && marked.size > 0) {
@@ -219,12 +224,12 @@ export function SessionList() {
 
   const markedRows = rows.filter((row) => marked.has(rowKey(row)))
   const stoppable = markedRows.filter((row) => sessionRules(row).stop)
-  const archivable = markedRows.filter((row) => sessionRules(row).archive)
+  const closable = markedRows.filter((row) => sessionRules(row).close)
   const group: GroupActions | undefined = markedRows.length > 1 ? {
     stopCount: stoppable.length,
-    archiveCount: archivable.length,
+    closeCount: closable.length,
     stop: () => setConfirm({ kind: "stop", rows: stoppable }),
-    archive: () => { setMarked(new Set()); requestArchive(archivable) },
+    close: () => { setMarked(new Set()); requestClose(closable) },
     ids: markedRows.map((row) => row.id),
   } : undefined
 
@@ -237,13 +242,14 @@ export function SessionList() {
     )
   }
 
-  // Archiving stops busy agents first, so that case is reviewed (SES-03); idle rows archive at once.
-  function requestArchive(targets: ListedSession[]) {
-    if (targets.some((row) => sessionRules(row).busy)) setConfirm({ kind: "archive", rows: targets })
-    else archiveRows(targets)
+  // Closing stops busy agents first, so that case is reviewed (SES-03); idle rows close at once and can be undone.
+  // `name` says what a header closed: "agentpack", "agentpack on kyiv-grid", "everything on kyiv-grid".
+  function requestClose(targets: ListedSession[], name?: string) {
+    if (targets.some((row) => sessionRules(row).busy)) setConfirm({ kind: "close", rows: targets, name })
+    else closeRows(targets, name)
   }
 
-  function archiveRows(targets: ListedSession[]) {
+  function closeRows(targets: ListedSession[], name?: string) {
     const keys = new Set(targets.map(rowKey))
     if (routeKey && keys.has(routeKey)) {
       const index = rows.findIndex((row) => rowKey(row) === routeKey)
@@ -252,7 +258,55 @@ export function SessionList() {
       if (next) openRow(next, true)
       else void navigate({ to: "/sessions", search: true, replace: true })
     }
-    for (const row of targets) commands.archive(row)
+    void commands.close(targets, name && `${name} · ${plural(targets.length, "session")}`)
+  }
+
+  // Every listed session in one folder on one machine, the pinned Needs-you rows included.
+  function inHead(head: SessionSubhead) {
+    return shown.filter((session) => session.machine === head.machine && projectDirectory(session).replace(/[\\/]+$/, "") === head.directory)
+      .filter((session) => sessionRules(session).close)
+  }
+
+  function onMachine(machine: string) {
+    return shown.filter((session) => session.machine === machine && sessionRules(session).close)
+  }
+
+  function folderEntries(head: SessionSubhead, folder: string, machineName: string, qualify: boolean): HeaderEntry[] {
+    const all = onMachine(head.machine)
+    const here = inHead(head)
+    const name = qualify ? `${folder} on ${machineName}` : folder
+    return [
+      { label: "Show history", icon: History, run: () => void navigate({ to: "/sessions", search: { view: "history", project: folder, ...(qualify ? { on: head.machine } : {}) } }) },
+      { label: "Install package…", icon: Package, disabled: head.offline, run: () => void navigate(projectPage(head.machine, head.directory, true)) },
+      { label: "Project settings…", icon: Settings, disabled: head.offline, run: () => void navigate(projectPage(head.machine, head.directory)) },
+      "separator",
+      { label: `Close ${name}`, icon: X, disabled: here.length === 0, run: () => requestClose(here, name) },
+      // Only worth a line when it closes more than this folder.
+      ...(all.length > here.length ? [{ label: `Close all on ${machineName}`, icon: X, run: () => requestClose(all, `everything on ${machineName}`) }] : []),
+    ]
+  }
+
+  function machineEntries(group: { key: string; label: string; subheads: SessionSubhead[] }): HeaderEntry[] {
+    const machine = group.subheads[0]?.machine ?? ""
+    const all = onMachine(machine)
+    const closeOne = (head: SessionSubhead) => ({ label: head.label, long: `Close ${head.label}`, icon: X, disabled: inHead(head).length === 0, run: () => requestClose(inHead(head), `${head.label} on ${group.label}`) })
+    // HIG: a submenu once one verb would repeat more than twice.
+    return [
+      { label: "Show history", icon: History, run: () => void navigate({ to: "/sessions", search: { view: "history", on: machine } }) },
+      "separator",
+      ...(group.subheads.length > 2 ? [{ label: "Close project", icon: X, items: group.subheads.map(closeOne) }] : group.subheads.map((head) => ({ ...closeOne(head), label: `Close ${head.label}` }))),
+      { label: `Close all on ${group.label}`, icon: X, disabled: all.length === 0, run: () => requestClose(all, `everything on ${group.label}`) },
+    ]
+  }
+
+  function projectEntries(group: { label: string; subheads: SessionSubhead[] }): HeaderEntry[] {
+    const all = group.subheads.flatMap(inHead)
+    const name = `${group.label} on ${plural(group.subheads.length, "machine")}`
+    return [
+      { label: "Show history", icon: History, run: () => void navigate({ to: "/sessions", search: { view: "history", project: group.label } }) },
+      "separator",
+      { label: `Close ${name}`, icon: X, disabled: all.length === 0, run: () => requestClose(all, name) },
+    ]
   }
 
   function actionsFor(row: ListedSession, selected: boolean): RowActions {
@@ -264,7 +318,8 @@ export function SessionList() {
         if (!selected) openRow(row)
       },
       stop: () => setConfirm({ kind: "stop", rows: [row] }),
-      archive: () => requestArchive([row]),
+      close: () => requestClose([row]),
+      installPackage: () => void navigate(projectPage(row.machine, projectDirectory(row), true)),
       // A pooled session on the open row must dial again; navigating to the row it already shows does nothing.
       reconnect: () => {
         terminalPool.reconnect(row.machine, row.id)
@@ -277,7 +332,7 @@ export function SessionList() {
           terminalPool.dispose(row.machine, row.id)
         })
       },
-      projectSettings: () => setSheet({ kind: "project", row }),
+      projectSettings: () => void navigate(projectPage(row.machine, projectDirectory(row))),
       tools: () => void commands.setTools(row, !row.tools),
     }
   }
@@ -316,7 +371,7 @@ export function SessionList() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {!routeKey && <ToolbarTitle title="Sessions" subtitle={`${plural(sessions.length, "session")} on ${plural(machines.length, "machine")}`} />}
+      {!routeKey && <ToolbarTitle title="Sessions" subtitle={`${plural(sessions.filter((session) => !session.closed_at).length, "session")} on ${plural(machines.length, "machine")}`} />}
       {isPhone && <ToolbarSlot>{viewTrigger}<NewSessionLink /></ToolbarSlot>}
       {!isPhone && (
         // One row: the Work link fills it and the view and New buttons sit on its trailing edge.
@@ -388,25 +443,30 @@ export function SessionList() {
         {groups.map((group) => {
           // One folder on one machine needs no second header row: its label and "+" join the group's.
           const only = group.subheads.length === 1 ? group.subheads[0] : undefined
+          const byMachine = groupMode === "machine"
+          const machineOf = (head: SessionSubhead) => byMachine ? group.label : head.label
+          const folderOf = (head: SessionSubhead) => byMachine ? head.label : group.label
+          const groupEntries = only ? folderEntries(only, folderOf(only), machineOf(only), false) : byMachine ? machineEntries(group) : projectEntries(group)
           return (
             <div key={group.key}>
-              <GroupHeader className={cn(only && "group/head")}>
-                {groupMode === "machine" ? group.key === LOCAL ? <Laptop aria-hidden /> : <Server aria-hidden /> : <Folder aria-hidden />}
+              <HeaderMenu entries={groupEntries} headKey={only?.key}>
+                {byMachine ? group.key === LOCAL ? <Laptop aria-hidden /> : <Server aria-hidden /> : <Folder aria-hidden />}
                 <span className="min-w-0 truncate">{group.label}</span>
                 {only && <span className="min-w-0 truncate font-normal text-(--fg3)">{`· ${only.label}`}</span>}
                 <span className="flex-1" />
-                {groupMode === "machine" && <span className="shrink-0 font-normal text-(--fg3)">{group.offline ? "Offline" : "Online"}</span>}
+                {byMachine && <span className="shrink-0 font-normal text-(--fg3)">{group.offline ? "Offline" : "Online"}</span>}
                 {only && <NewInFolder head={only} />}
-              </GroupHeader>
+              </HeaderMenu>
               {only && nestHelpers(only.sessions).map(({ session, nested }) => renderRow(session, nested))}
               {!only && group.subheads.map((head) => (
                 <div key={head.key}>
-                  <GroupHeader className="group/head ps-(--s5) font-normal">
-                    {groupMode === "machine" ? <Folder aria-hidden /> : <Server aria-hidden />}
+                  <HeaderMenu entries={folderEntries(head, folderOf(head), machineOf(head), !byMachine)} headKey={head.key} className="ps-(--s5) font-normal">
+                    {byMachine ? <Folder aria-hidden /> : <Server aria-hidden />}
                     <span className="min-w-0 truncate">{head.label}</span>
                     {head.parent && <span className="ms-(--s2) shrink-0 text-(--fg3)">{head.parent}</span>}
+                    <span className="flex-1" />
                     <NewInFolder head={head} />
-                  </GroupHeader>
+                  </HeaderMenu>
                   {nestHelpers(head.sessions).map(({ session, nested }) => renderRow(session, nested))}
                 </div>
               ))}
@@ -425,7 +485,7 @@ export function SessionList() {
             setConfirm(null)
             setMarked(new Set())
             if (kind === "stop") stopRows(targets)
-            else if (kind === "archive") archiveRows(targets)
+            else if (kind === "close") closeRows(targets, confirm.name)
             else for (const row of targets) void commands.restart(row)
           }}
         />
@@ -486,7 +546,8 @@ function NewInFolder({ head }: { head: SessionSubhead }) {
   }
   return (
     <RowContextMenu onOpenChange={(open) => { if (!open) setWorktree(false) }}>
-      <RowContextMenuTrigger render={<button type="button" aria-label={label} title={label} className={className} onClick={onClick} />}>
+      {/* Its own menu: keep the right-click from also opening the header's. */}
+      <RowContextMenuTrigger render={<button type="button" aria-label={label} title={label} className={className} onClick={onClick} onContextMenu={(event) => event.stopPropagation()} />}>
         <Plus aria-hidden />
       </RowContextMenuTrigger>
       <RowContextMenuContent>
@@ -502,3 +563,50 @@ function NewInFolder({ head }: { head: SessionSubhead }) {
   )
 }
 
+
+// A group header with the folder or machine commands: right-click, Shift+F10, or ⋯ on hover (HIG: every
+// context-menu command also has a visible way in).
+function HeaderMenu({ entries, headKey, className, children }: { entries: HeaderEntry[]; headKey?: string; className?: string; children: ReactNode }) {
+  return (
+    <RowContextMenu>
+      <RowContextMenuTrigger render={<GroupHeader data-head-key={headKey?.replace("\0", "|")} className={cn("group/head", className)} onKeyDown={openMenuFromKeyboard} />}>
+        {children}
+        <Menu>
+          <MenuTrigger render={<Button variant="ghost" size="icon" aria-label="More actions" className="size-(--head-h) shrink-0 opacity-0 group-hover/head:opacity-100 focus-visible:opacity-100 data-popup-open:opacity-100 pointer-coarse:opacity-100" />}>
+            <Ellipsis className="size-(--fs)" />
+          </MenuTrigger>
+          <MenuContent align="end">{headerItems(entries, false)}</MenuContent>
+        </Menu>
+      </RowContextMenuTrigger>
+      <RowContextMenuContent>{headerItems(entries, true)}</RowContextMenuContent>
+    </RowContextMenu>
+  )
+}
+
+function headerItems(entries: HeaderEntry[], context: boolean): ReactNode[] {
+  return shownEntries(entries, context).flatMap((entry, index): ReactNode[] => {
+    if (entry === "separator") return [context ? <ContextMenuSeparator key={index} /> : <DropdownMenuSeparator key={index} />]
+    const Icon = entry.icon
+    const icon = Icon && <Icon aria-hidden />
+    if (entry.items) {
+      if (!context) return headerItems(entry.items.map((item) => item === "separator" || item.items ? item : { ...item, label: item.long ?? item.label }), false)
+      return [
+        <ContextMenuSub key={entry.label}>
+          <ContextMenuSubTrigger className={cn(menuRow, "data-open:bg-(--accent-fill) data-open:text-(--accent-fg)")}>{icon}<span className="min-w-0 flex-1 truncate">{entry.label}</span></ContextMenuSubTrigger>
+          <ContextMenuSubContent className={menuSurface}>{headerItems(entry.items, true)}</ContextMenuSubContent>
+        </ContextMenuSub>,
+      ]
+    }
+    return [context
+      ? <RowContextMenuItem key={entry.label} icon={icon} disabled={entry.disabled} onClick={entry.run}>{entry.label}</RowContextMenuItem>
+      : <MenuItem key={entry.label} icon={icon} disabled={entry.disabled} onClick={entry.run}>{entry.label}</MenuItem>]
+  })
+}
+
+// WebKit sends no contextmenu event for Shift+F10 or the context-menu key.
+function openMenuFromKeyboard(event: KeyboardEvent<HTMLElement>) {
+  if (!(event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey))) return
+  event.preventDefault()
+  const box = event.currentTarget.getBoundingClientRect()
+  event.currentTarget.dispatchEvent(new globalThis.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: box.left + 24, clientY: box.bottom }))
+}

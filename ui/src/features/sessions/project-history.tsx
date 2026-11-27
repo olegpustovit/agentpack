@@ -12,6 +12,7 @@ import { lastActivity, matchesSession, rowKey, sessionLabel, type ListedSession 
 import { projectHistoryQuery } from "./queries"
 import { placeKey, sessionRules, type ProjectPlace } from "./rules"
 import { sessionStatusWord } from "./session-status"
+import { useSessionCommands } from "./actions"
 
 export function ProjectHistory({ places, agent, onRename }: {
   places: ProjectPlace[]
@@ -19,6 +20,7 @@ export function ProjectHistory({ places, agent, onRename }: {
   onRename: (row: ListedSession) => void
 }) {
   const [filter, setFilter] = useState("")
+  const commands = useSessionCommands()
   const live = useEventsConnected()
   const queries = useQueries({ queries: places.map(({ machine, row }) => projectHistoryQuery(machine, row.directory, live)) })
   const matches = new Map<string, ListedSession>()
@@ -64,6 +66,11 @@ export function ProjectHistory({ places, agent, onRename }: {
                   <span className="w-full truncate font-semibold max-[760px]:line-clamp-2 max-[760px]:whitespace-normal" title={title}>{title}</span>
                   <span className="w-full truncate text-(length:--fs-xs) text-(--fg2) max-[760px]:line-clamp-2 max-[760px]:whitespace-normal" title={detail}>{detail}</span>
                 </SourceRow>
+                {sessionRules(row).reopen && !row.archived_at && (
+                  <Button type="button" size="sm" className="max-[760px]:min-h-11" aria-label={`Reopen ${title}`} onClick={() => void commands.reopen([row])}>
+                    Reopen
+                  </Button>
+                )}
                 {sessionRules(row).rename && (
                   <Button type="button" variant="ghost" size="sm" className="max-[760px]:min-h-11" aria-label={`Rename ${title}`} onClick={() => onRename(row)}>
                     Rename

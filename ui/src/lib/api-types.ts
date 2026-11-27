@@ -51,6 +51,8 @@ export type SessionInfo = {
   last_sync?: string
   ended_at?: string
   archived_at?: string
+  // Closed: out of the sidebar, still in History. Reopening clears it.
+  closed_at?: string
   id: string
   name?: string
   // First user prompt of an ACP chat, one line. Older peers omit it.

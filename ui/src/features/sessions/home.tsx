@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { Check, CornerUpLeft } from "lucide-react"
+import { Check, ChevronLeft, CornerUpLeft, RotateCcw } from "lucide-react"
 import { AgentTile } from "@/components/kit/agent-tile"
 import { Empty, Kbd } from "@/components/kit/feedback"
 import { GroupHeader } from "@/components/kit/list"
@@ -14,6 +14,8 @@ import { useNow } from "@/lib/use-now"
 import { lastSession } from "@/features/shell/views"
 import { lastActivity, rowKey, sessionLabel, type ListedSession } from "./group"
 import { useListedSessions } from "./queries"
+import { useSessionCommands } from "./actions"
+import { HistoryView, type HistorySearch } from "./history"
 import { isUnread, markSeen, openWaits, sessionGlyphState, useSeen, waitingDetail } from "./session-status"
 import { projectDirectory, sessionGitQuery } from "./git"
 
@@ -22,14 +24,22 @@ const isMac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigat
 // The Sessions pane with nothing open: start a task, answer what waits on you, see what runs and what finished.
 export type WorkPosition = { top: number; group: string }
 
-export function SessionsHome({ draft, setDraft, onReview, rememberPosition, takePosition }: {
+export function SessionsHome({ draft, setDraft, onReview, rememberPosition, takePosition, view, onView, history }: {
+  // Work is what needs you now; History, opened from Work's History section, is everything before.
+  view: "work" | "history"
+  onView: (view: "work" | "history") => void
+  history: { search: HistorySearch; setSearch: (patch: HistorySearch) => void }
   draft: string
   setDraft: (draft: string) => void
   onReview: () => void
   rememberPosition: (position: WorkPosition) => void
   takePosition: () => WorkPosition | null
 }) {
-  const { sessions, queries } = useListedSessions()
+  const listed = useListedSessions()
+  const { queries } = listed
+  const commands = useSessionCommands()
+  // Closed sessions are done with; only History shows them.
+  const sessions = listed.sessions.filter((session) => !session.closed_at)
   const seen = useSeen()
   const scroller = useRef<HTMLDivElement>(null)
   const last = lastSession()
@@ -66,15 +76,28 @@ export function SessionsHome({ draft, setDraft, onReview, rememberPosition, take
     working.length && `${working.length} working`,
     waiting.length && `${waiting.length} waiting`,
   ].filter(Boolean).join(" · ")
+  // The last chats closed, newest first: History's front door, and the way back from a Close you regret.
+  const recentlyClosed = listed.sessions.filter((session) => session.closed_at)
+    .sort((a, b) => (b.closed_at ?? "").localeCompare(a.closed_at ?? ""))
   const lastChat = last && sessions.find((session) => session.machine === last.machine && session.id === last.sessionId)
 
   return (
     <div ref={scroller} className="h-full min-h-0 flex-1 overflow-y-auto" onClickCapture={onOpenWorkItem}>
       <div className="mx-auto flex max-w-[52rem] flex-col gap-(--s8) px-(--s8) py-(--s8) max-[760px]:px-(--s5) max-[760px]:py-(--s6)">
-        <header className="flex flex-col gap-(--s1)">
-          <h2 className="text-(length:--fs-lg) font-semibold">Work</h2>
-          {!queries.firstLoadPending && <p className="text-(length:--fs-sm) text-(--fg2)">{summary || "Nothing needs attention"}</p>}
+        <header className="flex items-start gap-(--s3)">
+          {/* History is a drill-in from Work's own History section, so it leads with the way back. */}
+          {view === "history" && (
+            <Button type="button" variant="ghost" size="icon" aria-label="Back to Work" title="Back to Work" onClick={() => onView("work")} className="-ms-(--s3) mt-[2px]">
+              <ChevronLeft aria-hidden />
+            </Button>
+          )}
+          <div className="flex min-w-0 flex-1 flex-col gap-(--s1)">
+            <h2 className="text-(length:--fs-lg) font-semibold">{view === "history" ? "History" : "Work"}</h2>
+            {!queries.firstLoadPending && <p className="text-(length:--fs-sm) text-(--fg2)">{view === "history" ? "Every chat, closed ones included" : summary || "Nothing needs attention"}</p>}
+          </div>
         </header>
+
+        {view === "history" ? <HistoryView {...history} /> : <>
 
         {/* Composer first: the task is the start; where it runs is chosen on the next step. */}
         <form aria-label="Start a task" onSubmit={(event) => {
@@ -132,13 +155,26 @@ export function SessionsHome({ draft, setDraft, onReview, rememberPosition, take
           </Section>
         )}
         {quiet && <Empty title="All caught up">Nothing is waiting on you. Describe a task above, or open a session from the list.</Empty>}
+        {recentlyClosed.length > 0 && (
+          <Section title="History"
+            aside={<button type="button" onClick={() => onView("history")} className="font-normal text-(--accent) hover:underline">Show all</button>}>
+            {recentlyClosed.slice(0, 3).map((session) => (
+              <HomeRow key={rowKey(session)} session={session} now={now}>
+                <RowAction label={`Reopen “${sessionLabel(session)}”`} onClick={() => void commands.reopen([session])}>
+                  <RotateCcw aria-hidden />
+                </RowAction>
+              </HomeRow>
+            ))}
+          </Section>
+        )}
+        </>}
       </div>
     </div>
   )
 }
 
 // A titled group. Long groups show their first rows and a "Show N more" toggle.
-function Section({ title, count, tone, aside, limit, children }: { title: string; count: number; tone?: "warn"; aside?: ReactNode; limit?: number; children: ReactNode[] }) {
+function Section({ title, count, tone, aside, limit, children }: { title: string; count?: number; tone?: "warn"; aside?: ReactNode; limit?: number; children: ReactNode[] }) {
   const [expanded, setExpanded] = useState(false)
   const hidden = limit && !expanded ? Math.max(0, children.length - limit) : 0
   return (
@@ -147,7 +183,7 @@ function Section({ title, count, tone, aside, limit, children }: { title: string
         <h2 tabIndex={-1} className="flex min-w-0 flex-1 items-center gap-(--s3) rounded-(--r-xs)">
           {tone === "warn" && <span aria-hidden className="size-2 rounded-full bg-(--warn)" />}
           {title}
-          <span className="font-normal text-(--fg3) tabular-nums">{count}</span>
+          {count !== undefined && <span className="font-normal text-(--fg3) tabular-nums">{count}</span>}
         </h2>
         {aside}
       </GroupHeader>

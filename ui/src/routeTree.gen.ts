@@ -34,6 +34,7 @@ import { Route as AppLibraryMcpNameRouteImport } from './routes/_app/library/mcp
 import { Route as AppLibraryPackageSplatRouteImport } from './routes/_app/library/package/$'
 import { Route as AppSessionsMachineSessionIdRouteImport } from './routes/_app/sessions/$machine/$sessionId'
 import { Route as AppUsageKindIdRouteImport } from './routes/_app/usage/$kind/$id'
+import { Route as AppSessionsProjectMachineFolderRouteImport } from './routes/_app/sessions/project/$machine/$folder'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -161,6 +162,12 @@ const AppUsageKindIdRoute = AppUsageKindIdRouteImport.update({
   path: '/$kind/$id',
   getParentRoute: () => AppUsageRoute,
 } as any)
+const AppSessionsProjectMachineFolderRoute =
+  AppSessionsProjectMachineFolderRouteImport.update({
+    id: '/project/$machine/$folder',
+    path: '/project/$machine/$folder',
+    getParentRoute: () => AppSessionsRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -187,6 +194,7 @@ export interface FileRoutesByFullPath {
   '/library/package/$': typeof AppLibraryPackageSplatRoute
   '/sessions/$machine/$sessionId': typeof AppSessionsMachineSessionIdRoute
   '/usage/$kind/$id': typeof AppUsageKindIdRoute
+  '/sessions/project/$machine/$folder': typeof AppSessionsProjectMachineFolderRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -209,6 +217,7 @@ export interface FileRoutesByTo {
   '/library/package/$': typeof AppLibraryPackageSplatRoute
   '/sessions/$machine/$sessionId': typeof AppSessionsMachineSessionIdRoute
   '/usage/$kind/$id': typeof AppUsageKindIdRoute
+  '/sessions/project/$machine/$folder': typeof AppSessionsProjectMachineFolderRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -237,6 +246,7 @@ export interface FileRoutesById {
   '/_app/library/package/$': typeof AppLibraryPackageSplatRoute
   '/_app/sessions/$machine/$sessionId': typeof AppSessionsMachineSessionIdRoute
   '/_app/usage/$kind/$id': typeof AppUsageKindIdRoute
+  '/_app/sessions/project/$machine/$folder': typeof AppSessionsProjectMachineFolderRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -265,6 +275,7 @@ export interface FileRouteTypes {
     | '/library/package/$'
     | '/sessions/$machine/$sessionId'
     | '/usage/$kind/$id'
+    | '/sessions/project/$machine/$folder'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -287,6 +298,7 @@ export interface FileRouteTypes {
     | '/library/package/$'
     | '/sessions/$machine/$sessionId'
     | '/usage/$kind/$id'
+    | '/sessions/project/$machine/$folder'
   id:
     | '__root__'
     | '/'
@@ -314,6 +326,7 @@ export interface FileRouteTypes {
     | '/_app/library/package/$'
     | '/_app/sessions/$machine/$sessionId'
     | '/_app/usage/$kind/$id'
+    | '/_app/sessions/project/$machine/$folder'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -499,6 +512,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppUsageKindIdRouteImport
       parentRoute: typeof AppUsageRoute
     }
+    '/_app/sessions/project/$machine/$folder': {
+      id: '/_app/sessions/project/$machine/$folder'
+      path: '/project/$machine/$folder'
+      fullPath: '/sessions/project/$machine/$folder'
+      preLoaderRoute: typeof AppSessionsProjectMachineFolderRouteImport
+      parentRoute: typeof AppSessionsRoute
+    }
   }
 }
 
@@ -541,11 +561,13 @@ const AppMachinesRouteWithChildren = AppMachinesRoute._addFileChildren(
 interface AppSessionsRouteChildren {
   AppSessionsIndexRoute: typeof AppSessionsIndexRoute
   AppSessionsMachineSessionIdRoute: typeof AppSessionsMachineSessionIdRoute
+  AppSessionsProjectMachineFolderRoute: typeof AppSessionsProjectMachineFolderRoute
 }
 
 const AppSessionsRouteChildren: AppSessionsRouteChildren = {
   AppSessionsIndexRoute: AppSessionsIndexRoute,
   AppSessionsMachineSessionIdRoute: AppSessionsMachineSessionIdRoute,
+  AppSessionsProjectMachineFolderRoute: AppSessionsProjectMachineFolderRoute,
 }
 
 const AppSessionsRouteWithChildren = AppSessionsRoute._addFileChildren(

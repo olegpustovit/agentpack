@@ -30,6 +30,7 @@ export function ActivityViewer() {
   }, [latest])
   if (!latest) return null
   const failed = fresh && latest.tone === "failed"
+  const undoable = fresh && !failed && latest.undo
 
   return (
     <>
@@ -70,6 +71,11 @@ export function ActivityViewer() {
             </span>
           </span>
         </button>
+        {undoable && (
+          <span className="activity-in ms-auto flex shrink-0 items-center pe-(--s1)">
+            <Button size="sm" className="rounded-full" onClick={() => { dismissActivity(latest.id); latest.undo?.() }}>Undo</Button>
+          </span>
+        )}
         {failed && (
           <span className="activity-in ms-auto flex shrink-0 items-center gap-(--s1) pe-(--s1)">
             {latest.retry && <Button size="sm" className="rounded-full" onClick={() => { dismissActivity(latest.id); latest.retry?.() }}>Retry</Button>}

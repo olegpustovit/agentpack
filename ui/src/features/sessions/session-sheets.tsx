@@ -4,7 +4,6 @@ import { Field, FieldError, FieldGrid, FieldLabel, PopupSelect } from "@/compone
 import { Sheet, SheetActions, SheetContent, SheetDescription, SheetTitle } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { ProjectSettings } from "./project-settings"
 import { agentpacksQuery } from "@/features/library/queries"
 import { api, LOCAL } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
@@ -14,7 +13,7 @@ import type { ListedSession } from "./group"
 import { projectHistoryKey, sessionsQuery } from "./queries"
 
 export type SaveTarget = Pick<ListedSession, "machine" | "machineName" | "directory" | "mode">
-export type SheetState = { kind: "rename" | "project"; row: ListedSession }
+export type SheetState = { kind: "rename"; row: ListedSession }
 
 // Each dialog body mounts only while open, so its form starts clean.
 export function RowSheet({ sheet, onClose, finalFocus }: {
@@ -25,9 +24,8 @@ export function RowSheet({ sheet, onClose, finalFocus }: {
   return (
     <Sheet open={sheet !== null} onOpenChange={(open) => { if (!open) onClose() }}>
       {sheet && (
-        <SheetContent className={sheet.kind === "project" ? "w-160" : "w-90"} {...(finalFocus !== undefined && { finalFocus })}>
-          {sheet.kind === "rename" && <RenameForm row={sheet.row} onDone={onClose} />}
-          {sheet.kind === "project" && <ProjectSettings key={sheet.row.id} row={sheet.row} onDone={onClose} />}
+        <SheetContent className="w-90" {...(finalFocus !== undefined && { finalFocus })}>
+          <RenameForm row={sheet.row} onDone={onClose} />
         </SheetContent>
       )}
     </Sheet>

@@ -21,17 +21,19 @@ export function sessionRules(session: ListedSession) {
   const nonInteractive = session.state.interactive === false
   return {
     rename: !session.archived_at && !pending,
+    // Closed sessions live in History; a cold one (archived_at) can still be reopened into the list, read-only.
+    reopen: Boolean(session.closed_at) && !pending,
     restart: !offline && !nonInteractive,
     // A stopped chat starts its agent again on the same conversation.
     resume: !offline && session.transport === "acp" && !session.state.running && Boolean(session.ended_at),
     stop: !offline && !session.ended_at && session.state.running,
-    // Archiving this stops work in progress: a terminal agent may be mid-turn; an idle chat with nothing to wake for is not.
+    // Closing this stops work in progress: a terminal agent may be mid-turn; an idle chat with nothing to wake for is not.
     busy: !offline && !session.ended_at && session.state.running && (session.transport !== "acp" || session.conversation_state !== "idle" || Boolean(session.waiting?.length)),
     reconnect: !offline && !nonInteractive,
     projectSettings: !session.offline && !pending,
-    // Archive writes the replicated row, so an offline machine's sessions can go too.
+    // Close writes the replicated row, so an offline machine's sessions can go too.
     // A starting chat's agent is on its way up; Stop it once it runs.
-    archive: !session.archived_at && !pending && !(session.conversation_state === "starting" && !session.ended_at),
+    close: !session.closed_at && !session.archived_at && !pending && !(session.conversation_state === "starting" && !session.ended_at),
   }
 }
 

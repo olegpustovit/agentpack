@@ -2,7 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from "react"
 
 // Outcomes of actions that finished out of sight. There are no toasts: the toolbar's activity
 // viewer shows the latest one in place and keeps a short log, the way Xcode's activity viewer does.
-export type Activity = { id: number; tone: "done" | "failed"; message: string; at: number; retry?: () => void }
+export type Activity = { id: number; tone: "done" | "failed"; message: string; at: number; retry?: () => void; undo?: () => void }
 
 const HISTORY_LIMIT = 20
 let log: Activity[] = []
@@ -34,10 +34,11 @@ export function clearActivity() {
 // Plain functions so any module can report an outcome without a hook.
 // Failures stay in the toolbar until dismissed or retried, per the alert model.
 export const hud = {
-  success(message: string) {
+  // `undo` reverses the outcome; the viewer offers it while the outcome shows and in the log.
+  success(message: string, undo?: () => void) {
     const failures = log.filter((item) => item.tone === "failed")
     const outcomes = log.filter((item) => item.tone === "done").slice(0, HISTORY_LIMIT - 1)
-    publish([...failures, { id: ++next, tone: "done", message, at: Date.now() }, ...outcomes])
+    publish([...failures, { id: ++next, tone: "done", message, at: Date.now(), undo }, ...outcomes])
   },
   error(message: string, retry?: () => void) {
     publish([{ id: ++next, tone: "failed", message, at: Date.now(), retry }, ...log.filter((item) => item.tone !== "failed" || item.message !== message)])

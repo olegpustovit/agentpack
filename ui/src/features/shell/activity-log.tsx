@@ -39,6 +39,7 @@ export default function ActivityLog({
                 <span className="block text-(length:--fs) leading-snug">{item.message}</span>
                 <span className="block text-(length:--fs-xs) text-(--fg3)">{ago(item.at, now)}</span>
               </span>
+              {item.undo && <Button size="sm" onClick={() => { dismissActivity(item.id); item.undo?.() }}>Undo</Button>}
               {item.tone === "failed" && item.retry && <Button size="sm" onClick={() => { dismissActivity(item.id); item.retry?.() }}>Retry</Button>}
               {item.tone === "failed" && (
                 <Button size="icon" variant="ghost" aria-label={`Dismiss ${item.message}`} onClick={() => dismissActivity(item.id)}><X aria-hidden /></Button>

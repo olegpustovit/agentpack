@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import { queryOptions } from "@tanstack/react-query"
 import { api } from "@/lib/api"
 import type { Agentpack, AgentpackWithRevisions, Catalog, AgentpackConflict, Draft, LatestVersion, Package, ReplicationPeers } from "@/lib/api-types"
@@ -24,6 +25,16 @@ export const agentpacksQuery = (machine: string) =>
   })
 
 // Public sources, read through this gateway only: the server caches them for a day.
+// The registry is searched server-side, so typing settles before fetching.
+export function useSettled(value: string): string {
+  const [settled, setSettled] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), 300)
+    return () => clearTimeout(timer)
+  }, [value])
+  return settled
+}
+
 export const catalogQuery = (q: string) =>
   queryOptions({
     queryKey: ["library", "catalog", q],

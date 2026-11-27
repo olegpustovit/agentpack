@@ -2,14 +2,15 @@ import { useState, type ReactNode } from "react"
 import { Autocomplete } from "@base-ui/react/autocomplete"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { Archive, ChartColumn, Gauge, GitFork, GitPullRequest, Plus, Search, Server, Settings, Square, Minimize2 } from "lucide-react"
+import { ChartColumn, Gauge, GitFork, GitPullRequest, History, Package, Plus, Search, Server, Settings, Square, Minimize2, X } from "lucide-react"
 import { Kbd } from "@/components/kit/feedback"
 import { ConfirmAlert, menuRow, menuSurface } from "@/components/kit/overlays"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { agentSnapshotQuery, type ConversationPage } from "@/features/conversation/queries"
 import { advertises, agentCommands } from "@/features/conversation/composer-hints"
 import { PullRequestConfirmation, usePullRequest } from "@/features/conversation/session-git"
-import { useSessionCommands } from "@/features/sessions/actions"
+import { projectPage, useSessionCommands } from "@/features/sessions/actions"
+import { projectDirectory } from "@/features/sessions/git"
 import { rowKey, sessionLabel, type ListedSession } from "@/features/sessions/group"
 import { isWorktreePath, sessionGitQuery } from "@/features/sessions/git"
 import { SessionActionAlert } from "@/features/sessions/session-action-alert"
@@ -42,7 +43,7 @@ export type PaletteEntry = {
   run: () => void
 }
 export type PaletteGroup = { value: string; items: PaletteEntry[] }
-type Review = { kind: "archive" | "stop"; session: ListedSession } | { kind: "pull-request" }
+type Review = { kind: "close" | "stop"; session: ListedSession } | { kind: "pull-request" }
 
 // Every word must appear in the label or detail. The label beginning with the query ranks first, then a
 // word of the label beginning with it, then the label containing it, then a detail-only match.
@@ -112,8 +113,8 @@ export default function CommandPalette({
   const pr = usePullRequest(machine, sessionId, git?.branch)
   const openPullRequest = git?.pr?.state === "OPEN" ? git.pr.url : pr.link?.url
 
-  function archiveSession(session: ListedSession) {
-    commands.archive(session)
+  function closeSession(session: ListedSession) {
+    void commands.close([session])
     if (rowKey(session) === openKey) void navigate({ to: "/sessions", search: true, replace: true })
   }
 
@@ -121,7 +122,7 @@ export default function CommandPalette({
     const current = sessions.find((item) => rowKey(item) === rowKey(session))
     onClose()
     if (!current || !sessionRules(current)[kind]) return
-    if (kind === "archive") archiveSession(current)
+    if (kind === "close") closeSession(current)
     else void commands.stop(current)
   }
 
@@ -145,12 +146,15 @@ export default function CommandPalette({
   if (open) entries.push(...sessionCommands(open))
   entries.push(
     { id: "new", group: "Go to", label: "New session…", icon: <Plus aria-hidden />, run: () => void navigate({ to: "/sessions", search: { new: "1" } }) },
+    { id: "history", group: "Go to", label: "History", icon: <History aria-hidden />, run: () => void navigate({ to: "/sessions", search: { view: "history" } }) },
     ...views.map((view, index) => ({ id: `view:${view.id}`, group: "Go to", label: view.label, icon: <view.icon aria-hidden />, shortcut: `${mod}${index + 1}`, run: () => void navigate({ to: view.to }) })),
     { id: "usage", group: "Go to", label: "Usage", icon: <ChartColumn aria-hidden />, run: () => void navigate({ to: "/usage" }) },
     { id: "limits", group: "Go to", label: "Limits", icon: <Gauge aria-hidden />, run: () => void navigate({ to: "/usage/limits" }) },
     { id: "machines", group: "Go to", label: "Machines", icon: <Server aria-hidden />, run: () => void navigate({ to: "/machines" }) },
     { id: "settings", group: "Go to", label: "Settings", icon: <Settings aria-hidden />, run: () => void navigate({ to: "/settings" }) },
-    ...sessions.filter((session) => !waiting.includes(session) && !session.archived_at).map((session) => sessionEntry(session, "Sessions", true)),
+    ...sessions.filter((session) => !waiting.includes(session) && !session.archived_at && !session.closed_at).map((session) => sessionEntry(session, "Sessions", true)),
+    // Closed sessions stay findable by name, as Safari's Recently Closed.
+    ...sessions.filter((session) => session.closed_at).map((session) => ({ ...sessionEntry(session, "History", true), note: `Closed · ${basename(session.directory)} · ${session.machineName}` })),
   )
 
   function sessionCommands(session: ListedSession): PaletteEntry[] {
@@ -166,14 +170,17 @@ export default function CommandPalette({
     if (rules.stop) {
       list.push({ id: "stop", group: "This session", label: `Stop ${agent}…`, icon: <Square aria-hidden />, review: true, run: () => setReview({ kind: "stop", session }) })
     }
-    if (rules.archive) {
+    if (rules.projectSettings) {
+      list.push({ id: "install", group: "This session", label: "Install package…", icon: <Package aria-hidden />, run: () => void navigate(projectPage(session.machine, projectDirectory(session), true)) })
+    }
+    if (rules.close) {
       list.push({
-        id: "archive",
+        id: "close",
         group: "This session",
-        label: rules.busy ? "Archive session…" : "Archive session",
-        icon: <Archive aria-hidden />,
+        label: rules.busy ? "Close session…" : "Close session",
+        icon: <X aria-hidden />,
         review: rules.busy,
-        run: () => rules.busy ? setReview({ kind: "archive", session }) : archiveSession(session),
+        run: () => rules.busy ? setReview({ kind: "close", session }) : closeSession(session),
       })
     }
     if (live && chat && session.agent_session_id && session.agent_capabilities?.sessionCapabilities?.fork) {

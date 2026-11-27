@@ -71,7 +71,9 @@ export function useSteadyGlyph(state: GlyphState, chat: boolean): GlyphState {
 }
 
 export function sessionStatusWord(session: ListedSession, stopping: boolean): string | undefined {
-  if (session.archived_at) return "Cold storage"
+  // History is one list: where its rows are stored is not the person's concern.
+  if (session.archived_at) return "Read-only"
+  if (session.closed_at) return "Closed"
   if (session.offline) return "Offline"
   if (stopping) return "Stopping…"
   if (isStarting(session)) return undefined

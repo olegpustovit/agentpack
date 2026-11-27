@@ -179,11 +179,12 @@ function ShellCommands({ palette, setPalette }: { palette: string | null; setPal
     window.addEventListener("keydown", onKeyDown, true)
     return () => window.removeEventListener("keydown", onKeyDown, true)
   }, [navigate, sessions, openKey, machine, setPalette])
-  if (palette === null) return null
   return (
-    <Suspense fallback={null}>
+    <>
+    {palette !== null && <Suspense fallback={null}>
       <CommandPalette initialQuery={palette} sessions={sessions} openKey={openKey} onClose={() => setPalette(null)} />
-    </Suspense>
+    </Suspense>}
+    </>
   )
 }
 

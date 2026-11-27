@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from "react"
 import { Link } from "@tanstack/react-router"
-import { Archive, Check, createLucideIcon, Copy, GitBranch, Pencil, Plug, RotateCw, Settings, Square, X, type LucideIcon } from "lucide-react"
+import { Check, createLucideIcon, Copy, GitBranch, Package, Pencil, Plug, RotateCw, Settings, Square, SquareTerminal, X, type LucideIcon } from "lucide-react"
 import { AgentTile } from "@/components/kit/agent-tile"
 import { SourceRow } from "@/components/kit/list"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -23,7 +23,8 @@ export type RowActions = {
   restart: () => void
   resume: () => void
   stop: () => void
-  archive: () => void
+  close: () => void
+  installPackage: () => void
   reconnect: () => void
   closeTerminal: () => void
   projectSettings: () => void
@@ -31,20 +32,20 @@ export type RowActions = {
 }
 
 // Actions on every marked row (⌘- or Shift-click). Absent actions mean no marked row allows them.
-export type GroupActions = { stopCount: number; archiveCount: number; stop: () => void; archive: () => void; ids: string[] }
+export type GroupActions = { stopCount: number; closeCount: number; stop: () => void; close: () => void; ids: string[] }
 
 // `checked` makes the entry a checkbox item: a check when on, an empty icon slot when off.
 type Entry = { label: string; icon: LucideIcon; shortcut?: string; disabled: boolean; checked?: boolean; run: () => void } | "separator"
 
 const Unchecked = createLucideIcon("unchecked", [])
-const archiveShortcut = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform) ? "⌘⌫" : "Ctrl+Del"
+const closeShortcut = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform) ? "⌘⌫" : "Ctrl+Del"
 
 function groupEntries(group: GroupActions): Entry[] {
   return [
     { label: group.stopCount > 1 ? `Stop ${group.stopCount} agents…` : "Stop agent…", icon: Square, disabled: group.stopCount === 0, run: group.stop },
-    { label: group.archiveCount > 1 ? `Archive ${group.archiveCount} sessions` : "Archive", icon: Archive, shortcut: archiveShortcut, disabled: group.archiveCount === 0, run: group.archive },
-    "separator",
     { label: `Copy ${group.ids.length} session IDs`, icon: Copy, disabled: false, run: () => copySessionId(group.ids.join("\n")) },
+    "separator",
+    { label: group.closeCount > 1 ? `Close ${group.closeCount} sessions` : "Close", icon: X, shortcut: closeShortcut, disabled: group.closeCount === 0, run: group.close },
   ]
 }
 
@@ -55,23 +56,23 @@ function menuEntries(session: ListedSession, selected: boolean, actions: RowActi
     rules.resume
       ? { label: "Resume", icon: RotateCw, disabled: false, run: actions.resume }
       : { label: "Restart…", icon: RotateCw, disabled: !rules.restart, run: actions.restart },
-    { label: "Archive", icon: Archive, shortcut: archiveShortcut, disabled: !rules.archive, run: actions.archive },
     { label: "Stop agent…", icon: Square, disabled: !rules.stop, run: actions.stop },
     // A chat has no terminal to reconnect or close.
-    ...(session.transport === "acp" ? [] : [
-      "separator" as const,
-      { label: "Reconnect", icon: Plug, disabled: !rules.reconnect, run: actions.reconnect },
-      { label: "Close terminal", icon: X, disabled: !selected, run: actions.closeTerminal },
-    ]),
     ...(session.transport === "acp" ? [
-      "separator" as const,
       { label: "agentpack Tools", icon: session.tools ? Check : Unchecked, checked: Boolean(session.tools), disabled: session.offline || Boolean(session.archived_at), run: actions.tools },
-    ] : []),
-    "separator",
-    { label: "Project settings…", icon: Settings, disabled: !rules.projectSettings, run: actions.projectSettings },
-    "separator",
+    ] : [
+      { label: "Reconnect", icon: Plug, disabled: !rules.reconnect, run: actions.reconnect },
+      { label: "Close terminal", icon: SquareTerminal, disabled: !selected, run: actions.closeTerminal },
+    ]),
     // For bug reports: the ID finds the session's state and diagnostic traces.
     { label: "Copy session ID", icon: Copy, disabled: false, run: () => copySessionId(session.id) },
+    "separator",
+    // The project this session runs in.
+    { label: "Install package…", icon: Package, disabled: !rules.projectSettings, run: actions.installPackage },
+    { label: "Project settings…", icon: Settings, disabled: !rules.projectSettings, run: actions.projectSettings },
+    "separator",
+    // Last, like every removing command; undoable, so it never asks unless an agent is working.
+    { label: "Close", icon: X, shortcut: closeShortcut, disabled: !rules.close, run: actions.close },
   ]
 }
 
@@ -80,8 +81,14 @@ function copySessionId(text: string) {
 }
 
 // Context menus and the ⋯ menu share one entry list; only their item components differ.
+// A context menu hides what does not apply; the ⋯ menu dims it, so it still teaches what exists (HIG Context menus).
+export function shownEntries<T extends { disabled?: boolean } | "separator">(entries: T[], context: boolean): T[] {
+  const kept = context ? entries.filter((entry) => entry === "separator" || !entry.disabled) : entries
+  return kept.filter((entry, index) => entry !== "separator" || (index > 0 && index < kept.length - 1 && kept[index - 1] !== "separator"))
+}
+
 function renderEntries(entries: Entry[], context: boolean) {
-  return entries.map((entry, index) => {
+  return shownEntries(entries, context).map((entry, index) => {
     if (entry === "separator") {
       return context ? <ContextMenuSeparator key={index} /> : <DropdownMenuSeparator key={index} />
     }

@@ -3,18 +3,22 @@ import { harnessName, plural } from "@/lib/format"
 import { rowKey, sessionLabel, type ListedSession } from "./group"
 import { sessionRules } from "./rules"
 
-export function SessionActionAlert({ kind, rows, onClose, onConfirm }: {
-  kind: "archive" | "stop" | "restart"
+// Asks only before work would be lost. Closing idle sessions is undoable, so it never asks (HIG: no alerts for undoable actions).
+// `name` titles a project or machine close; the list shows only the agents that would be interrupted.
+export function SessionActionAlert({ kind, rows, name, onClose, onConfirm }: {
+  kind: "close" | "stop" | "restart"
   rows: ListedSession[]
+  name?: string
   onClose: () => void
   onConfirm: () => void
 }) {
-  const verb = { archive: "Archive", stop: "Stop", restart: "Restart" }[kind]
-  const title = rows.length === 1
-    ? `${verb} “${sessionLabel(rows[0]!)}”?`
+  const verb = { close: "Close", stop: "Stop", restart: "Restart" }[kind]
+  const busy = kind === "close" ? rows.filter((row) => sessionRules(row).busy) : rows
+  const title = name ? `${verb} ${name}?`
+    : rows.length === 1 ? `${verb} “${sessionLabel(rows[0]!)}”?`
     : `${verb} ${plural(rows.length, "session")}?`
-  const label = kind === "archive" ? "Stop and archive" : `${verb} ${rows.length > 1 ? "agents" : "agent"}`
-  const description = kind === "archive" ? "Archived sessions leave the list and stay read-only in history."
+  const label = kind === "close" ? "Stop and Close" : `${verb} ${rows.length > 1 ? "Agents" : "Agent"}`
+  const description = kind === "close" ? `${busy.length === 1 ? "This agent is" : `${busy.length} agents are`} still busy and will stop. ${rows.length === 1 ? "The session stays" : `All ${rows.length} sessions stay`} in History.`
     : kind === "stop" ? "Stopped sessions stay in the list so you can resume them."
     : "The current turn may end unless the agent can resume."
   return (
@@ -22,12 +26,13 @@ export function SessionActionAlert({ kind, rows, onClose, onConfirm }: {
       <ConfirmAlertContent title={title} destructiveLabel={label} onConfirm={onConfirm} description={(
         <>
           {description}
-          <span role="list" aria-label="Affected sessions" tabIndex={rows.length > 1 ? 0 : undefined}
+          <span role="list" aria-label={kind === "close" ? "Agents that will stop" : "Affected sessions"} tabIndex={busy.length > 1 ? 0 : undefined}
             className="mt-(--s3) block max-h-[36dvh] overflow-y-auto text-start">
-            {rows.map((row) => {
-              const action = kind === "restart" ? "Restarts" : kind === "stop" || sessionRules(row).stop ? "Stops" : "Hides"
-              return <span key={rowKey(row)} role="listitem" className="block wrap-anywhere border-t-[0.5px] border-(--line) py-(--s2)">{action} {harnessName(row.harness)} on {row.machineName} · {sessionLabel(row)}</span>
-            })}
+            {busy.map((row) => (
+              <span key={rowKey(row)} role="listitem" className="block wrap-anywhere border-t-[0.5px] border-(--line) py-(--s2)">
+                {kind === "restart" ? "Restarts" : "Stops"} {harnessName(row.harness)} on {row.machineName} · {sessionLabel(row)}
+              </span>
+            ))}
           </span>
         </>
       )} />

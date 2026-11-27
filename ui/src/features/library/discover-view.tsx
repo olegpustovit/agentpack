@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link, getRouteApi } from "@tanstack/react-router"
 import { Compass, Copy, Ellipsis, Plug, Puzzle } from "lucide-react"
@@ -15,7 +15,7 @@ import { packageRecord } from "./inspect"
 import { InstallSheet } from "./install-sheet"
 import type { InstallItem } from "./install-state"
 import type { MCPItem, PackageItem } from "./model"
-import { catalogQuery } from "./queries"
+import { catalogQuery, useSettled } from "./queries"
 import { useLibrary } from "./use-library"
 
 const route = getRouteApi("/_app/library/discover")
@@ -28,16 +28,6 @@ const kinds: { value: Kind; label: string }[] = [
 ]
 
 const moduleOf = (spec: string) => spec.split("@")[0]!.toLowerCase()
-
-// The registry is searched server-side, so typing settles before fetching.
-function useSettled(value: string): string {
-  const [settled, setSettled] = useState(value)
-  useEffect(() => {
-    const timer = setTimeout(() => setSettled(value), 300)
-    return () => clearTimeout(timer)
-  }, [value])
-  return settled
-}
 
 export function DiscoverView() {
   const navigate = route.useNavigate()

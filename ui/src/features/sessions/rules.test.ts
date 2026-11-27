@@ -21,7 +21,7 @@ function session(overrides: Partial<ListedSession> & { interactive?: boolean; ru
 describe("sessionRules", () => {
   it("allows offline rename and archive but refuses live actions", () => {
     const rules = sessionRules(session({ offline: true }))
-    expect(rules.rename && rules.archive).toBe(true)
+    expect(rules.rename && rules.close).toBe(true)
     expect(rules.stop || rules.restart || rules.reconnect || rules.projectSettings).toBe(false)
   })
 
