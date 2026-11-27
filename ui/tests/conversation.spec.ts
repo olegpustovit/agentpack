@@ -1075,7 +1075,7 @@ test("archived chat shows saved history without resume or terminal controls", as
     json: [{ ...session, id: "chat-one", transport: "acp", archived_at: "2026-11-24T20:00:00Z", ended_at: session.started_at, state: { ...session.state, running: false } }],
   }))
   await page.goto("/sessions/local/chat-one")
-  await expect(page.getByText("Archived · read-only", { exact: true }).first()).toBeVisible()
+  await expect(page.getByText("In History · read-only", { exact: true }).first()).toBeVisible()
   await expect(page.getByRole("textbox", { name: "Message" })).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Terminal", exact: true })).toHaveCount(0)

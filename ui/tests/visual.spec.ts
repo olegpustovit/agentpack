@@ -532,28 +532,35 @@ test.describe("session list behaviour", () => {
     await expect(page.locator(".xterm-helper-textarea")).toBeFocused()
   })
 
-  test("Project settings lists Library packages for the selected session folder", async ({ page }) => {
+  test("project rows reserve space for removal and Activity presents Undo as a button", async ({ page }) => {
     await desktop(page)
-    const pin = { module: "github.com/acme/tools", commit: "a".repeat(40), content_hash: "", cache_key: "k", kind: "skill", name: "tools", url: "", direct: true }
-    await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow("/work/my-project", [{ harness: "claude" }], { packages: [pin] }), projectRow("/work/another-project", [{ harness: "claude" }])] }))
-    await page.route("**/api/library/packages", (route) => route.fulfill({ json: [{ ...pin, id: "k", owner: "acme", repo: "tools" }] }))
-    const posted: { add?: string[]; directory?: string }[] = []
+    const pin = { module: "github.com/acme/tools", commit: "a".repeat(40), kind: "skill", name: "tools", direct: true }
+    const posted: unknown[] = []
+    await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow(session.directory, [], { packages: posted.length === 1 ? [] : [pin] })] }))
     await page.route("**/api/projects/settings", (route) => {
       posted.push(route.request().postDataJSON())
       return route.fulfill({ status: 204 })
     })
-    await page.goto("/sessions")
-    const row = page.locator('[data-row-key="local:local-two"]')
+    await page.goto(`/sessions/project/local/${encodeURIComponent(session.directory)}`)
+    const remove = page.getByRole("button", { name: "Remove tools" })
+    const action = remove.locator("..")
+    const row = page.getByText("tools", { exact: true })
+    expect(await style(action, "opacity")).toBe("0")
     await row.hover()
-    await page.getByRole("button", { name: "More actions" }).first().click()
-    await page.getByRole("menuitem", { name: "Project settings…" }).click()
-    const known = page.getByRole("group", { name: "Library packages" })
-    const add = known.getByRole("button", { name: "Add tools" })
-    await expect(add).toBeVisible()
-    await add.click()
-    await page.getByRole("button", { name: "Save", exact: true }).click()
-    await expect.poll(() => posted.length).toBe(1)
-    expect(posted[0]).toMatchObject({ add: [`github.com/acme/tools@${"a".repeat(40)}`], directory: "/work/another-project" })
+    await expect(action).toHaveCSS("opacity", "1")
+    const targetHeight = Number.parseFloat(await style(remove, "height"))
+    expect(targetHeight).toBeGreaterThanOrEqual(20)
+    await remove.click()
+    await page.getByRole("button", { name: /Removed tools.*Show activity/ }).click()
+    const undo = page.getByRole("listitem").filter({ hasText: "Removed tools" }).getByRole("button", { name: "Undo" })
+    expect(Number.parseFloat(await style(undo, "height"))).toBe(targetHeight)
+    expect(await style(undo, "box-shadow")).not.toBe("none")
+    await undo.click()
+    await expect(remove).toBeAttached()
+    expect(posted).toEqual([
+      expect.objectContaining({ directory: session.directory, remove: [pin.module] }),
+      expect.objectContaining({ directory: session.directory, add: [`${pin.module}@${pin.commit}`] }),
+    ])
   })
 })
 

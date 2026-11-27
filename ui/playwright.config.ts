@@ -33,7 +33,7 @@ export default defineConfig({
       testMatch: ["shell.spec.ts"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
     },
-    { name: "webkit", testMatch: ["terminal.spec.ts", "visual.spec.ts", "conversation.spec.ts", "sessions.spec.ts"], grep: /kit styling|drag|click with app mouse|wheel|long conversation starts|offline cache writes|a failed permission answer|archive hides|fork opens|stopped chat resumes|chat stream stays responsive/, use: { ...devices["Desktop Safari"] } },
+    { name: "webkit", testMatch: ["terminal.spec.ts", "visual.spec.ts", "conversation.spec.ts", "sessions.spec.ts"], grep: /kit styling|drag|click with app mouse|wheel|long conversation starts|offline cache writes|a failed permission answer|close hides|fork opens|stopped chat resumes|chat stream stays responsive/, use: { ...devices["Desktop Safari"] } },
   ],
   webServer: {
     command: `vite preview --host 127.0.0.1 --port ${port} --strictPort`,
