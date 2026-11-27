@@ -37,7 +37,7 @@ Separators are 0.5 px. Panes scroll independently; there is no page scroll and n
 ### Dialog metrics
 
 - **Inset & spacing:** `--dlg-pad` 20 px on every edge and column (plus `--safe-b` on phone); `--dlg-gap` 16 px between sections; title → description 4 px (CSS adjacent rule on `[data-slot=dialog-title] + [data-slot=dialog-description]`).
-- **Widths:** S 360 px (`w-90`, e.g. Rename), M 480 px (`w-120`, default), L 640 px (`w-160`, Project settings), XL 900 px (New session). Phone renders full-width bottom sheets capped at `100dvh − --safe-t − --s4`.
+- **Widths:** S 360 px (`w-90`, e.g. Rename), M 480 px (`w-120`, default), L 640 px (`w-160`), XL 900 px (New session). Phone renders full-width bottom sheets capped at `100dvh − --safe-t − --s4`.
 - **Footer (`SheetActions`):** Pinned sticky to the bottom with a 0.5 px hairline (`pinned={false}` when a sheet provides its own footer), optional left status line, Cancel + primary right (`min-w-20`); 44 px full-width buttons on phone clearing `--safe-b`. No close `✕`.
 - **Alerts (`ConfirmAlert`):** 300 px (`w-75`) centered on `--raised` + `--e-sheet`. Cancel receives initial focus and comes first in both the desktop button row and the phone stack of 44 px buttons.
 
@@ -51,7 +51,7 @@ Components live in `ui/src/components/kit/` (shell pieces in `ui/src/features/sh
 | `ListDetail` | `ResizablePanelGroup` | Desktop wraps content in one raised `[data-slot=page]` (`bg-(--page)`, `--r-page`, `--e-page`, inset by `--gutter`). Phone switches pane by route |
 | `Toolbar`, `ToolbarButton` | `Button` | Unified with `--canvas`, pads for `--safe-*` and Chrome/Edge `display-mode: window-controls-overlay` (`app-region: drag` / `no-drag`). Leading: sidebar toggle, capsule view switcher (Sessions, Library, System; ⌘1–3 or ⌥⌘1–3, Ctrl off Mac), title (`--t-title`). Trailing: connection indicator, activity viewer, route tools, Command palette |
 | `ConnectionItem` | `Popover` | Appears when the gateway is unreachable, a machine is offline, or live updates pause. The menu shows the last live update and offers Reconnect alongside the machine list |
-| `ActivityViewer` | `Button` + lazy `Popover` | Success shows for 4 s then folds into a history icon. The history keeps the last 20 successes below unresolved failures, with Retry and Dismiss |
+| `ActivityViewer` | `Button` + lazy `Popover` | Success shows for 4 s then folds into a history icon. The history keeps the last 20 successes below unresolved failures, with Retry and Dismiss. Undo appears on reversible successes and applies to the whole batch |
 | `SourceList`, `SourceRow`, `GroupHeader` | plain + roving tabindex | Row is `<Link>` or button. Selected row rises to `--page` with `--e-ctl` when unfocused and `--accent-fill` when the list is focused. Trailing `⋯` visible on hover or selection. Finder-style marking (⌘/Ctrl-click, Shift-click, Esc clears). `NotifyOffer` sits on the Needs-you header. `SystemSidebar` (`features/system/`) is the one list for System: Usage, Limits, settings grouped by scope, then Topology and machines, with one search |
 | `TabBar` | `<nav>` | Phone only (`≤ 760 px`), 3 tabs (the System tab opens Usage; tapping it again opens the System list), height `calc(--tab-h + --safe-b)`. Sessions tab carries an amber Needs-you badge. Session details use the full height below the toolbar |
 | `SegmentedControl` | `ToggleGroup` | `--ctl-h` track (`--sunken`), `--ctl-h-sm` thumb (`--control-fill` + `--e-ctl`) |
@@ -95,6 +95,33 @@ Three durations (`--dur-1` 120 ms, `--dur-2` 200 ms, `--dur-3` 320 ms) and one e
 | Segments and toolbar views | The thumb starts under the selected item. Position and width slide on later selections (`--dur-2`) |
 | Toolbar view changes | The new pane fades in and settles from `--enter-shift` (`--dur-2`) |
 | Rows | Selection is instant |
+
+## Sessions
+
+**Close** removes a session from the sidebar and Work's active lists. It stops a
+running agent and asks for confirmation only when it would interrupt busy agents.
+The confirmation lists only the busy agents. The activity viewer offers one
+**Undo** per close, including batch closes. Opening a closed chat shows
+`Closed · in History` with **Reopen**. Resuming or sending a message also reopens
+the chat. Use **Read-only** for chats in cold storage.
+
+Session rows and project and machine headers share their commands between the
+right-click context menu and the **⋯** menu. Right-click hides unavailable
+items. The ⋯ menu dims them. Keep Close last.
+
+Work's **History** section shows the latest three closed chats with **Reopen**.
+**Show all** opens the full History view. It groups chats by date and offers
+live text search and suggested Project, Machine and Agent filter tokens. Open
+a row to read the chat or use Reopen where available. The New session sheet also
+keeps its per-project History tab.
+
+**Project settings…** opens the project page in the main pane. **Install
+package…** opens the same page with search focused. One field searches installed
+items, the Library and the public catalog, and accepts a pasted GitHub source,
+MCP URL or supported package-manager command. **Install** updates the row in
+place. Installed MCP servers each have a switch and, where applicable, a login
+control. Changes apply immediately. Package removal offers **Undo** in the
+activity viewer.
 
 ## State vocabulary
 

@@ -76,9 +76,13 @@ Logout invalidates the server session and active terminal access.
 - `GET /api/events`: Server-Sent Events. Each `message` carries one JSON event that the UI uses to refresh cached queries; the UI closes the stream while the page is hidden, reopens one the browser closed with a backoff capped at 30 s, and refetches every live query after a gap. A `state` event's `tables` map to readers in `src/features/events/use-events.tsx`; `internal/state` writes the replicated table list to `src/generated/replicated-tables.json` and a Vitest requires the map to cover it.
 - `GET /api/library/agentpacks?include=revisions`: array of `{agentpack, revisions}`, one call instead of one request per saved agentpack.
 - `GET /api/sessions`: array (or `{sessions: [...]}`) of
-  `{id, name?, directory, harness, mode, transport?, conversation_state?, agent_session_id?, state: {running,shared_input,responder?,rows,columns,exit_code}}`.
+  `{id, name?, directory, harness, mode, transport?, conversation_state?, agent_session_id?, closed_at?, state: {running,shared_input,responder?,rows,columns,exit_code}}`.
   Omitted `transport` means `terminal`. Chat sessions use `transport: "acp"`; `conversation_state` is `working`, `needs_you`, or `idle` while the worker is running.
   Pass `directory` to read a project's saved sessions, including its worktrees and chats older than the recent list. The scope is the local machine or the machine specified by `node`.
+- `GET /api/sessions?history=1&before=<last_used_unix_nano>:<id>&limit=<n>`:
+  `{sessions, next}` across machines from the local replicated store. It returns
+  visible ACP chats, including closed chats, newest first. The default limit is
+  100, the maximum is 200, and an empty `next` marks the last page.
 - `GET /api/recent`: array (or `{recent: [...]}`) of `{directory,harness,mode,last_used?,available,unavailable_reason?}`.
   Missing or replaced folders remain visible but cannot start until a fresh local launch.
 - `POST /api/sessions`: `{directory,harness,mode,transport?,agent_session_id?,resume?}`, returns created session including `id`.
@@ -98,6 +102,9 @@ Only the recorded user and stable peer node identity (or the same local user/hos
 - `PATCH /api/sessions/{id}`: `{name}` renames the session display label and returns the
   updated session. Names are trimmed and limited to 80 characters; an empty name clears
   the label. The label survives gateway restarts without changing the session ID or folder.
+  `{closed: true}` records `closed_at` for a stopped session. Close returns 409
+  while the agent is running. `{closed: false}` clears the timestamp, as does
+  resuming the chat or prompting it to restart.
 - `POST /api/sessions/{id}/stop`: `{}`. Stop is explicit; detach is separate.
 - `POST /api/sessions/{id}/restart`: `{operation_id}`. Each user intent gets a UUID;
   transport failures and 5xx retry the same UUID, while success or 4xx ends that intent.
