@@ -35,16 +35,17 @@ reports neither, so its turns count without tokens, and an agent that reports no
 cost shows "—", never $0. Sessions from before the counters existed are not
 backfilled. A gateway re-reads an agent's limits after its turns, at most every five
 minutes per agent, and the Limits pane asks each online peer to refresh while open.
-For each provider the pane shows the newest reading with a current window; one login
-can be shared by several machines. An Antigravity window nobody has used yet has no
-reset date and reads `starts on first use`.
+Limits shows each agent's tightest window from its newest usable reading. A
+reading can remain visible after its reset until a new one arrives. One login
+can be shared by several machines. An Antigravity window nobody has used yet
+has no reset date and reads `starts on first use`.
 
 ## Trust and enrollment
 
-A mesh member receives account password hashes and chat history. Enroll only
-machines you fully trust. An owner enrolls each machine in Settings → Replication,
-and the other gateway must independently enroll this one. The authenticated
-machine-local administrative transport can also manage enrollment.
+A mesh member receives account password hashes and chat history. Add only
+machines you fully trust. An owner can choose **Add** in System → Topology. The
+other gateway must independently add or approve this one. The authenticated
+machine-local administrative transport can also manage mesh membership.
 
 Existing Library-only peers must explicitly enable mesh sync. Automatic Library
 discovery never grants access to shared accounts or conversations. Removing a
@@ -61,11 +62,10 @@ agentpack gateway start
 
 The join command asks you to type `trust`, records your local approval, and closes
 the owner-claim window before the gateway starts. On the existing gateway, its
-owner must independently approve this machine in Settings → Replication. Until
+owner must independently approve this machine in System → Topology. Until
 accounts arrive, the new gateway shows `Joining your mesh` and offers no owner
-claim form. After sync, sign in with an existing account. Joining an already
-claimed gateway through this command is refused; use its owner's replication
-settings instead.
+claim form. After sync, sign in with an existing account. For an already
+claimed gateway, its owner can add the peer in Topology.
 
 Local gateway actions use the mesh owner account by default. Bind this machine's
 OS user to another enabled account with `agentpack gateway whoami EMAIL`.
@@ -88,9 +88,9 @@ Renaming changes shared metadata and can be done while the owner is offline.
 Forwarded writes carry the signed-in account only across explicitly approved mesh
 connections, and that account can modify only its own ACP conversations.
 
-The Machines inventory is read locally. Replication settings can explicitly
-discover allowed Tailscale peers to enroll a new machine. Sync liveness, rather
-than a replicated heartbeat timestamp, determines whether a machine is reachable.
+Topology reads the recorded machine inventory locally and discovers allowed
+Tailscale peers that can be added to the mesh. Sync liveness determines whether
+a machine is reachable.
 
 ## Protocol and version skew
 
@@ -100,13 +100,13 @@ independently, so one unavailable machine cannot block the others. Changes retai
 their original author and can pass through intermediate machines.
 
 Peers must use the same state schema. An older endpoint or a schema mismatch
-shows `Needs update`; sync retries after the machines are updated. Migrations are
+shows `Needs update to sync` in Topology. Sync retries after the machines are updated. Migrations are
 additive, and alterations to replicated tables use the cr-sqlite alteration
 transaction. Foreground harness launch setup never opens state.db.
 
 ## Main gateway and archive
 
-Choose a machine that is usually available with `ap gateway main set`. Machines
+Choose a machine that is usually available with `ap gateway main set`. Topology
 shows its `Main` badge. `ap gateway main` reports its name and whether the archive
 is ready. No machine is automatically selected.
 

@@ -14,13 +14,15 @@ test.skip(({ browserName, isMobile }) => browserName !== "chromium" || isMobile,
 
 const dir = "/tmp/t71-screens"
 const views: { name: string; path: string; ready: (page: Page) => Locator }[] = [
-  { name: "sessions", path: "/sessions", ready: (page) => page.getByRole("navigation", { name: "Sessions" }) },
+  { name: "sessions", path: "/sessions", ready: (page) => page.getByRole("heading", { level: 1, name: "Sessions" }) },
   { name: "conversation", path: "/sessions/local/local-one", ready: (page) => page.locator('[data-slot="agent-message"]').first() },
   { name: "library", path: "/library", ready: (page) => page.getByRole("navigation", { name: "Library" }) },
   { name: "machines", path: "/machines/peer-1", ready: (page) => page.getByRole("heading", { level: 1, name: "Build server" }) },
   { name: "topology", path: "/machines/topology", ready: (page) => page.getByRole("heading", { level: 1, name: "Topology" }) },
-  { name: "limits", path: "/limits", ready: (page) => page.locator("[data-provider]").first() },
-  { name: "settings", path: "/settings/general", ready: (page) => page.getByRole("navigation", { name: "System" }) },
+  { name: "usage", path: "/usage", ready: (page) => page.locator('[data-slot="usage-hero"]') },
+  { name: "limits", path: "/usage/limits", ready: (page) => page.getByRole("list", { name: "Limits" }).getByRole("listitem").first() },
+  { name: "general", path: "/settings/general", ready: (page) => page.getByRole("link", { name: "Sharing" }) },
+  { name: "vault", path: "/settings/connections", ready: (page) => page.getByRole("button", { name: "Sign in to Cursor CLI…" }) },
 ]
 const widths = [1440, 1024, 390]
 const themes = ["light", "dark"] as const
@@ -32,6 +34,17 @@ for (const view of views) {
         await mockAPI(page, { fleet: view.name !== "conversation" })
         // The shared mock answers unknown endpoints with {}; the library list maps over drafts.
         await page.route("**/api/library/drafts", (route) => route.fulfill({ json: [] }))
+        if (view.name === "usage") {
+          const hour = Math.floor(Date.now() / 3_600_000) * 3600
+          await page.route("**/api/usage?**", (route) => route.fulfill({ json: { hourly: [{
+            hour, node_id: "gateway", harness: "claude", folder_id: "alpha", model: "",
+            turns: 3, sessions: 1, input_tokens: 12_000, output_tokens: 4_000,
+            cache_read_tokens: 0, cache_write_tokens: 0, cost_micros: 0, agent_ms: 0,
+          }], sessions: [], samples: [] } }))
+        }
+        if (view.name === "vault") {
+          await page.route("**/api/agents/shared", (route) => route.fulfill({ json: { agents: [{ harness: "cursor", state: "expired" }] } }))
+        }
         if (view.name === "conversation") {
           await page.route("**/api/sessions", (route) => {
             if (route.request().method() !== "GET") return route.fallback()
@@ -53,7 +66,6 @@ for (const view of views) {
         await page.emulateMedia({ colorScheme: theme })
         await page.goto(view.path)
         await expect(view.ready(page)).toBeVisible()
-        await page.waitForLoadState("networkidle")
         if (view.name !== "conversation") await expect(page.getByRole("status", { name: "Loading" })).toHaveCount(0)
         mkdirSync(dir, { recursive: true })
         await page.screenshot({ path: `${dir}/${view.name}-${width}-${theme}.png` })
