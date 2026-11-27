@@ -168,15 +168,15 @@ test("session hierarchy has icons and stays indented after reload", async ({ pag
   await page.setViewportSize(gwDesktopViewport)
   await mockAPI(page)
   await page.goto("/sessions?group=machine")
-  const group = page.locator("nav > div").filter({ has: page.locator('[data-slot="group-header"]', { hasText: "Gateway machine" }) })
-  const subhead = group.locator('[data-slot="group-header"]').filter({ hasText: "my-project" })
+  const nav = gwSessions(page)
+  const machine = nav.getByText("Gateway machine", { exact: true })
+  const subhead = nav.getByText("my-project", { exact: true })
   const row = gwRow(page, "local:local-one")
-  await expect(row).toBeVisible()
   await expect(row.getByRole("img", { name: "Running" })).toBeVisible()
-  await expect(subhead).toBeVisible()
+  await expect(machine).toBeVisible()
   const indent = async () => {
     const rowLeft = await row.getByText("Terminal · Claude", { exact: true }).evaluate((el) => el.getBoundingClientRect().left)
-    const headLeft = await subhead.getByText("my-project", { exact: true }).evaluate((el) => el.getBoundingClientRect().left)
+    const headLeft = await subhead.evaluate((el) => el.getBoundingClientRect().left)
     return rowLeft - headLeft
   }
   await expect.poll(indent).toBeGreaterThan(0)
@@ -407,14 +407,14 @@ test("backend strings are text and API failures stay visible", async ({ page }) 
   const directory = "/work/<img src=x onerror=alert(1)>"
   await page.route("**/api/sessions", (route) => route.fulfill({ json: [{ ...session, directory }] }))
   await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow(directory)] }))
-  await page.route("**/api/projects/settings", (route) => route.fulfill({ status: 500, json: { error: "Project is not available" } }))
+  await page.route("**/api/packages", (route) => route.request().method() === "POST" ? route.fulfill({ status: 500, json: { error: "Project is not available" } }) : route.fallback())
   await page.goto("/")
   await expect(gwSessions(page)).toContainText("<img src=x onerror=alert(1)>")
   await expect(page.locator("img")).toHaveCount(0)
   await gwMore(page, "local:local-one").click()
   await page.getByRole("menuitem", { name: "Project settings…" }).click()
-  await page.getByLabel("Or add by source").fill("acme/skill")
-  await page.getByRole("button", { name: "Save", exact: true }).click()
+  await page.getByLabel("Search skills, plugins and MCP servers").fill("github.com/acme/skill")
+  await page.getByRole("button", { name: /Install .*skill/ }).click()
   await expect(page.getByRole("alert").filter({ hasText: "Project is not available" })).toBeVisible()
 })
 
@@ -724,22 +724,22 @@ test("New Session explains the Node requirement for ACP chat", async ({ page }) 
   await expect(page.getByRole("button", { name: "Start chat" })).toBeDisabled()
 })
 
-test("⌘⌫ reviews stopping the focused session before archiving it", async ({ page }) => {
+test("⌘⌫ reviews stopping the focused session before closing it", async ({ page }) => {
   const requests = await mockAPI(page)
   const bodies: unknown[] = []
   await page.route("**/api/sessions/local-two", (route) => {
     if (route.request().method() !== "PATCH") return route.fallback()
     bodies.push(route.request().postDataJSON())
-    return route.fulfill({ json: { hidden: true } })
+    return route.fulfill({ json: { closed: true } })
   })
-  // The row was stale and the agent had already stopped: archiving still goes through.
+  // The row was stale and the agent had already stopped: closing still goes through.
   await page.route("**/api/sessions/local-two/stop", (route) => route.fulfill({ status: 400, body: "session is not running" }))
   await page.goto("/")
   await gwRow(page, "local:local-two").focus()
   await page.keyboard.press("ControlOrMeta+Backspace")
-  // The row looks running, so archiving names the agent it stops first (SES-03).
+  // The row looks running, so closing names the agent it stops first (SES-03).
   await expect(page.getByRole("alertdialog")).toContainText("on Gateway machine")
   expect(bodies).toEqual([])
-  await page.getByRole("button", { name: "Stop and archive" }).click()
-  await expect.poll(() => bodies).toEqual([{ hidden: true }])
+  await page.getByRole("button", { name: "Stop and Close" }).click()
+  await expect.poll(() => bodies).toEqual([{ closed: true }])
 })

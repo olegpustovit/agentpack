@@ -322,7 +322,7 @@ test("New session saves the project's pick among several logins", async ({ page 
   await expect(picker).toContainText("Client")
 })
 
-test("Project settings loads details for a protected folder when opened", async ({ page }) => {
+test("The project page loads details for a protected folder when opened", async ({ page }) => {
   const directory = "/Users/viewer/Documents/private-project"
   reply = [{ ...sessions[0], directory }]
   let selected: string | null = null
@@ -336,63 +336,37 @@ test("Project settings loads details for a protected folder when opened", async 
   await row.click({ button: "right" })
   expect(selected).toBeNull()
   await page.getByRole("menuitem", { name: "Project settings…" }).click()
-  await expect(page.getByLabel("Or add by source")).toBeVisible()
+  await expect(page.getByLabel("Search skills, plugins and MCP servers")).toBeVisible()
   expect(selected).toBe(directory)
 })
 
-test("a session opens project settings and saves packages, MCP and the login together", async ({ page }) => {
+test("project switches and login choices apply immediately", async ({ page }) => {
   const directory = sessions[0]!.directory
-  const linear = "https://mcp.linear.app/mcp"
+  const url = "https://mcp.linear.app/mcp"
   const module = "github.com/acme/linear"
-  const project = projectRow(directory, [], {
-    mcp: [{ name: "linear", launcher: "remote", source: "plugin", module, url: linear, disabled: true }],
-  })
-  await page.route((url) => url.pathname === "/api/projects", (route) => route.fulfill({ json: [project] }))
-  await page.route("**/api/library/packages", (route) => route.fulfill({ json: [
-    { id: "tools", module: "github.com/acme/tools", name: "Tools", kind: "plugin", commit: "abcd1234" },
-  ] }))
+  let disabled = true
+  await page.route((url) => url.pathname === "/api/projects", (route) => route.fulfill({ json: [projectRow(directory, [], {
+    mcp: [{ name: "linear", launcher: "remote", source: "plugin", module, url, disabled }],
+  })] }))
   await page.route("**/api/mcp/credentials", (route) => route.fulfill({ json: { credentials: [
-    { id: "c1", match: linear, kind: "oauth", label: "Work", status: "connected" },
-    { id: "c2", match: linear, kind: "oauth", label: "Client", status: "connected" },
+    { id: "c2", match: url, kind: "oauth", label: "Client", status: "connected" },
   ] } }))
-  const saves: unknown[] = []
   await page.route("**/api/projects/settings", (route) => {
-    saves.push(route.request().postDataJSON())
+    if (route.request().postDataJSON().mcp_enabled?.linear) disabled = false
     return route.fulfill({ status: 204 })
   })
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.goto("/sessions?tab=all")
-  const row = page.getByRole("navigation", { name: "Sessions" }).getByRole("link", { name: /build/ })
-  await row.click({ button: "right" })
-  await expect(page.getByRole("menuitem", { name: /Save agentpack|Install package/ })).toHaveCount(0)
-  await page.getByRole("menuitem", { name: "Project settings…" }).click()
-  const settings = page.getByRole("dialog", { name: "Project settings" })
-  await expect(settings).toContainText(directory)
-  await settings.getByRole("textbox", { name: "Search Library packages" }).fill("tools")
-  await settings.getByRole("button", { name: "Add Tools" }).click()
-  await expect(settings.getByRole("button", { name: "Added ✓ Tools" })).toBeVisible()
-  await settings.getByRole("switch", { name: "Use linear" }).click()
-  await settings.getByRole("combobox", { name: "linear login" }).click()
-  await page.getByRole("option", { name: "Client", exact: true }).click()
-  await expect(settings.getByRole("combobox", { name: "linear login" })).toContainText("Client")
-  await expect(settings.getByRole("button", { name: "Allow in this project" })).toHaveCount(0)
-  await settings.getByRole("button", { name: "Add MCP server…" }).click()
-  await settings.getByLabel("Server name").fill("docs")
-  await settings.getByLabel("Server URL").fill("https://mcp.example.com/docs")
-  expect(saves).toHaveLength(0)
-  const save = settings.getByRole("button", { name: "Save", exact: true })
-  await expect(save).toBeInViewport()
-  await save.click()
-  await expect(settings).toBeHidden()
-  expect(saves).toEqual([{
-    directory, add: ["github.com/acme/tools@abcd1234"], remove: [], remove_mcp: [],
-    servers: [{ name: "docs", url: "https://mcp.example.com/docs" }], logins: {},
-    plugin_logins: { linear: { module, url: linear, credential: "c2" } },
-    mcp_enabled: { linear: true },
-  }])
+  await page.goto(`/sessions/project/local/${encodeURIComponent(directory)}`)
+  const switched = page.waitForRequest("**/api/projects/settings")
+  await page.getByRole("switch", { name: "Use linear" }).click()
+  expect((await switched).postDataJSON()).toMatchObject({ directory, mcp_enabled: { linear: true } })
+  await page.getByRole("button", { name: /linear login:/ }).click()
+  const chosen = page.waitForRequest("**/api/projects/settings")
+  await page.getByRole("menuitem", { name: "Client" }).click()
+  expect((await chosen).postDataJSON()).toMatchObject({ directory, plugin_logins: { linear: { module, url, credential: "c2" } } })
 })
 
-test("a blocked project sign-in offers a link and keeps the reviewed edits for Save", async ({ page, context }) => {
+test("a blocked project sign-in offers a link and applies the new login", async ({ page, context }) => {
   await page.clock.install()
   await page.addInitScript(() => { window.open = () => null })
   const directory = sessions[0]!.directory
@@ -400,7 +374,6 @@ test("a blocked project sign-in offers a link and keeps the reviewed edits for S
   const module = "github.com/acme/linear"
   let connected = false
   await page.route((url) => url.pathname === "/api/projects", (route) => route.fulfill({ json: [projectRow(directory, [], {
-    packages: [{ module: "github.com/acme/old", name: "old-kit", direct: true, kind: "skill" }],
     mcp: [{ name: "linear", source: "plugin", launcher: "remote", module, url }],
   })] }))
   await page.route("**/api/mcp/credentials", (route) => route.fulfill({ json: { credentials: [
@@ -421,27 +394,15 @@ test("a blocked project sign-in offers a link and keeps the reviewed edits for S
     saved.push(route.request().postDataJSON())
     return route.fulfill({ status: 204 })
   })
-  await page.goto("/sessions")
-  await page.getByRole("navigation", { name: "Sessions" }).getByRole("link", { name: /build/ }).click({ button: "right" })
-  await page.getByRole("menuitem", { name: "Project settings…" }).click()
-  const settings = page.getByRole("dialog", { name: "Project settings" })
-  await settings.getByRole("button", { name: "Remove old-kit" }).click()
-  await settings.getByLabel("Or add by source").fill("github.com/acme/lint-kit")
-  await settings.getByRole("button", { name: "Sign in…" }).click()
-  const changes = settings.getByRole("region", { name: "Changes" })
-  await expect(changes.getByRole("listitem")).toHaveText(["Add github.com/acme/lint-kit", "Remove old-kit", "Sign in to linear"])
-  await expect(settings.getByText("Waiting for linear sign-in…")).toBeVisible()
+  await page.goto(`/sessions/project/local/${encodeURIComponent(directory)}`)
+  await page.getByRole("button", { name: /linear login:/ }).click()
+  await page.getByRole("menuitem", { name: "Add account…" }).click()
+  await expect(page.getByText("Waiting for linear sign-in…")).toBeVisible()
   const opened = context.waitForEvent("page")
-  await settings.getByRole("link", { name: "Open sign-in link" }).click()
-  const tab = await opened
-  await tab.waitForLoadState()
-  await page.clock.runFor(1_010)
-  await expect(settings.getByRole("combobox", { name: "linear login" })).toContainText("TrustMind")
-  expect(saved).toHaveLength(0)
-  await settings.getByRole("button", { name: "Save", exact: true }).click()
-  await expect(settings).toBeHidden()
-  expect(saved).toEqual([expect.objectContaining({
-    add: ["github.com/acme/lint-kit"], remove: ["github.com/acme/old"],
+  await page.getByRole("link", { name: "Open sign-in link" }).click()
+  await (await opened).waitForLoadState()
+  await page.clock.fastForward(1_010)
+  await expect.poll(() => saved).toEqual([expect.objectContaining({
     plugin_logins: { linear: { module, url, credential: "new" } },
   })])
 })
@@ -622,10 +583,10 @@ test("a reload paints the last-known list before the gateway answers", async ({ 
 })
 
 test("⌘/Ctrl- and Shift-click mark rows; the menu then acts on all of them", async ({ page }) => {
-  const archived: string[] = []
+  const closed: string[] = []
   await page.route("**/api/sessions/*", (route) => {
     if (route.request().method() !== "PATCH") return route.fallback()
-    archived.push(new URL(route.request().url()).pathname.split("/").pop()!)
+    closed.push(new URL(route.request().url()).pathname.split("/").pop()!)
     return route.fulfill({ json: {} })
   })
   await page.route("**/api/sessions/*/stop", (route) => route.fulfill({ json: { stopped: true } }))
@@ -638,45 +599,43 @@ test("⌘/Ctrl- and Shift-click mark rows; the menu then acts on all of them", a
   await expect(rows.and(page.locator("[data-marked]"))).toHaveCount(2)
 
   await rows.last().click({ button: "right" })
-  // Only s1 is running, so the stop counts one; both can be archived.
+  // Only s1 is running, so the stop counts one; both can be closed.
   await expect(page.getByRole("menuitem", { name: "Stop agent…" })).toBeEnabled()
-  // Archiving a running session names what stops (SES-03); stopped ones would archive at once.
-  await page.getByRole("menuitem", { name: /^Archive 2 sessions/ }).click()
+  // The confirmation lists only the agents it will stop.
+  await page.getByRole("menuitem", { name: /^Close 2 sessions/ }).click()
   const alert = page.getByRole("alertdialog")
   await expect(alert.getByRole("button", { name: "Cancel" })).toBeFocused()
   await expect(alert).toContainText("Stops Claude on host-a · build")
-  await expect(alert).toContainText("Hides Codex on host-a")
-  expect(archived).toEqual([])
-  await alert.getByRole("button", { name: "Stop and archive" }).click()
+  await expect(alert.getByRole("listitem")).toHaveCount(1)
+  expect(closed).toEqual([])
+  await alert.getByRole("button", { name: "Stop and Close" }).click()
   await expect(page.getByRole("alertdialog")).toHaveCount(0)
-  await expect.poll(() => archived.sort()).toEqual(["s1", "s2"])
+  await expect.poll(() => closed.sort()).toEqual(["s1", "s2"])
   await expect(page.locator("[data-marked]")).toHaveCount(0)
 })
 
-test("archive hides the row immediately and restores it if the request fails", async ({ page }) => {
-  const intentIDs: Array<string | undefined> = []
+test("close hides the row immediately and restores it if the request fails", async ({ page }) => {
+  const attempts: unknown[] = []
   let release!: () => void
   const response = new Promise<void>((resolve) => { release = resolve })
   let releaseRetry!: () => void
   const retryResponse = new Promise<void>((resolve) => { releaseRetry = resolve })
   await page.route("**/api/sessions/*", async (route) => {
     if (route.request().method() !== "PATCH") return route.fallback()
-    intentIDs.push(route.request().headers()["idempotency-key"])
-    await (intentIDs.length === 1 ? response : retryResponse)
+    attempts.push(route.request().postDataJSON())
+    await (attempts.length === 1 ? response : retryResponse)
     await route.fulfill({ status: 409, body: "Still running" })
   })
   await page.goto("/sessions")
   const rows = page.getByRole("navigation", { name: "Sessions" }).locator("[data-source-row]")
   await expect(rows).toHaveCount(2)
   await rows.last().click({ button: "right" })
-  await page.getByRole("menuitem", { name: /^Archive/ }).click()
+  await page.getByRole("menuitem", { name: /^Close(?: |$)/ }).click()
   await expect(rows).toHaveCount(1)
   release()
   await expect(rows).toHaveCount(2)
   await page.getByRole("button", { name: "Retry", exact: true }).click()
-  await expect.poll(() => intentIDs.length).toBe(2)
-  expect(intentIDs[0]).toMatch(/^[a-f0-9]{32}$/)
-  expect(intentIDs[1]).toBe(intentIDs[0])
+  await expect.poll(() => attempts).toEqual([{ closed: true }, { closed: true }])
   await expect(rows).toHaveCount(1)
   releaseRetry()
   await expect(rows).toHaveCount(2)
@@ -684,7 +643,7 @@ test("archive hides the row immediately and restores it if the request fails", a
 
 test("the palette reviews Stop agent before making a request", async ({ page }) => {
   const stopped: string[] = []
-  const archived: unknown[] = []
+  const closed: unknown[] = []
   await attachTerminal(page)
   await page.route("**/api/sessions/*/stop", (route) => {
     stopped.push(new URL(route.request().url()).pathname)
@@ -693,7 +652,7 @@ test("the palette reviews Stop agent before making a request", async ({ page }) 
   })
   await page.route("**/api/sessions/s1", (route) => {
     if (route.request().method() !== "PATCH") return route.fallback()
-    archived.push(route.request().postDataJSON())
+    closed.push(route.request().postDataJSON())
     return route.fulfill({ json: {} })
   })
   await page.goto("/sessions/local/s1")
@@ -708,10 +667,10 @@ test("the palette reviews Stop agent before making a request", async ({ page }) 
   await expect.poll(() => stopped).toEqual(["/api/sessions/s1/stop"])
   await expect(page).toHaveURL(/\/sessions\/local\/s1$/)
   await expect(page.locator('[data-row-key="local:s1"]')).toBeVisible()
-  expect(archived).toEqual([])
+  expect(closed).toEqual([])
 })
 
-test("the palette names what Archive stops and hides before sending either request", async ({ page }) => {
+test("the palette names what Close stops before sending either request", async ({ page }) => {
   const requests: { action: string; body?: unknown }[] = []
   await attachTerminal(page)
   await page.route("**/api/sessions/s1/stop", (route) => {
@@ -720,27 +679,27 @@ test("the palette names what Archive stops and hides before sending either reque
   })
   await page.route("**/api/sessions/s1", (route) => {
     if (route.request().method() !== "PATCH") return route.fallback()
-    requests.push({ action: "archive", body: route.request().postDataJSON() })
+    requests.push({ action: "close", body: route.request().postDataJSON() })
     reply = [sessions[1]]
     return route.fulfill({ json: {} })
   })
   await page.goto("/sessions/local/s1?group=machine")
   await page.getByRole("button", { name: "Command palette" }).click()
-  await page.getByRole("combobox", { name: "Search sessions and commands" }).fill("Archive session")
-  const archive = page.getByRole("option", { name: "Archive session…", exact: true })
-  await archive.click()
+  await page.getByRole("combobox", { name: "Search sessions and commands" }).fill("Close session")
+  const close = page.getByRole("option", { name: "Close session…", exact: true })
+  await close.click()
   const alert = page.getByRole("alertdialog")
   const cancel = alert.getByRole("button", { name: "Cancel" })
   await expect(alert).toContainText("Stops Claude on host-a · build")
-  await expect(alert).toContainText("Archived sessions leave the list")
+  await expect(alert).toContainText("The session stays in History")
   await expect(cancel).toBeFocused()
   expect(requests).toEqual([])
   await cancel.click()
   await expect(alert).toBeHidden()
   expect(requests).toEqual([])
-  await archive.click()
-  await alert.getByRole("button", { name: "Stop and archive" }).click()
-  await expect.poll(() => requests).toEqual([{ action: "stop" }, { action: "archive", body: { hidden: true } }])
+  await close.click()
+  await alert.getByRole("button", { name: "Stop and Close" }).click()
+  await expect.poll(() => requests).toEqual([{ action: "stop" }, { action: "close", body: { closed: true } }])
   await expect(page).toHaveURL(/\/sessions\?group=machine$/)
   await expect(page.locator('[data-row-key="local:s1"]')).toHaveCount(0)
 })
