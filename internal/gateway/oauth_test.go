@@ -414,7 +414,7 @@ func TestOAuthConsentShowsAccessAndRecoversFromExpiry(t *testing.T) {
 	if response.StatusCode != http.StatusOK || strings.Count(body, "<li>") != 4 {
 		t.Fatalf("consent: %d %s", response.StatusCode, body)
 	}
-	for _, want := range []string{"Test assistant", "assistant.example", session.LocalHostname(), testBrowserEmail, "Settings › Account", "Sign out everywhere"} {
+	for _, want := range []string{"Test assistant", "assistant.example", session.LocalHostname(), testBrowserEmail, "Settings › General", "Sign out everywhere"} {
 		if !strings.Contains(body, html.EscapeString(want)) {
 			t.Fatalf("consent missing %q", want)
 		}
