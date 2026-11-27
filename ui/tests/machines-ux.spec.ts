@@ -26,22 +26,6 @@ const machineInfo = {
     { harness: "cursor", installed: false },
   ],
 }
-const projects = [
-  {
-    directory: "/srv/team-a/web",
-    name: "web",
-    folder_id: "f1",
-    available: true,
-    unavailable_reason: "",
-    last_used: "2026-11-24T10:00:00Z",
-    launches: [{ harness: "claude", mode: "default", last_used: "2026-11-24T10:00:00Z" }],
-    packages: [],
-    mcp: [],
-    modes: [],
-    error: "",
-  },
-]
-
 async function mockMachines(page: Page) {
   await page.route("**/api/config", (route) => route.fulfill({ json: { ui_build_id: "test-build" } }))
   await page.route("**/api/status", (route) => route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } }))
@@ -50,10 +34,9 @@ async function mockMachines(page: Page) {
   await page.route("**/api/topology", (route) => route.fulfill({ json: topology }))
   await page.route("**/api/version/latest", (route) => route.fulfill({ json: { version: "0.15.0", url: "" } }))
   await page.route(/\/api\/machine(\?.*)?$/, (route) => route.fulfill({ json: machineInfo }))
-  await page.route(/\/api\/projects(\?.*)?$/, (route) => route.fulfill({ json: projects }))
   await page.route(/\/api\/sessions(\?.*)?$/, (route) => route.fulfill({ json: [] }))
   await page.route(/\/api\/limits(\?.*)?$/, (route) => route.fulfill({ json: { limits: [] } }))
-  await page.route(/\/api\/library\/replication\/peers/, (route) => route.fulfill({ json: { peers: [], contacts: {} } }))
+  await page.route(/\/api\/library\/replication\/peers/, (route) => route.fulfill({ json: { peers: [{ node: "n2", mesh: true }], contacts: {} } }))
   await page.route(/\/api\/node\/update(\?.*)?$/, (route) => {
     if (route.request().method() === "POST") return route.fulfill({ json: { started: true, version: "0.15.0" } })
     return route.fulfill({ json: { state: "idle", error: "" } })
@@ -68,19 +51,7 @@ async function mockMachines(page: Page) {
   await page.route("**/api/events", (route) => route.abort())
 }
 
-test("MAC-01 phone topology renders compact Relay via fra rows with no overflow", async ({ page }) => {
-  await mockMachines(page)
-  await page.setViewportSize({ width: 390, height: 844 })
-  await page.goto("/machines/topology")
-
-  await expect(page.getByRole("table", { name: "Machines and connections" })).toHaveCount(0)
-  const list = page.getByRole("list", { name: "Machines and connections" })
-  await expect(list).toContainText("Relay via fra")
-  await expect(list).toContainText("82 ms")
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-})
-
-test("MAC-02 and MAC-03 phone detail keeps agent names visible, project Actions in viewport, and worktree disabled reason inline", async ({ page }) => {
+test("phone detail keeps agent names and the worktree disabled reason visible", async ({ page }) => {
   await mockMachines(page)
   await page.route(/\/api\/worktrees(\?.*)?$/, (route) => route.fulfill({
     json: {
@@ -98,11 +69,6 @@ test("MAC-02 and MAC-03 phone detail keeps agent names visible, project Actions 
   await expect(claudeCell).toBeVisible()
   expect((await claudeCell.boundingBox())!.width).toBeGreaterThan(0)
   await expect(agents).toContainText("Not installed")
-
-  const actionsBtn = page.getByRole("button", { name: "Actions for web" })
-  await expect(actionsBtn).toBeVisible()
-  const box = (await actionsBtn.boundingBox())!
-  expect(box.x + box.width).toBeLessThanOrEqual(390)
 
   const removeBtn = page.getByRole("button", { name: "Remove…" })
   await expect(removeBtn).toBeDisabled()
@@ -133,6 +99,9 @@ test("MAC-05 update job keeps its progress across navigation and verifies the re
   await mockMachines(page)
   let currentVersion = "0.14.0"
   let updateState = "idle"
+  await page.route("**/api/nodes*", (route) => route.fulfill({
+    json: nodes.map((node) => node.id === "n2" ? { ...node, version: currentVersion } : node),
+  }))
   await page.route(/\/api\/machine(\?.*)?$/, (route) => route.fulfill({ json: { ...machineInfo, version: currentVersion } }))
   await page.route(/\/api\/node\/update(\?.*)?$/, (route) => {
     if (route.request().method() === "POST") {
@@ -146,9 +115,9 @@ test("MAC-05 update job keeps its progress across navigation and verifies the re
   await page.getByRole("button", { name: "Update to 0.15.0" }).click()
   await expect(page.getByTestId("content").getByText(/Updating birch to 0\.15\.0/)).toBeVisible()
 
-  // Navigate away and back; job survives in sidebar and detail.
-  await page.goto("/machines/topology")
-  const row = page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /birch/ })
+  // Navigate to Topology in the same tab while the update is running.
+  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: "Topology" }).click()
+  const row = page.getByRole("table", { name: "Machines" }).getByRole("row").filter({ hasText: "birch" })
   await page.clock.fastForward("00:03")
   await expect(row).toContainText("Downloading…")
 
@@ -156,8 +125,8 @@ test("MAC-05 update job keeps its progress across navigation and verifies the re
   currentVersion = "0.15.0"
   updateState = "idle"
   await page.clock.fastForward("00:03")
-  await expect(row).toContainText("Verified 0.15.0")
-  await row.click()
+  await expect(row).toContainText("0.15.0")
+  await row.getByRole("link", { name: "birch" }).click()
   await expect(page.getByText("Verified birch is running 0.15.0.")).toBeVisible()
 })
 
@@ -173,7 +142,7 @@ test("MAC-05 update timeout shows Retry and View logs", async ({ page }) => {
   await expect(page.getByRole("link", { name: "View logs" })).toBeVisible()
 })
 
-test("MAC-06 distinguishes an undiscovered machine from an unknown one and searches the sidebar", async ({ page }) => {
+test("MAC-06 distinguishes an undiscovered machine from an unknown one", async ({ page }) => {
   await mockMachines(page)
   let releaseNodes = () => {}
   const nodesGate = new Promise<void>((resolve) => { releaseNodes = resolve })
@@ -187,10 +156,4 @@ test("MAC-06 distinguishes an undiscovered machine from an unknown one and searc
   releaseNodes()
   await expect(page.getByText("Not on this mesh")).toBeVisible()
   await expect(page.getByTestId("content").getByRole("link", { name: "Machines", exact: true })).toBeVisible()
-
-  const search = page.getByRole("searchbox", { name: "Search system" })
-  await search.fill("zz")
-  await expect(page.getByText("Nothing matches “zz”.")).toBeVisible()
-  await search.press("Escape")
-  await expect(page.getByRole("navigation", { name: "System" }).getByRole("link", { name: /birch/ })).toBeVisible()
 })

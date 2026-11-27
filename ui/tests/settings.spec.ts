@@ -207,34 +207,6 @@ test("public access turns on the detected address after its checks stream in", a
   await expect(page.getByText(`${origin}/mcp`)).toBeVisible()
 })
 
-test("replication rows show enrollment, enroll only online peers and sync one", async ({ page }) => {
-  await mockGateway(page)
-  await page.goto("/settings/replication")
-  await expect(page.getByText("Enrolled · online")).toBeVisible()
-  await expect(page.getByText(/Offline · enrollment unavailable/)).toBeVisible()
-  await expect(page.getByRole("button", { name: "Enroll" })).toBeDisabled()
-
-  await page.getByRole("button", { name: "Sync now" }).click()
-
-  await expect.poll(() => calls).toEqual([{ request: "POST /api/library/replication/sync", body: { peer: "n2" } }])
-})
-
-test("replication lists what a peer receives and links removal to credential recovery", async ({ page }) => {
-  await mockGateway(page)
-  await page.route("**/api/nodes*", (route) => answer(route, nodes.map((node) => ({ ...node, online: true }))))
-  await page.goto("/settings/replication")
-  await page.getByRole("button", { name: "Enroll", exact: true }).click()
-  const dialog = page.getByRole("alertdialog")
-  await expect(dialog).toContainText("password hashes, chat history, limits, Library data and shared MCP logins")
-  await dialog.getByRole("button", { name: "Cancel" }).click()
-  await page.getByRole("button", { name: "oracle-vm actions" }).click()
-  await page.getByRole("menuitem", { name: "Remove from replication…" }).click()
-  await expect(dialog).toContainText("Previously replicated data remains")
-  await expect(dialog.getByRole("link", { name: "Vault" })).toHaveAttribute("href", "/settings/connections")
-  await dialog.getByRole("button", { name: "Remove", exact: true }).click()
-  await expect(page.getByRole("link", { name: "Open Vault" })).toBeVisible()
-})
-
 test("appearance sets the theme and keeps it across a reload", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings/appearance")

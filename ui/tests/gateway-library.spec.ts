@@ -259,37 +259,6 @@ test("LIB-06 and LIB-11: pending changes show pack name, and a changed draft rec
   await expect.poll(() => restoreCalls).toBe(1)
 })
 
-test("replication requires explicit trust and reports sync progress per peer", async ({ page }) => {
-  await mockAPI(page)
-  await mockLibraryBase(page)
-  let enrolled = false
-  let synced = false
-  const item = { id: "package-1", module: "github.com/acme/tools", commit: "abcd1234", kind: "plugin", name: "Tools" }
-  await page.route("**/api/nodes*", (route) => route.fulfill({ json: [peer] }))
-  await page.route("**/api/settings", (route) => route.fulfill({ json: { running: true, platform: "linux", sharing_enabled: true, allowed_peers: [] } }))
-  await page.route("**/api/library/replication/peers", (route) => {
-    if (route.request().method() === "POST") enrolled = true
-    return route.fulfill({ json: { peers: enrolled ? [{ node: peer.id, mesh: true }] : [], contacts: synced ? { [peer.id]: { schema_version: 22, lag: 0 } } : {} } })
-  })
-  await page.route("**/api/library/replication/sync", (route) => {
-    synced = true
-    return route.fulfill({ json: { synced: true } })
-  })
-  await page.route("**/api/library/packages**", (route) => route.fulfill({ json: [item] }))
-  await page.route("**/api/library/agentpacks**", (route) => route.fulfill({ json: [] }))
-  await page.goto("/settings/replication")
-  await expect(page.getByText("Enrolled machines share accounts, chat history, limits and Library data, and every member is fully trusted. Enroll on both machines to start syncing.")).toBeVisible()
-  await expect(page.getByText("Not enrolled")).toBeVisible()
-  await page.getByRole("button", { name: "Enroll", exact: true }).click()
-  expect(enrolled).toBe(false)
-  await page.getByRole("alertdialog").getByRole("button", { name: "Trust and enroll" }).click()
-  await expect(page.getByText("Enrolled. The other machine must enroll this gateway too.")).toBeVisible()
-  await page.getByRole("button", { name: "Sync now" }).click()
-  await expect(page.getByText("Sync requested with Build server.")).toBeVisible()
-  await expect(page.getByText("Enrolled · online")).toBeVisible()
-  await expect(page.getByText("Enrolled · online · schema 22")).toBeVisible()
-})
-
 test("offline restore saves the exact agentpack revision as a draft", async ({ page }) => {
   await page.clock.install()
   await mockAPI(page)

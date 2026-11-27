@@ -27,37 +27,31 @@ test("replicated offline chat survives reload, keeps history and refuses all inp
   expect(writes).toEqual([])
   expect(reads).toHaveLength(1)
   expect(new URL(reads[0]!).search).toBe("")
-  await page.screenshot({path: "/tmp/agentpack-mesh-offline-desktop.png"})
-  await page.setViewportSize({width:390,height:844})
-  await expect(page.getByText("Saved while online", { exact: true })).toBeVisible()
-  await page.screenshot({path: "/tmp/agentpack-mesh-offline-phone.png"})
   await page.reload()
   await expect(page.getByText("Saved while online", { exact: true })).toBeVisible()
   await expect(page.getByText(/Offline · saved history · Last seen/)).toBeVisible()
   expect(writes).toEqual([])
-  await page.goto("/machines")
-  await expect(page.getByRole("navigation",{name:"System"}).getByText("Main",{exact:true})).toBeVisible()
-  await page.screenshot({path:"/tmp/agentpack-main-badge-phone.png"})
-  await page.setViewportSize({width:1280,height:720})
-  await page.goto("/machines")
-  await expect(page.getByRole("navigation",{name:"System"}).getByText("Main",{exact:true})).toBeVisible()
-  await page.screenshot({path:"/tmp/agentpack-main-badge-desktop.png"})
 })
 
-test("legacy Library peers require explicit full mesh trust", async ({page}) => {
+test("legacy Library peers require explicit mesh approval", async ({ page }) => {
   await mockAPI(page)
-  let enrollments=0
-  await page.route("**/api/nodes*",route=>route.fulfill({json:[{id:"legacy",name:"Old computer",online:true}]}))
-  await page.route("**/api/library/replication/peers",route=> {
-    if(route.request().method()==="POST"){enrollments++;return route.fulfill({json:{enrolled:true}})}
-    return route.fulfill({json:{peers:[{node:"legacy",receipt_count:3,digests:[],mesh:enrollments>0}],contacts:{legacy:{at:"2026-11-14T10:00:00Z",last_sync:"2026-11-14T10:00:00Z",schema_version:12,lag:0,version:4}}}})
+  const approvals: unknown[] = []
+  await page.route("**/api/nodes*", (route) => route.fulfill({
+    json: [{ id: "legacy", name: "Old computer", online: true }],
+  }))
+  await page.route("**/api/library/replication/peers", (route) => {
+    if (route.request().method() === "POST") {
+      approvals.push(route.request().postDataJSON())
+      return route.fulfill({ json: { enrolled: true } })
+    }
+    return route.fulfill({ json: { peers: [{ node: "legacy", mesh: approvals.length > 0 }], contacts: {} } })
   })
-  await page.goto("/settings/replication")
-  await page.getByRole("button",{name:"Enable mesh sync"}).click()
-  await expect(page.getByText(/password hashes, chat history/)).toBeVisible()
-  expect(enrollments).toBe(0)
-  await page.getByRole("button",{name:"Trust and enroll"}).click()
-  await expect.poll(()=>enrollments).toBe(1)
-  await expect(page.getByRole("button",{name:"Sync now"})).toBeVisible()
-  await expect(page.getByText("Stale · schema 12")).toBeVisible()
+  await page.goto("/machines/topology")
+  await expect(page.getByText("Waiting for your approval")).toBeVisible()
+  await page.getByRole("button", { name: "Approve" }).click()
+  const dialog = page.getByRole("alertdialog", { name: "Add Old computer to this mesh?" })
+  expect(approvals).toEqual([])
+  await dialog.getByRole("button", { name: "Add", exact: true }).click()
+  await expect(page.getByRole("button", { name: "Old computer actions" })).toBeVisible()
+  expect(approvals).toEqual([{ peer: "legacy" }])
 })

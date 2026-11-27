@@ -194,7 +194,7 @@ function MachineLine({ node, schema, mesh, enrolled, version, sharing, canManage
   )
   const versionText = job && isUpdateJobActive(job) ? `Updating · ${updateJobLabel(job)}` : [version.version ?? node.version ?? "—", schema].filter(Boolean).join(" · ")
   const versionCell = (
-    <span className="inline-flex items-center gap-(--s3)">
+    <span className="inline-flex flex-wrap items-center gap-(--s3)">
       {versionText}
       {version.outdated && !isUpdateJobActive(job) && <Button size="sm" disabled={!node.online || update.isPending} onClick={() => update.mutate()}>Update</Button>}
     </span>
@@ -232,7 +232,7 @@ function MachineLine({ node, schema, mesh, enrolled, version, sharing, canManage
       <tr className="border-b-[0.5px] border-(--sep-soft)">
         <td className="py-(--s3)">
           <div className="flex min-w-0 items-center justify-between gap-(--s3)">{name}{actions}</div>
-          <p className="text-(length:--fs-sm) text-(--fg2)">{[versionText, mesh.text].join(" · ")}</p>
+          <p className="text-(length:--fs-sm) text-(--fg2)">{versionCell} · {mesh.text}</p>
           {alerts}
         </td>
       </tr>

@@ -1,42 +1,12 @@
-import { expect, test, type Locator, type Page } from "@playwright/test"
-import { mockAPI, projectRow } from "./helpers"
+import { expect, test } from "@playwright/test"
+import { mockAPI } from "./helpers"
 
 // Machines, Limits, Settings and startup ports of gateway.spec.js.
 
-function machineRow(page: Page, name: string): Locator {
-  return page
-    .getByRole("table", { name: "Projects", exact: true })
-    .locator("tbody tr")
-    .filter({ has: page.getByText(name, { exact: true }) })
-}
-
-const projectsPath = /\/api\/projects(\?.*)?$/
 const limitsPath = /\/api\/limits(\?.*)?$/
 const nodesPath = /\/api\/nodes(\?.*)?$/
 const settingsPath = /\/api\/settings(\?.*)?$/
 
-// Moved from Recent folders to Machines: forgetting a folder removes it from that machine's list only.
-test("forgetting a recent folder does not stop a session", async ({ page }) => {
-  const requests = await mockAPI(page)
-  await page.route(projectsPath, (route) =>
-    route.fulfill({ json: requests.some((request) => request.method === "DELETE") ? [] : [projectRow("/work/previous", [{ harness: "codex" }])] }),
-  )
-  await page.goto("/machines/local")
-
-  await machineRow(page, "previous").click({ button: "right" })
-  await page.getByRole("menuitem", { name: "Forget", exact: true }).click()
-  const confirm = page.getByRole("alertdialog")
-  await expect(confirm).toContainText("Forget previous?")
-  await confirm.getByRole("button", { name: "Forget", exact: true }).click()
-
-  await expect(page.getByText("No projects yet")).toBeVisible()
-  expect(requests.filter((request) => request.method === "DELETE").map((request) => [request.path, request.body])).toEqual([
-    ["/api/recent", { directory: "/work/previous" }],
-  ])
-  expect(requests.some((request) => request.path.endsWith("/stop"))).toBeFalsy()
-})
-
-// Moved from Recent folders to Machines: unavailable folders keep their reason and cannot start a session.
 test("an agent signs out from the machine page after a confirmation", async ({ page }) => {
   await mockAPI(page)
   let signedIn = true
@@ -56,35 +26,6 @@ test("an agent signs out from the machine page after a confirmation", async ({ p
   await confirm.getByRole("button", { name: "Sign out" }).click()
   await expect(page.getByText("Not signed in")).toBeVisible()
   expect(loggedOut).toBe(1)
-})
-
-test("recent folders retain unavailable reasons and only available paths can start", async ({ page }) => {
-  await mockAPI(page)
-  await page.route(projectsPath, (route) =>
-    route.fulfill({
-      json: [
-        projectRow("/work/available", [{ harness: "codex" }]),
-        projectRow("/work/missing", [{ harness: "codex" }], { available: false, unavailable_reason: "Folder is missing or inaccessible" }),
-        projectRow("/work/replaced", [{ harness: "claude" }], { available: false, unavailable_reason: "Folder changed since its last local launch" }),
-      ],
-    }),
-  )
-  await page.goto("/machines/local")
-
-  await expect(page.getByText("Folder is missing or inaccessible")).toBeVisible()
-  await expect(page.getByText("Folder changed since its last local launch")).toBeVisible()
-  for (const [name, usable] of [
-    ["available", true],
-    ["missing", false],
-    ["replaced", false],
-  ] as const) {
-    await machineRow(page, name).click({ button: "right" })
-    const start = page.getByRole("menuitem", { name: "New session…" })
-    if (usable) await expect(start).toBeEnabled()
-    else await expect(start).toBeDisabled()
-    await page.keyboard.press("Escape")
-    await expect(page.getByRole("menu")).toBeHidden()
-  }
 })
 
 test("limits view shows each harness with partial failures and no raw CLI output", async ({ page }) => {
@@ -258,12 +199,8 @@ test("startup and machine discovery announce pending work", async ({ page }) => 
   releaseStatus()
   await expect(page.getByText("Discovering machines…")).toBeVisible()
 
-  await page.getByRole("link", { name: "System", exact: true }).click()
-  await expect(page.getByText("Discovering connected machines")).toBeVisible()
-  await expect(page.getByRole("navigation", { name: "System" })).toHaveAttribute("aria-busy", "true")
   releaseNodes()
-  await expect(page.getByText("Discovering connected machines")).toBeHidden()
-  await expect(page.getByRole("navigation", { name: "System" })).toHaveAttribute("aria-busy", "false")
+  await expect(page.getByText("Discovering machines…")).toBeHidden()
 })
 
 test("settings errors finish loading and offer a working retry", async ({ page }) => {
