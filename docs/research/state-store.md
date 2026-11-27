@@ -1562,8 +1562,6 @@ remain outstanding.
 
 ## Unified browser reads and offline chat — P4.8 / P4.9
 
-This checkpoint predates the System redesign. Mesh controls now live in System → Topology.
-
 Sessions and limits now share one local query across machines. The browser groups
 replicated rows by node ID rather than issuing per-machine reads, and session
 routes load the saved metadata even when their owner is offline. The redundant
