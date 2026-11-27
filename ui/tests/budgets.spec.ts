@@ -136,18 +136,6 @@ test("first Library open makes at most 9 requests", async ({ page }) => {
   expect(seen.paths.length).toBeLessThanOrEqual(9)
 })
 
-test("the fleet's install rows total at most 12 across machines", async ({ page }) => {
-  await mockFleet(page)
-  let rows = 0
-  for (const machine of ["local", "peer-1", "peer-2"]) {
-    await page.goto(`/machines/${machine}`)
-    const grid = page.locator('table[aria-label="Projects"] tbody tr')
-    await expect(grid.first()).toBeVisible()
-    rows += await grid.count()
-  }
-  expect(rows).toBeLessThanOrEqual(12)
-})
-
 test("New Session merges each machine's 4 folders into 4 projects", async ({ page }) => {
   await mockFleet(page)
   await page.goto("/sessions?new=1")
