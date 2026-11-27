@@ -1,24 +1,19 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Link, getRouteApi } from "@tanstack/react-router"
+import { Link } from "@tanstack/react-router"
 import { Compass, Copy, Ellipsis, Plug, Puzzle } from "lucide-react"
 import { Inspector, InspectorHead } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { SearchField, SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/kit/overlays"
 import { Button } from "@/components/ui/button"
-import type { CatalogItem, MCPServerInput } from "@/lib/api-types"
+import type { CatalogItem } from "@/lib/api-types"
 import { copyText } from "@/lib/hud"
 import { plural } from "@/lib/format"
-import { InstallMCPSheet } from "./add-package-sheet"
-import { packageRecord } from "./inspect"
-import { InstallSheet } from "./install-sheet"
-import type { InstallItem } from "./install-state"
+import { InstallProjectMenu } from "./install-project-menu"
 import type { MCPItem, PackageItem } from "./model"
 import { catalogQuery, useSettled } from "./queries"
 import { useLibrary } from "./use-library"
-
-const route = getRouteApi("/_app/library/discover")
 
 type Kind = "all" | CatalogItem["kind"]
 const kinds: { value: Kind; label: string }[] = [
@@ -30,16 +25,12 @@ const kinds: { value: Kind; label: string }[] = [
 const moduleOf = (spec: string) => spec.split("@")[0]!.toLowerCase()
 
 export function DiscoverView() {
-  const navigate = route.useNavigate()
   // Discover keeps its own catalog search independent of the Library sidebar's `q` filter.
   const [catalogQueryText, setCatalogQueryText] = useState("")
   const query = useSettled(catalogQueryText.trim())
   const catalog = useQuery(catalogQuery(query))
-  const { inputs, items: library } = useLibrary()
+  const { items: library } = useLibrary()
   const [kind, setKind] = useState<Kind>("all")
-  const [installingMCP, setInstallingMCP] = useState<MCPServerInput>()
-  const [installingPackage, setInstallingPackage] = useState<InstallItem>()
-
 
   // Map catalog entries to existing Library items so installed rows link to their installations and still offer Install.
   const packagesByModule = new Map<string, PackageItem>()
@@ -54,17 +45,6 @@ export function DiscoverView() {
   function matchLibrary(item: CatalogItem): PackageItem | MCPItem | undefined {
     if (item.spec) return packagesByModule.get(moduleOf(item.spec))
     return mcpsByName.get(item.name)
-  }
-
-  function openPackageInstall(pkg: PackageItem) {
-    const record = packageRecord(inputs, pkg.module, pkg.commit)
-    setInstallingPackage({
-      module: pkg.module,
-      commit: pkg.commit,
-      name: pkg.name,
-      cache_key: record?.cache_key ?? "",
-      content_hash: record?.content_hash,
-    })
   }
 
   const needle = query.toLowerCase()
@@ -116,6 +96,8 @@ export function DiscoverView() {
         {rows.map((item) => {
           const existing = matchLibrary(item)
           const count = existing?.projects.length ?? 0
+          const spec = existing && existing.type !== "mcp" && count > 0 ? `${existing.module}@${existing.commit}` : item.spec
+          const target = spec ? { spec } : item.server ? { server: item.server } : undefined
           const Glyph = item.kind === "mcp" ? Plug : Puzzle
           return (
             <li key={`${item.source}\0${item.name}`} className="flex min-w-0 flex-wrap items-start gap-(--s3) border-b-[0.5px] border-(--sep) py-(--s2)">
@@ -155,34 +137,16 @@ export function DiscoverView() {
                     </Link>
                   )
                 )}
-                {count > 0 ? (
-                  existing && (existing.type === "plugin" || existing.type === "skill") ? (
-                    <Button type="button" size="sm" aria-label={`Install ${item.name} in another project`} onClick={() => openPackageInstall(existing)}>
-                      Install in another project
-                    </Button>
-                  ) : item.server ? (
-                    <Button type="button" size="sm" aria-label={`Install ${item.name} in another project`} onClick={() => setInstallingMCP(item.server)}>
-                      Install in another project
-                    </Button>
-                  ) : item.spec ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      aria-label={`Install ${item.name} in another project`}
-                      onClick={() => void navigate({ search: (prev) => ({ ...prev, add: item.spec }) })}
-                    >
-                      Install in another project
-                    </Button>
-                  ) : null
-                ) : item.spec ? (
-                  <Button type="button" aria-label={`Install ${item.name}…`} onClick={() => void navigate({ search: (prev) => ({ ...prev, add: item.spec }) })}>
-                    Install…
-                  </Button>
-                ) : item.server ? (
-                  <Button type="button" aria-label={`Install ${item.name}…`} onClick={() => setInstallingMCP(item.server)}>
-                    Install…
-                  </Button>
-                ) : null}
+                {target && (
+                  <InstallProjectMenu
+                    name={item.name}
+                    target={target}
+                    size={count > 0 ? "sm" : undefined}
+                    aria-label={count > 0 ? `Install ${item.name} in another project` : `Install ${item.name}…`}
+                  >
+                    {count > 0 ? "Install in another project" : "Install…"}
+                  </InstallProjectMenu>
+                )}
                 {item.command && (
                   <Menu>
                     <MenuTrigger
@@ -218,16 +182,6 @@ export function DiscoverView() {
           )}
         </Empty>
       )}
-      {installingPackage && (
-        <InstallSheet
-          item={installingPackage}
-          open={true}
-          onOpenChange={(open) => {
-            if (!open) setInstallingPackage(undefined)
-          }}
-        />
-      )}
-      <InstallMCPSheet server={installingMCP} onOpenChange={(open) => !open && setInstallingMCP(undefined)} />
     </Inspector>
   )
 }

@@ -10,6 +10,34 @@ const server = { name: "docs-remote", url: "https://example.com/mcp", type: "htt
 const mcp = { kind: "mcp", name: "Docs Remote", source: "Servers", server }
 const searchName = "Search skills, plugins and MCP servers"
 
+test("Discover chooses a recent project and focuses the matching install result", async ({ page }) => {
+  const requests = await mockAPI(page)
+  const folders = Array.from({ length: 9 }, (_, i) => projectRow(`/work/project-${i}`, [], {
+    last_used: `2026-11-${10 + i}T12:00:00Z`,
+  }))
+  await page.route("**/api/projects", (route) => route.fulfill({ json: folders }))
+  await page.route((url) => url.pathname === "/api/library/catalog", (route) =>
+    route.fulfill({ json: { items: [plugin], sources: [] } }),
+  )
+  await page.goto("/library/discover")
+  await page.getByRole("button", { name: "Install Docs Catalog…" }).click()
+  const picker = page.getByRole("dialog", { name: "Choose a project" })
+  await expect(picker.getByRole("link").first()).toHaveText(/^project-8 · /)
+  const filter = picker.getByRole("searchbox", { name: "Search projects" })
+  await filter.fill("project-3")
+  await expect(picker.getByRole("link")).toHaveCount(1)
+  await picker.getByRole("link", { name: /^project-3 · / }).click()
+  await expect(page).toHaveURL(/\/sessions\/project\/local\/%2Fwork%2Fproject-3\?install=1&find=Docs(?:%20|\+)Catalog$/i)
+  const search = page.getByRole("searchbox", { name: searchName })
+  await expect(search).toHaveValue("Docs Catalog")
+  await expect(search).toBeFocused()
+  expect(requests.filter((request) => request.method === "POST")).toHaveLength(0)
+  await page.getByRole("region", { name: "Results" }).getByRole("button", { name: "Install Docs Catalog" }).click()
+  await expect.poll(() => requests.find((request) => request.path === "/api/packages")).toMatchObject({
+    method: "POST", body: { directory: "/work/project-3", spec: plugin.spec, restart: false },
+  })
+})
+
 test("project search finds installed, Library and catalog items and installs them in place", async ({ page }) => {
   await page.clock.install()
   const requests = await mockAPI(page)

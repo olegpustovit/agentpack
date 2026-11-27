@@ -13,34 +13,12 @@ export type Destination = {
   project: ProjectRow
 }
 
-export type DestinationState = {
-  disabled: boolean
-  // Non-empty when the row is saved as a draft instead of installed now.
-  draftReason: string
-  text: string
-}
-
-// A row without a folder id or cache key cannot be drafted.
-export function destinationState(item: InstallItem, target: Destination): DestinationState {
-  const { project } = target
-  const draftable = project.folder_id !== "" && item.cache_key !== ""
-  if (!target.online) {
-    return draftable
-      ? { disabled: false, draftReason: "Machine offline", text: "Offline · install as draft" }
-      : { disabled: true, draftReason: "", text: "Offline · exact package identity unavailable" }
-  }
-  if (!project.available) {
-    const reason = project.unavailable_reason || "Folder unavailable"
-    return draftable
-      ? { disabled: false, draftReason: reason, text: `Folder unavailable · ${reason}` }
-      : { disabled: true, draftReason: "", text: reason }
-  }
-  if (project.error) return { disabled: true, draftReason: "", text: `Could not check pins · ${project.error}` }
-  const pin = project.packages.find((entry) => entry.module === item.module)
-  if (pin?.commit === item.commit) return { disabled: true, draftReason: "", text: "Already installed" }
+export function destinationState(item: Pick<InstallItem, "module" | "commit">, project?: ProjectRow) {
+  if (project?.error) return { disabled: true, text: `Could not check pins · ${project.error}` }
+  const pin = project?.packages.find((entry) => entry.module === item.module)
+  if (pin?.commit === item.commit) return { disabled: true, text: "Already installed" }
   return {
     disabled: false,
-    draftReason: "",
     text: pin?.commit ? `Update ${shortHash(pin.commit)} → ${shortHash(item.commit)}` : "Not installed",
   }
 }
@@ -96,17 +74,6 @@ export function affectedAgentLabels(sessions: SessionInfo[], directory: string):
 
 export function restartCopy(count: number): string {
   return count === 0 ? "" : `Restarts ${plural(count, "agent")}`
-}
-
-export type InstallPhase = "pick" | "run" | "done"
-
-export function installLabel(phase: InstallPhase, installs: number, drafts: number): string {
-  if (phase === "run") return "Installing…"
-  if (phase === "done") return "Done"
-  if (installs === 0 && drafts === 0) return "Install"
-  if (installs === 0) return `Save ${plural(drafts, "draft")}`
-  if (drafts === 0) return `Install in ${plural(installs, "project")}`
-  return `Install ${installs} · Draft ${drafts}`
 }
 
 // Every project on every machine, in machine order. Offline machines keep their last known projects.

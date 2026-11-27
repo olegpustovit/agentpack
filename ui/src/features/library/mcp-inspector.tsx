@@ -1,5 +1,4 @@
 import { errorText } from "@/lib/api"
-import { useState } from "react"
 import { Link } from "@tanstack/react-router"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { Plug } from "lucide-react"
@@ -12,7 +11,7 @@ import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Inspector, InspectorHead, KeyValue, Section } from "@/components/kit/data"
 import { plural } from "@/lib/format"
-import { InstallMCPSheet } from "./add-package-sheet"
+import { InstallProjectMenu } from "./install-project-menu"
 import { mcpUses, type MCPUse } from "./inspect"
 import { Failures, MissingItem } from "./inspector-state"
 import type { MCPItem } from "./model"
@@ -35,7 +34,6 @@ function installableServer(server: MCPItem, uses: MCPUse[]): MCPServerInput | un
 export function McpInspector({ name }: { name: string }) {
   const isPhone = useIsPhone()
   const { inputs, items, loading, failures } = useLibrary()
-  const [installing, setInstalling] = useState<MCPServerInput>()
   const server = items.find((entry): entry is MCPItem => entry.type === "mcp" && entry.name === name)
   const login = useServerLogin(server)
 
@@ -71,9 +69,9 @@ export function McpInspector({ name }: { name: string }) {
         subtitle={`${server.launcher} · ${plural(server.projects.length, "project")} · ${server.machines.join(", ")}`}
       >
         {installTarget && (
-          <Button type="button" size="sm" variant="primary" onClick={() => setInstalling(installTarget)}>
+          <InstallProjectMenu size="sm" variant="primary" name={server.name} target={{ server: installTarget }}>
             Install in another project…
-          </Button>
+          </InstallProjectMenu>
         )}
       </InspectorHead>
       <Section title="Server" className="col-span-full">
@@ -86,14 +84,7 @@ export function McpInspector({ name }: { name: string }) {
         </dl>
       </Section>
       <Section title="Used in" className="col-span-full">
-        <div className="mb-(--s2) flex flex-wrap items-center justify-between gap-(--s2)">
-          <p className="text-(length:--fs-sm) text-(--fg2)">{plural(uses.length, "project")}</p>
-          {installTarget && (
-            <Button type="button" size="sm" variant="ghost" onClick={() => setInstalling(installTarget)}>
-              Install in another project…
-            </Button>
-          )}
-        </div>
+        <p className="mb-(--s2) text-(length:--fs-sm) text-(--fg2)">{plural(uses.length, "project")}</p>
         {isPhone ? (
           <ul aria-label="Used in" className="flex min-w-0 flex-col">
             {uses.map((use) => (
@@ -135,7 +126,6 @@ export function McpInspector({ name }: { name: string }) {
           </DataGrid>
         )}
       </Section>
-      <InstallMCPSheet server={installing} onOpenChange={(open) => !open && setInstalling(undefined)} />
     </Inspector>
   )
 }

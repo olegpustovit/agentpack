@@ -695,17 +695,13 @@ test("a grid column can be dragged wider", async ({ page, isMobile, browserName 
   expect((await header.boundingBox())!.width).toBe(cancelledWidth)
 })
 
-test("kit styling keeps rapid Tab inside the Install sheet and restores its opener", async ({ page }) => {
+test("kit styling lets the project picker open by keyboard and restores its opener", async ({ page }) => {
   await openToolsPackage(page)
   const install = page.getByRole("button", { name: "Install…" })
   await install.focus()
   await install.press("Enter")
-  const dialog = page.getByRole("dialog")
-  await expect(dialog).toBeVisible()
-  for (let i = 0; i < 40; i++) {
-    await page.keyboard.press(i < 20 ? "Tab" : "Shift+Tab")
-    expect(await dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true)
-  }
+  const dialog = page.getByRole("dialog", { name: "Choose a project" })
+  await expect(dialog.getByRole("link").first()).toBeVisible()
   await page.keyboard.press("Escape")
   await expect(dialog).toBeHidden()
   await expect(install).toBeFocused()
@@ -716,13 +712,11 @@ for (const colorScheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme })
     await openToolsPackage(page)
     await page.getByRole("button", { name: "Install…" }).click()
-    const sheet = page.getByRole("dialog")
-    await sheet.getByRole("checkbox", { name: /^previous/ }).click()
-    const button = sheet.getByRole("button", { name: /^Install/ })
-    const checkbox = sheet.getByRole("checkbox", { name: "Restart affected agents" })
-    await expect(button).toBeEnabled()
-    expect(await contrast(button, "color")).toBeGreaterThanOrEqual(4.5)
-    expect(await contrast(checkbox, "borderTopColor")).toBeGreaterThanOrEqual(3)
+    const destination = page.getByRole("dialog", { name: "Choose a project" }).getByRole("link").first()
+    await expect(destination).toBeVisible()
+    expect(await contrast(destination, "color")).toBeGreaterThanOrEqual(4.5)
+    await page.keyboard.press("Escape")
+    await expect(destination).toBeHidden()
 
     const hour = Math.floor(Date.now() / 3_600_000) * 3600
     await page.route("**/api/usage?**", (route) => route.fulfill({ json: {

@@ -27,7 +27,6 @@ function LibraryLayout() {
       {add !== undefined && (
         <AddPackageSheet
           open
-          initialSpec={add === "1" ? undefined : add}
           onOpenChange={(open) => {
             if (!open) void navigate({ to: ".", search: (prev) => ({ ...prev, add: undefined }), replace: true })
           }}

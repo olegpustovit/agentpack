@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { ProjectRow } from "@/lib/api-types"
-import { affectedAgents, canApplyDraft, destinationState, expectedPins, installLabel, restartCopy, restorePlan, runLimited, type Destination, type InstallItem } from "./install-state"
+import { affectedAgents, canApplyDraft, destinationState, expectedPins, restartCopy, restorePlan, runLimited, type Destination, type InstallItem } from "./install-state"
 import type { SessionInfo } from "@/lib/api-types"
 import type { DraftReview } from "./mutations"
 
@@ -30,34 +30,21 @@ function target(overrides: Omit<Partial<Destination>, "project"> & { project?: P
 
 describe("destinationState", () => {
   it("installs into a project that does not pin the package yet", () => {
-    expect(destinationState(item, target())).toEqual({ disabled: false, draftReason: "", text: "Not installed" })
+    expect(destinationState(item, project())).toEqual({ disabled: false, text: "Not installed" })
   })
 
   it("names the pin change with seven characters on each side", () => {
     const pinned = target({ project: { packages: [{ module: item.module, commit: "1111111aaaa", content_hash: "", cache_key: "", kind: "skill", name: "alpha", url: "", direct: true }] } })
-    expect(destinationState(item, pinned).text).toBe("Update 1111111 → abcd123")
+    expect(destinationState(item, pinned.project).text).toBe("Update 1111111 → abcd123")
   })
 
   it("disables a project already on this commit", () => {
     const same = target({ project: { packages: [{ module: item.module, commit: item.commit, content_hash: "", cache_key: "", kind: "skill", name: "alpha", url: "", direct: true }] } })
-    expect(destinationState(item, same)).toEqual({ disabled: true, draftReason: "", text: "Already installed" })
-  })
-
-  it("saves a draft for an offline machine that has a folder identity", () => {
-    expect(destinationState(item, target({ online: false }))).toEqual({ disabled: false, draftReason: "Machine offline", text: "Offline · install as draft" })
-  })
-
-  it("disables an offline machine whose folder has no identity", () => {
-    expect(destinationState(item, target({ online: false, project: { folder_id: "" } })).disabled).toBe(true)
-  })
-
-  it("drafts an unavailable folder and keeps its reason", () => {
-    const state = destinationState(item, target({ project: { available: false, unavailable_reason: "Folder moved" } }))
-    expect(state).toEqual({ disabled: false, draftReason: "Folder moved", text: "Folder unavailable · Folder moved" })
+    expect(destinationState(item, same.project)).toEqual({ disabled: true, text: "Already installed" })
   })
 
   it("disables a project whose pins could not be checked", () => {
-    expect(destinationState(item, target({ project: { error: "timeout" } }))).toEqual({ disabled: true, draftReason: "", text: "Could not check pins · timeout" })
+    expect(destinationState(item, project({ error: "timeout" }))).toEqual({ disabled: true, text: "Could not check pins · timeout" })
   })
 })
 
@@ -149,12 +136,5 @@ describe("copy", () => {
   it("counts running chats and terminals but not native-stdio sessions", () => {
     const session = (transport: string, interactive: boolean) => ({ directory: "/srv/app", transport, state: { running: true, interactive } }) as SessionInfo
     expect(affectedAgents([session("acp", false), session("", true), session("", false)], "/srv/app")).toBe(2)
-  })
-
-  it("reads Install when nothing is chosen, then names what the primary does", () => {
-    expect(installLabel("pick", 0, 0)).toBe("Install")
-    expect(installLabel("pick", 2, 0)).toBe("Install in 2 projects")
-    expect(installLabel("pick", 0, 1)).toBe("Save 1 draft")
-    expect(installLabel("pick", 1, 1)).toBe("Install 1 · Draft 1")
   })
 })

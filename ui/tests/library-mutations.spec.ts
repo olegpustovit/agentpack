@@ -5,9 +5,8 @@ const identity = { node: { id: "n1", name: "host-a", os: "linux", version: "0" }
 const alpha = "github.com/acme/alpha"
 const alphaPin = `${alpha}@abcd1234ef56`
 
-// Mutable per test: a peer that goes offline and a draft list the gateway keeps.
+// Mutable per test: whether the peer is online.
 let peerOnline = true
-let drafts: unknown[] = []
 
 type Call = { method: string; path: string; node: string | null; body: unknown }
 const calls: Call[] = []
@@ -57,7 +56,6 @@ function machineOf(url: string): string {
 
 async function mockGateway(page: Page) {
   calls.length = 0
-  drafts = []
   peerOnline = true
   await page.route("**/api/config", (route) => route.fulfill({ json: { ui_build_id: "test-build" } }))
   await page.route("**/api/status", (route) => route.fulfill({ json: { claimed: true, legacy: false, email: "owner@example.com", authenticated: true } }))
@@ -69,24 +67,6 @@ async function mockGateway(page: Page) {
   await page.route(/\/api\/library\/packages(\?.*)?$/, (route) => route.fulfill({ json: machines[machineOf(route.request().url())]?.packages }))
   await page.route(/\/api\/library\/agentpacks(\?.*)?$/, (route) => route.fulfill({ json: machines[machineOf(route.request().url())]?.agentpacks }))
   await page.route(/\/api\/projects(\?.*)?$/, (route) => route.fulfill({ json: machines[machineOf(route.request().url())]?.projects }))
-  await page.route(/\/api\/library\/drafts(\?.*)?$/, async (route) => {
-    if (route.request().method() === "POST") {
-      const body = record(route).body
-      const created = { ...(typeof body === "object" && body !== null ? body : {}), id: "draft-1", created_at: "2026-10-30T12:00:00Z" }
-      drafts = [...drafts, created]
-      return route.fulfill({ json: created })
-    }
-    return route.fulfill({ json: drafts })
-  })
-  await page.route(/\/api\/library\/drafts\/[^/]+\/review$/, (route) => {
-    record(route)
-    return route.fulfill({ json: { draft: drafts[0], ready: true, pins_match: true, folder_match: true, reason: "Ready to install the exact pin.", diff: { add: [alpha], update: [], remove: [], mode: "default", preview_digest: "install-current" } } })
-  })
-  await page.route(/\/api\/library\/drafts\/[^/]+$/, (route) => {
-    record(route)
-    drafts = []
-    return route.fulfill({ json: { discarded: true } })
-  })
   await page.route(/\/api\/packages(\?.*)?$/, (route) => {
     record(route)
     return route.fulfill({ json: { installed: true } })
@@ -105,103 +85,17 @@ test.beforeEach(async ({ page }) => {
   await mockGateway(page)
 })
 
-test("two installs run at a time per machine, and nothing is sent before Install is confirmed", async ({ page }) => {
-  const held: Array<() => void> = []
-  let inFlight = 0
-  let maxInFlight = 0
-  await page.route(/\/api\/packages(\?.*)?$/, async (route) => {
-    const call = record(route)
-    inFlight++
-    maxInFlight = Math.max(maxInFlight, inFlight)
-    await new Promise<void>((release) => held.push(release))
-    inFlight--
-    expect(call.body).toMatchObject({ spec: alphaPin, restart: false })
-    await route.fulfill({ json: { installed: true } })
-  })
-
+test("a package inspector version installs only after confirmation on the selected project", async ({ page }) => {
   await page.goto("/library/package/github.com/acme/alpha")
-  await page.getByRole("button", { name: "Install…" }).click()
-  await expect(page.getByRole("dialog")).toContainText("Choose at least one project")
-  for (const name of ["one", "two", "three"]) await page.getByRole("checkbox", { name: new RegExp(`^${name}`) }).click()
-  await expect(page.getByRole("button", { name: "Install in 3 projects" })).toBeEnabled()
+  await page.getByRole("button", { name: "Install abcd123…" }).click()
+  await page.getByRole("dialog", { name: "Choose a project" }).getByRole("link", { name: "two · host-a" }).click()
+  const install = page.getByRole("button", { name: "Install alpha" })
+  await expect(install).toBeVisible()
   expect(calls).toEqual([])
-
-  await page.getByRole("button", { name: "Install in 3 projects" }).click()
-  await expect.poll(() => held.length).toBe(2)
-  held[0]?.()
-  await expect.poll(() => held.length).toBe(3)
-  held[1]?.()
-  held[2]?.()
-
-  await expect(page.getByRole("button", { name: "Done" })).toBeVisible()
-  expect(maxInFlight).toBe(2)
-  expect(calls.map((call) => call.path)).toEqual(["/api/packages", "/api/packages", "/api/packages"])
-  await expect(page.getByRole("dialog").getByText("Installed", { exact: true })).toHaveCount(3)
-})
-
-test("a row that fails keeps its error visible after the install finishes", async ({ page }) => {
-  await page.route(/\/api\/packages(\?.*)?$/, (route) => {
-    const call = record(route)
-    const body = call.body
-    if (typeof body === "object" && body !== null && "directory" in body && String(body.directory).endsWith("two")) {
-      return route.fulfill({ status: 500, json: { error: "Folder is not available on this machine." } })
-    }
-    return route.fulfill({ json: { installed: true } })
-  })
-
-  await page.goto("/library/package/github.com/acme/alpha")
-  await page.getByRole("button", { name: "Install…" }).click()
-  await page.getByRole("checkbox", { name: /^one/ }).click()
-  await page.getByRole("checkbox", { name: /^two/ }).click()
-  await page.getByRole("button", { name: "Install in 2 projects" }).click()
-
-  await expect(page.getByRole("button", { name: "Done" })).toBeVisible()
-  await expect(page.getByRole("dialog")).toContainText("Couldn't install: Folder is not available on this machine.")
-  await expect(page.getByRole("dialog").getByText("Installed", { exact: true })).toHaveCount(1)
-  await expect(page.getByRole("dialog").getByRole("button", { name: "Retry failed (1)" })).toBeVisible()
-})
-
-test("LIB-05: duplicate project names are distinguishable and rows meet touch height", async ({ page, isMobile }) => {
-  await page.route(/\/api\/projects(\?.*)?$/, (route) => {
-    const node = machineOf(route.request().url())
-    if (node === "local") return route.fulfill({ json: [project("/srv/team-a/web", "f1"), project("/srv/team-b/web", "f2")] })
-    return route.fulfill({ json: [] })
-  })
-
-  await page.goto("/library/package/github.com/acme/alpha")
-  await page.getByRole("button", { name: "Install…" }).click()
-  const dialog = page.getByRole("dialog")
-  const first = dialog.getByRole("checkbox", { name: /\/srv\/team-a\/web/ })
-  const second = dialog.getByRole("checkbox", { name: /\/srv\/team-b\/web/ })
-  await expect(first).toBeVisible()
-  await expect(second).toBeVisible()
-  const secondRow = dialog.locator("label").filter({ hasText: "/srv/team-b/web" })
-  const box = await secondRow.boundingBox()
-  expect(box?.height ?? 0).toBeGreaterThanOrEqual(isMobile ? 44 : 24)
-  await secondRow.click()
-  await expect(second).toBeChecked()
-  await expect(first).not.toBeChecked()
-  await expect(dialog).toContainText("1 project selected")
-})
-
-test.describe("phone viewport", () => {
-  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
-
-  test("LIB-05 on phone: Install rows are at least 44 px tall and distinguishable", async ({ page }) => {
-    await page.route(/\/api\/projects(\?.*)?$/, (route) => {
-      const node = machineOf(route.request().url())
-      if (node === "local") return route.fulfill({ json: [project("/srv/team-a/web", "f1"), project("/srv/team-b/web", "f2")] })
-      return route.fulfill({ json: [] })
-    })
-    await page.goto("/library/package/github.com/acme/alpha")
-    await page.getByRole("button", { name: "Install…" }).click()
-    const dialog = page.getByRole("dialog")
-    const secondRow = dialog.locator("label").filter({ hasText: "/srv/team-b/web" })
-    const box = await secondRow.boundingBox()
-    expect(box?.height ?? 0).toBeGreaterThanOrEqual(44)
-    await secondRow.tap({ position: { x: 20, y: box!.height - 1 } })
-    await expect(dialog.getByRole("checkbox", { name: /team-b/ })).toBeChecked()
-    await expect(dialog.getByRole("checkbox", { name: /team-a/ })).not.toBeChecked()
+  await install.click()
+  await expect.poll(() => calls[0]).toEqual({
+    method: "POST", path: "/api/packages", node: null,
+    body: { directory: "/srv/local/two", spec: alphaPin, restart: false },
   })
 })
 
@@ -259,36 +153,12 @@ test("LIB-10: Add package reviews before writes, retains results, and retries on
   await expect(dialog).toBeHidden()
 })
 
-test("an install into an offline machine is saved as a draft with its exact pins", async ({ page }) => {
-  await page.clock.install()
-  await page.goto("/library/package/github.com/acme/alpha")
-  await expect(page.getByRole("button", { name: "Install…" })).toBeVisible()
-
-  // The peer's projects were loaded while it was online. Going offline and polling keeps them, marked offline, and surfaces the toolbar indicator.
+test("the project picker leaves offline machines out", async ({ page }) => {
   peerOnline = false
-  await page.clock.runFor(31_000)
-  await expect(page.getByRole("button", { name: "1 machine offline" })).toBeVisible()
-
+  await page.goto("/library/package/github.com/acme/alpha")
   await page.getByRole("button", { name: "Install…" }).click()
-  await expect(page.getByRole("dialog")).toContainText("Offline · install as draft")
-  await page.getByRole("checkbox", { name: /^app/ }).click()
-  await page.getByRole("button", { name: "Save 1 draft" }).click()
-
-  await expect(page.getByRole("dialog")).toContainText("Draft saved")
-  expect(calls).toEqual([
-    {
-      method: "POST",
-      path: "/api/library/drafts",
-      node: null,
-      body: {
-        item: alphaPin,
-        node: "n2",
-        directory: "/srv/oracle/app",
-        reason: "Machine offline",
-        folder_identity: "folder-oracle",
-        expected_pins: { "github.com/acme/baseline": { commit: "abc1000", cache_key: "baseline-key" } },
-      },
-    },
+  await expect(page.getByRole("dialog", { name: "Choose a project" }).getByRole("link")).toHaveText([
+    "one · host-a", "three · host-a", "two · host-a",
   ])
 })
 
