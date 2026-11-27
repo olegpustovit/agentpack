@@ -18,6 +18,15 @@ const composerFixture = [
 const style = (locator: Locator, property: string, pseudo?: string) =>
   locator.evaluate((element, [name, pseudoElement]) => getComputedStyle(element, pseudoElement).getPropertyValue(name!), [property, pseudo] as const)
 
+const backgroundToken = (locator: Locator, token: string) => locator.evaluate((element, name) => {
+  const probe = document.createElement("span")
+  probe.style.backgroundColor = `var(${name})`
+  element.append(probe)
+  const color = getComputedStyle(probe).backgroundColor
+  probe.remove()
+  return color
+}, token)
+
 const contrast = (locator: Locator, property: "color" | "borderTopColor") => locator.evaluate((element, color) => {
   const context = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!
   const pixel = () => context.getImageData(0, 0, 1, 1).data
@@ -144,19 +153,35 @@ test.describe("kit styling", () => {
     expect((await page.getByRole("combobox", { name: "Sort" }).boundingBox())?.height).toBe(26)
   })
 
-  test("meter colours follow what is left", async ({ page }) => {
+  test("Limits uses the danger meter and large percentage for exhausted quota", async ({ page }) => {
     await desktop(page)
     await page.route("**/api/limits", (route) =>
-      route.fulfill({ json: { limits: [{ harness: "codex", state: "available", observed_at: new Date().toISOString(), windows: [
-        { id: "a", label: "Plenty", remaining_percent: 70 },
-        { id: "b", label: "Low", remaining_percent: 10 },
-        { id: "c", label: "Out", remaining_percent: 2 },
+      route.fulfill({ json: { limits: [{ harness: "cursor", state: "available", observed_at: new Date().toISOString(), windows: [
+        { id: "cursor", label: "Cursor Models", remaining_percent: 0 },
       ] }] } }),
     )
     await page.goto("/usage/limits")
-    const fill = (name: string) => page.getByRole("meter", { name: `${name} remaining` }).evaluate((meter) => getComputedStyle(meter).getPropertyValue("--meter"))
-    await expect(page.getByRole("meter", { name: "Low remaining" })).toBeVisible()
-    expect(new Set([await fill("Plenty"), await fill("Low"), await fill("Out")]).size).toBe(3)
+    const meter = page.getByRole("meter", { name: "Cursor CLI left" })
+    await expect(meter).toHaveCSS("width", "160px")
+    expect(await style(meter, "--meter")).toBe(await style(meter, "--danger"))
+    const percent = page.getByRole("list", { name: "Limits" }).getByText("0%", { exact: true })
+    await expect(percent).toHaveCSS("font-size", await style(percent, "--fs-lg"))
+  })
+
+  test("General links have chevrons and a hover surface, and the Vault badge has a warning dot", async ({ page }) => {
+    await desktop(page)
+    await page.route("**/api/agents/shared", (route) =>
+      route.fulfill({ json: { agents: [{ harness: "cursor", state: "expired" }] } }),
+    )
+    await page.goto("/settings/general")
+    const sharing = page.getByRole("link", { name: "Sharing" })
+    const chevron = sharing.locator("svg.lucide-chevron-right")
+    await expect(chevron).toHaveCSS("width", await style(sharing, "--fs"))
+    await sharing.hover()
+    await expect(sharing).toHaveCSS("background-color", await backgroundToken(sharing, "--hover"))
+    const vault = page.getByRole("link", { name: "Vault 1 to sign in" })
+    const dot = vault.locator('span[aria-hidden="true"]')
+    await expect(dot).toHaveCSS("background-color", await backgroundToken(vault, "--warn"))
   })
 
   test("the usage hero: one large number, a dashed average and a fixed colour per agent", async ({ page, browserName }) => {
@@ -173,14 +198,7 @@ test.describe("kit styling", () => {
     expect(await style(page.locator('[data-slot="chart-average"]'), "stroke-dasharray")).not.toBe("none")
     // The legend swatch and the bar share the agent's token, so Claude reads the same colour everywhere.
     const swatch = page.getByRole("list", { name: "Legend" }).getByRole("listitem").first().locator("span[aria-hidden]")
-    const claude = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--series-1").trim())
-    expect(claude).not.toBe("")
-    expect(await style(swatch, "background-color")).toBe(await page.evaluate((value) => {
-      const probe = document.createElement("span")
-      probe.style.backgroundColor = value
-      document.body.append(probe)
-      return getComputedStyle(probe).backgroundColor
-    }, claude))
+    await expect(swatch).toHaveCSS("background-color", await backgroundToken(swatch, "--series-1"))
   })
 
   test("the topology diagram is drawn at its own size", async ({ page, browserName }) => {
@@ -609,7 +627,7 @@ test("a confirm alert places macOS-order buttons inside it on desktop and stacks
   test.skip(isMobile, "desktop")
   await desktop(page)
   await page.goto("/settings/general")
-  await page.getByRole("button", { name: "Stop gateway…" }).click()
+  await page.getByRole("button", { name: "Stop…", exact: true }).click()
   const dialog = page.getByRole("alertdialog")
   const cancelBtn = dialog.getByRole("button", { name: "Cancel" })
   const stopBtn = dialog.getByRole("button", { name: "Stop gateway" })
@@ -632,22 +650,14 @@ test("a confirm alert places macOS-order buttons inside it on desktop and stacks
   expect(desk.stop.x).toBeGreaterThan(desk.cancel.x)
   expect(Math.abs(desk.cancel.y - desk.stop.y)).toBeLessThan(2)
   // Filled red destructive action on desktop and phone.
-  const danger = await page.evaluate(() => {
-    const probe = document.createElement("span")
-    probe.style.backgroundColor = getComputedStyle(document.documentElement).getPropertyValue("--danger").trim()
-    document.body.append(probe)
-    const color = getComputedStyle(probe).backgroundColor
-    probe.remove()
-    return color
-  })
-  expect(await style(stopBtn, "background-color")).toBe(danger)
+  await expect(stopBtn).toHaveCSS("background-color", await backgroundToken(stopBtn, "--danger"))
 
   // Phone stacks Cancel above the destructive action, still inside the alert.
   await cancelBtn.click()
   await expect(dialog).toBeHidden()
   await page.setViewportSize({ width: 390, height: 844 })
   await expect(page.getByRole("link", { name: "Back to System" })).toBeVisible()
-  await page.getByRole("button", { name: "Stop gateway…" }).click()
+  await page.getByRole("button", { name: "Stop…", exact: true }).click()
   await expect(cancelBtn).toBeFocused()
   const phone = await measure()
   expect(phone.stop.x).toBeGreaterThanOrEqual(phone.alert.x)

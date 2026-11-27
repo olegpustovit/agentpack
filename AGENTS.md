@@ -19,7 +19,7 @@ A state migration or a wire-format change can break mesh compatibility. Publish 
 1. Commit, then `make ship-patch` (or `ship-dev`) for the version tag; a GitHub release is optional and never blocks the rollout.
 2. `make dev-deploy` updates this machine and the public gateway on oracle-vm.
 3. `make local-release HOSTS="olegs-mac-mini olegs-macbook-air kyiv-grid kyiv-win-1"` builds Linux amd64/arm64 and Windows amd64 here with zig, builds macOS natively on the Mac mini (Apple's SDK is needed; Go lives in its `~/.cache/agentpack-build`), then replaces `ap` on each SSH host and restarts its gateway. Windows hosts are updated through PowerShell over OpenSSH.
-4. Confirm every machine is on the mesh: `GET /api/library/replication/peers` (or Settings → Replication) shows each contact with a `schema_version` and no error. A machine that was a Library-only peer must be enrolled on **both** sides: `POST /api/library/replication/peers {"peer": NODE_ID}` with the local gateway secret from `network/node.json`, or Settings → Replication.
+4. Confirm in System → Topology that every peer shows *Synced* and no `schema` mismatch. For a scripted check, `GET /api/library/replication/peers` shows each contact with a `schema_version` and no error. For a former Library-only peer, use **Add** or **Approve** in Topology on **both** sides. The scripted equivalent is `POST /api/library/replication/peers {"peer": NODE_ID}` with the local gateway secret from `network/node.json`.
 
 Product GitHub releases (tags `v*`), when published, must begin with copyable, version-pinned install commands for every supported operating-system family: the shell installer for macOS/Linux and the PowerShell installer for Windows. Keep these commands in GoReleaser's `release.header`; do not publish a changelog-only release. The URLs must use `{{ .Tag }}` so each release installs itself rather than whatever `latest` points to. Both installer scripts and `checksums.txt` must be attached to the same release, and release validation must fail if any command or asset declaration is removed.
 
@@ -179,7 +179,7 @@ Owner reset must preserve the replicated account epoch; browser and OAuth logins
 must not revive when an email is recreated on another node.
 Password commands read hidden terminal input twice and accept no password flags.
 Owner reset requires typing `reset`, then removes accounts and revokes logins.
-The Account pane shows the email and sign-out actions, without user/password
+The Account group in General shows the email and sign-out actions, without user/password
 administration forms. See `docs/src/guides/gateway-deployment.md`.
 
 The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make ui-stage` builds it and copies `ui/dist` into `internal/gateway/webdist`, which the Go gateway embeds and serves at `/`.
@@ -206,15 +206,16 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 | `/system` | none. Desktop redirects to `/usage`; phones show the System list |
 | `/usage` | `range` (`day`, `week`, `month`), `back`, `metric`, and the filters `project` (folder name), `machine` (node ID), `agent` |
 | `/usage/$kind/$id` | redirects to `/usage` with that filter (`machine`, `agent`; old `project` links open unfiltered) |
-| `/usage/limits` | `range`, `back`, `metric`, plus its own `machine` |
-| `/limits` | `machine` (redirects to `/usage/limits`) |
+| `/usage/limits` | none |
+| `/limits` | none (redirects to `/usage/limits`) |
 | `/machines` | none (redirects to `/machines/topology`; phones to `/system`) |
 | `/machines/topology`, `/machines/$machine` | none |
 | `/settings` | none (redirects to `/settings/general`; phones to `/system`) |
-| `/settings/$pane` | `general`, `notifications`, `sharing`, `replication`, `connections`, `agents`, `omp`, `diagnostics`, `appearance`, `account`. Diagnostics accepts `issue`, `status`. `connections` is the Vault pane and accepts `callback`, `oauth_login`, `connection`. |
-| `/settings/accessibility` | redirects to `/settings/appearance` |
+| `/settings/$pane` | `general`, `notifications`, `sharing`, `connections`, `agents`, `omp`, `diagnostics`. Diagnostics accepts `issue`, `status`. `connections` is the Vault pane and accepts `callback`, `oauth_login`, `connection`. |
+| `/settings/account`, `/settings/appearance`, `/settings/accessibility` | redirect to `/settings/general` |
+| `/settings/replication` | redirects to `/machines/topology` |
 
-The toolbar and phone tab bar hold three views, Sessions, Library and System (⌘1–3 or ⌥⌘1–3, since Safari keeps ⌘1–9; Ctrl off Mac); System keeps the `/usage`, `/machines` and `/settings` URLs beside one shared sidebar (`ui/src/features/system/`).
+The toolbar and phone tab bar hold three views, Sessions, Library and System (⌘1–3 or ⌥⌘1–3, since Safari keeps ⌘1–9, with Ctrl off Mac). The System sidebar (`ui/src/features/system/`) lists Usage, Limits and Topology, then General, Vault and Notifications under Settings. Open a machine page from its row or graph node in Topology.
 
 - **Session lifecycle:** Close records `closed_at` and keeps the chat in History. Reopen clears it. Chats moved to cold storage show Read-only.
 - **Peers update on their own schedule.** The gateway routinely talks to older peers, so API reads tolerate them: a 404 means `Needs update`, never a raw error, and a response shape that changed is normalized in its query. This is runtime interoperability and is not covered by the pre-release rule. Test new endpoints against a peer without them.

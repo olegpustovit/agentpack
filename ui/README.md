@@ -108,7 +108,7 @@ Only the recorded user and stable peer node identity (or the same local user/hos
 - `POST /api/sessions/{id}/stop`: `{}`. Stop is explicit; detach is separate.
 - `POST /api/sessions/{id}/restart`: `{operation_id}`. Each user intent gets a UUID;
   transport failures and 5xx retry the same UUID, while success or 4xx ends that intent.
-- `GET /api/limits`: `{limits: [...]}` with one snapshot per harness (`codex`, `claude`, `agy`, `grok`, `omp`, `opencode`, `cursor`) of `{harness,state,source,observed_at,plan?,error?,windows: [{id,label,used_percent?,remaining_percent?,reset_at?,reset_text?}]}`. Reads query local replicated snapshots across nodes, with `node_id`, `reachable` and `last_sync`. `?node=<stable-id>` filters replicated reads; refreshes still route to that machine. The Limits view (`/usage/limits`) uses one local query, shows a usable report first for each provider, and keeps other machine reports expandable without combining account allowances. Unknown percentages stay unknown. Results are cached for 60 seconds; a failing harness reports its own `error` and does not hide the others.
+- `GET /api/limits`: `{limits: [...]}` with one snapshot per harness (`codex`, `claude`, `agy`, `grok`, `omp`, `opencode`, `cursor`) of `{harness,state,source,observed_at,plan?,error?,windows: [{id,label,used_percent?,remaining_percent?,reset_at?,reset_text?}]}`. Reads query local replicated snapshots across nodes, with `node_id`, `reachable` and `last_sync`. `?node=<stable-id>` filters replicated reads; refreshes still route to that machine. The Limits view (`/usage/limits`) uses one local query, shows each agent's tightest window from its newest usable reading, and links to Vault for agents that only report a sign-in issue. Results are cached for 60 seconds; a failing harness reports its own `error` and does not hide the others.
 - `POST /api/limits/refresh`: `{}`, returns the same shape. Refresh is throttled to one collection per 10 seconds. While limits are on screen the UI sends this once to each online peer (at most every five minutes per tab); gateways also re-read an agent's limits after its turns, at most every five minutes per agent.
 - `GET /api/usage?from&to`: Unix seconds, at most 100 days apart. `{hourly, sessions, samples}`: `usage_hourly` rows that start in the range, sessions (with lifetime counters; `cost_micros` -1 when the agent reports none) active in it, and `limit_samples` for the burn line. Local replicated reads only. The Usage view buckets the hours into the viewer's local days.
 - `GET /api/packages?directory=...`: array (or `{packages: [...]}`) of `{module,commit?}`.
@@ -133,7 +133,8 @@ Only the recorded user and stable peer node identity (or the same local user/hos
   and contact results. `POST /api/library/replication/peers` with `{peer}` enrolls
   a stable peer ID; `DELETE /api/library/replication/peers/{id}` removes enrollment;
   `POST /api/library/replication/sync` with `{peer}` pulls bounded shared-state pages.
-  Replication is opt-in, requires Tailscale sharing, and both gateways must enroll each other.
+  Mesh sync requires Tailscale sharing. Allowed gateways can pair through discovery. For
+  peers that need manual approval, use **Add** or **Approve** in System → Topology.
 - The terminal grid is fixed to the host-reported `state.columns × state.rows`; browser
   resizing only changes its CSS scale.
 - `GET /api/sessions/{id}/terminal`: authenticated WebSocket. Binary messages carry raw
@@ -162,14 +163,13 @@ only to a same-origin `/oauth/authorize` return URL for MCP authorization.
 Gateway settings use `GET /api/settings` (`running`, `platform`, `sharing_enabled`,
 `allowed_peers`) and `POST /api/settings/sharing` (`{enabled}`). Settings applies to the
 gateway machine even when another machine is selected for sessions. Stop-all and
-stop-gateway call `/api/node/stop-agents` and `/api/node/stop`. Forget sends
-`DELETE /api/recent` with `{directory}` to the machine that owns the row.
+stop-gateway in General call `/api/node/stop-agents` and `/api/node/stop`.
 A terminal `ended` notice with `state.restarting=true` triggers bounded reconnect,
 waits up to 90 seconds, resets the emulator, and enables shared browser input after replay. A replacement that immediately exits still replays its output.
 Antigravity desktop launcher presence cannot be launched or controlled remotely;
 detached desktop windows are not tracked.
 
-Settings → Diagnostics loads lazily. `GET /api/logs/issues?status=open|resolved|ignored`
+System → General → Diagnostics loads lazily. `GET /api/logs/issues?status=open|resolved|ignored`
 lists issues (`status=` includes all), and `GET /api/logs/issues/{fingerprint}`
 returns machine counts, the sample event and recent trace IDs. Resolve sends
 `POST /api/logs/issues/{fingerprint}/resolve` with `{version,note}`; reopen/ignore

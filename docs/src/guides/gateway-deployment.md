@@ -25,7 +25,7 @@ When upgrading a legacy gateway, claiming also requires its current password and
 
 ## Public access
 
-A gateway always answers its loopback address (`http://127.0.0.1:7420`). **Settings › Sharing › Public access** adds one HTTPS origin, such as a Caddy or nginx site or a Tailscale Funnel, without tokens or other configuration:
+A gateway always answers its loopback address (`http://127.0.0.1:7420`). **System › General › Sharing › Public access** adds one HTTPS origin, such as a Caddy or nginx site or a Tailscale Funnel, without tokens or other configuration:
 
 - **Detection.** While the switch is off, a request that a proxy on the same machine forwards with `X-Forwarded-Proto: https` gets a "Public access is off" page, and its host (`X-Forwarded-Host`, else `Host`) becomes the candidate the pane shows. A Tailscale Funnel that proxies to the gateway's port, read from Tailscale's serve configuration, is also a candidate. A proxy for one site only ever forwards one host name; once a second one arrives, the proxy forwards any name (anyone could have named one), so nothing is suggested and the pane asks you to type your address instead. Either way the checks below run before the origin opens, and only you can tell that a domain is yours, so turn it on only for your own.
 - **Verification.** Only the owner of a claimed gateway can turn it on. The gateway then fetches `<origin>/.well-known/oauth-protected-resource/mcp` over verified TLS with a one-time nonce and enables the origin only if the answer comes from itself and names `<origin>/mcp`. Each check is reported in the pane as it completes; a failure leaves the switch off and says which check failed.
@@ -81,8 +81,8 @@ reports it without changing files.
 Gateways pair automatically: every gateway on the tailnet sharing allow list joins
 the mesh as soon as discovery reaches it, and an unclaimed one takes the peer's
 accounts. Mesh members receive accounts, chat history, limits and Library records,
-so keep the allow list to machines you trust. Removed machines stay removed until
-enrolled again in Settings → Replication; tailnet sharing must be on.
+so keep the allow list to machines you trust. To add a removed machine again,
+turn on tailnet sharing and choose **Add** in System → Topology.
 
 Objects are immutable and named by their SHA-256, and secrets are stripped before hashing, so machines converge on the same objects. Edits made on two machines merge three-way against their common ancestor; every machine computes the identical merge, so they agree without coordinating. When both changed one value differently, nothing is overwritten: the agentpack shows a conflict in the Library until someone chooses a value, and later captures continue their own project’s branch meanwhile. A deletion wins over a concurrent edit.
 
@@ -118,7 +118,7 @@ Use `https://agentpack.microapps.space/mcp` as the remote Streamable HTTP MCP en
 once the public gateway is deployed. This is the Agentpack management server, separate
 from MCP servers installed into an agent's environment.
 
-With Public access on, **Settings › Sharing** shows the address to copy. The client
+With Public access on, **System › General › Sharing** shows the address to copy. The client
 discovers OAuth metadata and either registers a public client automatically or, like
 Claude.ai and ChatGPT, identifies itself with a Client ID Metadata Document: an HTTPS
 URL as `client_id`. The gateway fetches that document (public addresses only, at most

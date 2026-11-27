@@ -82,7 +82,7 @@ Native OMP usage caches may be updated by this command.
 
 ## Network-wide settings
 
-Settings → Oh My Pi in the web UI edits one OMP configuration shared by every
+System → General → Oh My Pi in the web UI edits one OMP configuration shared by every
 machine in the mesh. Each change is checked with `omp config set` in a
 throwaway agent directory, then stored in the replicated `omp_settings` table
 of state.db. Only changed keys are stored. Every gateway renders the table into

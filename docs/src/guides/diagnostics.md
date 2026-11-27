@@ -1,7 +1,7 @@
 # Diagnostics
 
 Agentpack records structured diagnostics on the machine running the gateway or
-worker. Use **Settings → Diagnostics**, the `ap logs` commands, or the gateway's
+worker. Use **System → General → Diagnostics**, the `ap logs` commands, or the gateway's
 MCP tools to investigate failures and record fixes. No external telemetry service
 receives these events.
 
