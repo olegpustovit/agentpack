@@ -274,3 +274,22 @@ func TestResumeByHandEndsTheWait(t *testing.T) {
 	g.starting.Wait()
 	notLaunched(t, launched)
 }
+
+func TestClosePreventsAutomaticResume(t *testing.T) {
+	g, launched, advance, _ := waitingResume(t)
+	g.reapStoppedChats(t.Context())
+	if !g.ResumePending("session-dead") {
+		t.Fatal("expected pending automatic resume")
+	}
+	r := httptest.NewRequest("PATCH", "/api/sessions/session-dead", nil)
+	r.SetPathValue("id", "session-dead")
+	w := httptest.NewRecorder()
+	g.setSessionClosed(w, r, true)
+	if w.Code != 200 || g.ResumePending("session-dead") {
+		t.Fatalf("close pending resume: %d %s", w.Code, w.Body)
+	}
+	g.reapStoppedChats(t.Context())
+	advance(resumeCatchUp)
+	g.starting.Wait()
+	notLaunched(t, launched)
+}

@@ -35,7 +35,7 @@ func TestMeshReadsSurviveOwnerShutdownAndRefuseWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := source.auth.store.DB.Exec("INSERT INTO conversation_events(session_id,seq,body) VALUES (?,1,?); UPDATE sessions SET last_seq=1", info.ID, string(body)); err != nil {
+	if _, err := source.auth.store.DB.Exec("INSERT INTO conversation_events(session_id,seq,body) VALUES (?,1,?); UPDATE sessions SET last_seq=1,ended_at=1", info.ID, string(body)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := source.auth.store.DB.Exec(`INSERT INTO limits(node_id,harness,snapshot,collected_at) VALUES ('remote','codex','{"harness":"codex","state":"available","windows":[]}',1)`); err != nil {
@@ -110,12 +110,18 @@ func TestMeshReadsSurviveOwnerShutdownAndRefuseWrites(t *testing.T) {
 	if err := target.auth.store.Reader.QueryRow("SELECT name FROM sessions WHERE id=?", info.ID).Scan(&name); err != nil || name != "Renamed offline" {
 		t.Fatalf("rename was not saved: %q %v", name, err)
 	}
-	if w := request("PATCH", "/api/sessions/session-remote?node=remote", `{"hidden":true}`); w.Code != 200 {
-		t.Fatalf("offline archive: %d %s", w.Code, w.Body.String())
-	}
-	var hidden bool
-	if err := target.auth.store.Reader.QueryRow("SELECT hidden FROM sessions WHERE id=?", info.ID).Scan(&hidden); err != nil || !hidden {
-		t.Fatalf("archive was not saved: %v %v", hidden, err)
+	for _, closed := range []bool{true, false} {
+		w := request("PATCH", "/api/sessions/session-remote?node=remote", fmt.Sprintf(`{"closed":%t}`, closed))
+		if w.Code != 200 {
+			t.Fatalf("set closed=%t: %d %s", closed, w.Code, w.Body.String())
+		}
+		for _, path := range []string{"/api/sessions?node=remote&directory=%2Fremote%2Fproject", "/api/sessions"} {
+			w := request("GET", path, "")
+			var rows []session.SessionInfo
+			if err := json.Unmarshal(w.Body.Bytes(), &rows); w.Code != 200 || err != nil || len(rows) != 1 || rows[0].ClosedAt.IsZero() == closed || rows[0].EndedAt.IsZero() {
+				t.Fatalf("closed=%t in %s: %d %s", closed, path, w.Code, w.Body)
+			}
+		}
 	}
 }
 
@@ -193,7 +199,7 @@ func TestMeshRecentSessionListKeepsOlderBookmarks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.Exec("UPDATE sessions SET ended_at=last_used"); err != nil {
+	if _, err := store.Exec("UPDATE sessions SET ended_at=last_used; UPDATE sessions SET closed_at=last_used WHERE id='session-old-000'"); err != nil {
 		t.Fatal(err)
 	}
 	if err := session.UpsertSession(t.Context(), store, session.SessionInfo{ID: "session-live", Transport: "acp"}); err != nil {
@@ -214,7 +220,7 @@ func TestMeshRecentSessionListKeepsOlderBookmarks(t *testing.T) {
 	}
 	for _, row := range rows {
 		if row.ID == "session-old-000" {
-			t.Fatal("oldest stopped chat remained in the recent list")
+			t.Fatal("oldest closed chat remained in the recent list")
 		}
 	}
 	// A mesh-wide cap must not push an older chat out of its own node's list.
@@ -242,7 +248,7 @@ func TestMeshRecentSessionListKeepsOlderBookmarks(t *testing.T) {
 	if err := json.Unmarshal(history.Body.Bytes(), &rows); history.Code != http.StatusOK || err != nil || len(rows) != 3 {
 		t.Fatalf("project history status=%d rows=%+v err=%v", history.Code, rows, err)
 	}
-	if rows[0].ID != "session-old-002" || rows[1].ID != "session-old-001" || rows[1].ArchivedAt.IsZero() || rows[2].ID != "session-old-000" {
+	if rows[0].ID != "session-old-002" || rows[1].ID != "session-old-001" || rows[1].ArchivedAt.IsZero() || rows[2].ID != "session-old-000" || rows[2].ClosedAt.IsZero() {
 		t.Fatalf("wrong sessions or order in project history: %+v", rows)
 	}
 }

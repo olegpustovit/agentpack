@@ -28,6 +28,7 @@ type SessionInfo struct {
 	Reachable         bool               `json:"reachable"`
 	LastSync          time.Time          `json:"last_sync,omitzero"`
 	EndedAt           time.Time          `json:"ended_at,omitzero"`
+	ClosedAt          time.Time          `json:"closed_at,omitzero"`
 	ArchivedAt        time.Time          `json:"archived_at,omitzero"`
 	LastUsed          time.Time          `json:"last_used,omitzero"`
 	LastEventAt       time.Time          `json:"last_event_at,omitzero"`

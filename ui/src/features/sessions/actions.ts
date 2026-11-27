@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
-import { api, errorText } from "@/lib/api"
+import { ApiError, api, errorText } from "@/lib/api"
 import { newIntentID, useIntent } from "@/lib/intent"
 import { hud } from "@/lib/hud"
 import { rowKey, sessionLabel, type ListedSession } from "./group"
@@ -78,6 +78,12 @@ export function projectPage(machine: string, directory: string, install = false)
 const setClosed = (session: ListedSession, closed: boolean) =>
   api(`/api/sessions/${encodeURIComponent(session.id)}`, { machine: session.machine, method: "PATCH", body: { closed } })
 
+function closeNeedsUpdate(error: unknown, session: ListedSession) {
+  if (error instanceof ApiError && error.status === 400 && error.message === "name is required") {
+    return `Update agentpack on ${session.machineName} to close sessions`
+  }
+}
+
 async function reopenRows(rows: ListedSession[], refresh: () => Promise<unknown>) {
   const results = await Promise.allSettled(rows.map((row) => setClosed(row, false)))
   await refresh()
@@ -102,6 +108,6 @@ async function closeRows(rows: ListedSession[], name: string | undefined, refres
   if (done.length) hud.success(`Closed ${failed.length ? `${done.length} of ${rows.length} sessions` : what}`, () => void reopenRows(done, refresh))
   if (failed.length) {
     const reason = (results.find((result) => result.status === "rejected") as PromiseRejectedResult).reason
-    hud.error(`Couldn't close ${failed.length === 1 ? sessionLabel(failed[0]!) : `${failed.length} sessions`}: ${errorText(reason)}`, () => void closeRows(failed, undefined, refresh, onPending))
+    hud.error(closeNeedsUpdate(reason, failed[0]!) ?? `Couldn't close ${failed.length === 1 ? sessionLabel(failed[0]!) : `${failed.length} sessions`}: ${errorText(reason)}`, () => void closeRows(failed, undefined, refresh, onPending))
   }
 }

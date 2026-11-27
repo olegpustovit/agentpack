@@ -66,7 +66,7 @@ func TestSessionsMigrationDefaultsAndEventIdentity(t *testing.T) {
 		"conversation_truncated": false, "archived_at": false, "archived_seq": false, "title": false, "goal": false, "subagents": false, "waiting": false, "parent_id": false, "tools": false, "worktree_of": false,
 		"model": false, "turns": false, "output_tokens": false, "input_tokens": false,
 		"cache_read_tokens": false, "cache_write_tokens": false, "cost_micros": false,
-		"wanted_config": false, "keep_native_subagents": false,
+		"wanted_config": false, "keep_native_subagents": false, "closed_at": false,
 	}
 	rows, err := store.Reader.Query("PRAGMA table_info(sessions)")
 	if err != nil {
@@ -99,10 +99,10 @@ func TestSessionsMigrationDefaultsAndEventIdentity(t *testing.T) {
 		INSERT INTO conversation_events(session_id, seq) VALUES ('one', 1), ('two', 1), ('one', 2)`); err != nil {
 		t.Fatal(err)
 	}
-	var hidden, endedAt int
+	var hidden, endedAt, closedAt int
 	var owner, body string
-	if err := store.Reader.QueryRow("SELECT hidden, ended_at, owner_email FROM sessions WHERE id='one'").Scan(&hidden, &endedAt, &owner); err != nil || hidden != 0 || endedAt != 0 || owner != "" {
-		t.Fatalf("session defaults: hidden=%d ended_at=%d owner=%q err=%v", hidden, endedAt, owner, err)
+	if err := store.Reader.QueryRow("SELECT hidden, ended_at, closed_at, owner_email FROM sessions WHERE id='one'").Scan(&hidden, &endedAt, &closedAt, &owner); err != nil || hidden != 0 || endedAt != 0 || closedAt != 0 || owner != "" {
+		t.Fatalf("session defaults: hidden=%d ended_at=%d closed_at=%d owner=%q err=%v", hidden, endedAt, closedAt, owner, err)
 	}
 	if err := store.Reader.QueryRow("SELECT body FROM conversation_events WHERE session_id='one' AND seq=1").Scan(&body); err != nil || body != "" {
 		t.Fatalf("event default: body=%q err=%v", body, err)

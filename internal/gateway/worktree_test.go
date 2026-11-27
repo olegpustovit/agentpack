@@ -191,7 +191,7 @@ func startWorktreeChat(t *testing.T, g *Gateway, call func(method, path, body st
 	return info
 }
 
-func TestNewWorktreeSessionSharesTheProjectAndArchiveRemovesIt(t *testing.T) {
+func TestNewWorktreeSessionSharesTheProjectAndCloseRemovesIt(t *testing.T) {
 	g, main, call := worktreeGateway(t)
 	info := startWorktreeChat(t, g, call, main, "new")
 	if !insideWorktrees(g.options.Home, info.Directory) || info.DefinitionRoot != main {
@@ -214,15 +214,25 @@ func TestNewWorktreeSessionSharesTheProjectAndArchiveRemovesIt(t *testing.T) {
 		t.Fatalf("projects %+v %v", projects, err)
 	}
 
-	// Archiving one chat keeps the worktree its sibling still uses; the last one removes it.
-	if w := call("PATCH", "/api/sessions/"+info.ID, `{"hidden":true}`); w.Code != 200 {
-		t.Fatalf("archive: %d %s", w.Code, w.Body)
+	if _, err := g.store.DB.Exec("UPDATE sessions SET ended_at=0 WHERE id=?", info.ID); err != nil {
+		t.Fatal(err)
+	}
+	if w := call("PATCH", "/api/sessions/"+info.ID, `{"closed":true}`); w.Code != 409 || !strings.Contains(w.Body.String(), "Stop the session before closing it.") {
+		t.Fatalf("close running chat: %d %s", w.Code, w.Body)
+	}
+	if _, err := g.store.DB.Exec("UPDATE sessions SET ended_at=1 WHERE id=?", info.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Closing one chat keeps the worktree its sibling still uses; the last one removes it.
+	if w := call("PATCH", "/api/sessions/"+info.ID, `{"closed":true}`); w.Code != 200 {
+		t.Fatalf("close: %d %s", w.Code, w.Body)
 	}
 	if _, err := os.Stat(info.Directory); err != nil {
 		t.Fatalf("worktree removed while in use: %v", err)
 	}
-	if w := call("PATCH", "/api/sessions/"+other.ID, `{"hidden":true}`); w.Code != 200 {
-		t.Fatalf("archive: %d %s", w.Code, w.Body)
+	if w := call("PATCH", "/api/sessions/"+other.ID, `{"closed":true}`); w.Code != 200 {
+		t.Fatalf("close: %d %s", w.Code, w.Body)
 	}
 	if _, err := os.Stat(info.Directory); !os.IsNotExist(err) {
 		t.Fatalf("clean merged worktree kept: %v", err)
@@ -286,7 +296,7 @@ func TestSessionGitCommitAndPullRequest(t *testing.T) {
 
 // A squash-merged pull request leaves no merge in the main folder; gh's MERGED state for the
 // commit the worktree has checked out is what lets archiving remove it.
-func TestArchiveRemovesWorktreeOfMergedPullRequest(t *testing.T) {
+func TestCloseRemovesWorktreeOfMergedPullRequest(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake gh is a shell script")
 	}
@@ -331,8 +341,8 @@ func TestArchiveRemovesWorktreeOfMergedPullRequest(t *testing.T) {
 	if !rowMerged() {
 		t.Fatal("merged pull request reads as unmerged")
 	}
-	if w := call("PATCH", "/api/sessions/"+info.ID, `{"hidden":true}`); w.Code != 200 {
-		t.Fatalf("archive: %d %s", w.Code, w.Body)
+	if w := call("PATCH", "/api/sessions/"+info.ID, `{"closed":true}`); w.Code != 200 {
+		t.Fatalf("close: %d %s", w.Code, w.Body)
 	}
 	if _, err := os.Stat(info.Directory); !os.IsNotExist(err) {
 		t.Fatalf("worktree of a merged pull request kept: %v", err)

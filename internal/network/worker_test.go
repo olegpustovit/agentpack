@@ -162,9 +162,6 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 		t.Fatalf("worker file contains session metadata: %s %v", data, err)
 	}
 	stateStore := statetest.Open(t, home)
-	if _, err := HideSession(ctx, stateStore, home, id); !errors.Is(err, ErrSessionRunning) {
-		t.Fatalf("archived a running session: %v", err)
-	}
 	renamed, err := RenameSession(ctx, stateStore, home, id, "Long-running review")
 	if err != nil || renamed.ID != id || renamed.Name != "Long-running review" {
 		t.Fatalf("rename running worker: %+v %v", renamed, err)
@@ -255,13 +252,6 @@ func TestRunWorkerRestartKeepsIdentity(t *testing.T) {
 	}
 	if stopped, err := RenameSession(context.Background(), store, home, id, "Review complete"); err != nil || stopped.State.Running || stopped.Name != "Review complete" {
 		t.Fatalf("rename stopped session: %+v %v", stopped, err)
-	}
-	var hidden bool
-	if changed, err := HideSession(context.Background(), store, home, id); err != nil || !changed || store.Reader.QueryRow("SELECT hidden FROM sessions WHERE id=?", id).Scan(&hidden) != nil || !hidden {
-		t.Fatalf("archive stopped session: hidden=%v err=%v", hidden, err)
-	}
-	if changed, err := HideSession(context.Background(), store, home, id); changed || err != nil {
-		t.Fatalf("archive retry changed=%v err=%v", changed, err)
 	}
 	events := workerDiagnosticEvents(t, home)
 	names := map[string]int{}

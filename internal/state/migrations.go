@@ -175,4 +175,4 @@ func alterCRR(ctx context.Context, conn *sql.Conn, table, contents string) error
 // ReplicationVersion is the mesh wire version: peers exchange changes only when their replicated
 // tables have the same columns, so a local-only migration never splits the mesh.
 // TestReplicationVersionIsPinned recomputes it from the migrations; update it with every replicated column change.
-const ReplicationVersion = 1904862325
+const ReplicationVersion = 1268322956

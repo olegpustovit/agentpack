@@ -18,7 +18,7 @@ const sessionWriteColumns = `id,last_used,folder_id,name,directory,definition_ro
 // goal, subagents, waiting and an ACP chat's conversation_state are written by its log's sink (storeConversationFold), so upserts never clobber them.
 // Upserts set worktree_of, parent_id, tools and keep_native_subagents only on insert.
 // Tools can change via POST /tools.
-const SessionColumns = sessionWriteColumns + ",node_id,ended_at,archived_at,goal,subagents,waiting,last_event_at,parent_id,tools,keep_native_subagents"
+const SessionColumns = sessionWriteColumns + ",node_id,ended_at,archived_at,goal,subagents,waiting,last_event_at,parent_id,tools,keep_native_subagents,closed_at"
 
 func SessionValues(info SessionInfo) ([]any, error) {
 	if info.ID == "" {
@@ -43,11 +43,11 @@ func SessionValues(info SessionInfo) ([]any, error) {
 	return []any{info.ID, SessionTimestamp(info.LastUsed), info.FolderID, info.Name, info.Directory,
 		info.DefinitionRoot, info.Harness, info.Mode, info.Transport, info.AgentSessionID,
 		string(capabilities), info.ConversationState, string(terminal), SessionTimestamp(info.StartedAt),
-		string(owner), info.Title, info.WorktreeOf, email, info.ParentID, info.Tools, info.KeepNativeSubagents}, nil
+		string(owner), info.Title, info.WorktreeOf, email, info.ParentID, info.Tools, info.KeepNativeSubagents, SessionTimestamp(info.ClosedAt)}, nil
 }
 
-const InsertSessionSQL = `INSERT INTO sessions (` + sessionWriteColumns + `,node_id,owner_email,parent_id,tools,keep_native_subagents)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,` + state.LocalNodeSQL + `,?,?,?,?)`
+const InsertSessionSQL = `INSERT INTO sessions (` + sessionWriteColumns + `,node_id,owner_email,parent_id,tools,keep_native_subagents,closed_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,` + state.LocalNodeSQL + `,?,?,?,?,?)`
 
 func UpsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
 	args, err := SessionValues(info)
@@ -61,7 +61,7 @@ func UpsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
 		agent_capabilities=excluded.agent_capabilities,
 		conversation_state=CASE WHEN excluded.transport='acp' THEN sessions.conversation_state ELSE excluded.conversation_state END,
 		state=excluded.state,started_at=excluded.started_at,started_by=excluded.started_by,
-		node_id=excluded.node_id,owner_email=excluded.owner_email,ended_at=0 WHERE sessions.archived_at=0`, args...)
+		node_id=excluded.node_id,owner_email=excluded.owner_email,ended_at=0,closed_at=0 WHERE sessions.archived_at=0`, args...)
 	if err == nil {
 		count, countErr := result.RowsAffected()
 		if countErr != nil {
@@ -76,12 +76,12 @@ func UpsertSession(ctx context.Context, db *sql.DB, info SessionInfo) error {
 
 func ScanSession(row interface{ Scan(...any) error }) (SessionInfo, error) {
 	var info SessionInfo
-	var lastUsed, startedAt, endedAt, archivedAt, lastEvent int64
+	var lastUsed, startedAt, endedAt, archivedAt, lastEvent, closedAt int64
 	var capabilities, owner, terminal, goal, subagents, waiting string
 	err := row.Scan(&info.ID, &lastUsed, &info.FolderID, &info.Name, &info.Directory,
 		&info.DefinitionRoot, &info.Harness, &info.Mode, &info.Transport, &info.AgentSessionID,
 		&capabilities, &info.ConversationState, &terminal, &startedAt, &owner, &info.Title, &info.WorktreeOf, &info.NodeID, &endedAt, &archivedAt,
-		&goal, &subagents, &waiting, &lastEvent, &info.ParentID, &info.Tools, &info.KeepNativeSubagents)
+		&goal, &subagents, &waiting, &lastEvent, &info.ParentID, &info.Tools, &info.KeepNativeSubagents, &closedAt)
 	if err != nil {
 		return info, err
 	}
@@ -103,6 +103,9 @@ func ScanSession(row interface{ Scan(...any) error }) (SessionInfo, error) {
 	}
 	if endedAt != 0 {
 		info.EndedAt = time.Unix(0, endedAt).UTC()
+	}
+	if closedAt != 0 {
+		info.ClosedAt = time.Unix(0, closedAt).UTC()
 	}
 	if archivedAt != 0 {
 		info.ArchivedAt = time.Unix(0, archivedAt).UTC()

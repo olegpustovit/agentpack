@@ -164,7 +164,7 @@ type worktreeRow struct {
 }
 
 func (g *Gateway) worktreeSessions(ctx context.Context) ([]session.SessionInfo, error) {
-	return session.QuerySessions(ctx, g.store.Reader, "SELECT "+session.SessionColumns+" FROM sessions WHERE node_id="+state.LocalNodeSQL+" AND hidden=0 AND directory<>''")
+	return session.QuerySessions(ctx, g.store.Reader, "SELECT "+session.SessionColumns+" FROM sessions WHERE node_id="+state.LocalNodeSQL+" AND hidden=0 AND closed_at=0 AND directory<>''")
 }
 
 func within(root, dir string) bool {
@@ -833,10 +833,10 @@ func (g *Gateway) serveSessionMerge(w http.ResponseWriter, r *http.Request) {
 	network.WriteJSON(w, map[string]bool{"merged": true})
 }
 
-// removeArchivedWorktree runs after a session is archived: its worktree goes when no other
+// removeClosedWorktree runs after a session is closed: its worktree goes when no other
 // session uses it, it has no changes and its commits are on the main folder's branch or in a
 // merged pull request.
-func (g *Gateway) removeArchivedWorktree(ctx context.Context, info session.SessionInfo) {
+func (g *Gateway) removeClosedWorktree(ctx context.Context, info session.SessionInfo) {
 	if !insideWorktrees(g.options.Home, info.Directory) || paths.RequiresUserAccess(info.WorktreeOf) || backgroundGitDeferred(info.Directory) {
 		return
 	}
@@ -853,7 +853,7 @@ func (g *Gateway) removeArchivedWorktree(ctx context.Context, info session.Sessi
 		return
 	}
 	for _, session := range sessions {
-		if session.ID != info.ID && within(root, session.Directory) {
+		if within(root, session.Directory) {
 			return
 		}
 	}

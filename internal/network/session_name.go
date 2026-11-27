@@ -55,38 +55,3 @@ func RenameSession(ctx context.Context, store *state.Store, home, id, name strin
 	}
 	return info, err
 }
-
-var ErrSessionRunning = errors.New("session is running")
-
-// HideSession archives a stopped session from the user's view: it leaves every list on the mesh, and its
-// history stays in place until the hourly mover takes it to the archive like any other idle chat.
-func HideSession(ctx context.Context, store *state.Store, home, id string) (bool, error) {
-	var hidden, starting bool
-	err := store.Reader.QueryRowContext(ctx, `SELECT hidden, conversation_state='starting' AND ended_at=0 FROM sessions WHERE id=?`, id).Scan(&hidden, &starting)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, session.ErrSessionNotFound
-	}
-	if err != nil || hidden {
-		return false, err
-	}
-	// A starting chat can have no endpoint yet. Check again in the write in case it just resumed.
-	if _, err := ReadWorkerRecord(home, id); err == nil || starting {
-		return false, ErrSessionRunning
-	}
-	result, err := store.DB.ExecContext(ctx, `UPDATE sessions SET hidden=1 WHERE id=? AND hidden=0
-		AND NOT (conversation_state='starting' AND ended_at=0)`, id)
-	if err != nil {
-		return false, err
-	}
-	count, err := result.RowsAffected()
-	if err != nil || count != 0 {
-		return count != 0, err
-	}
-	if err := store.Reader.QueryRowContext(ctx, "SELECT hidden FROM sessions WHERE id=?", id).Scan(&hidden); err != nil {
-		return false, err
-	}
-	if !hidden {
-		return false, ErrSessionRunning
-	}
-	return false, nil
-}

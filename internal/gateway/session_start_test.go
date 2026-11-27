@@ -265,17 +265,36 @@ func TestResumeRestartsAStoppedChatUnderItsOwnID(t *testing.T) {
 		launched <- info
 		return info.ID, nil
 	})
-	stuckChat(t, g, seedFolder(t, home), "session-dead")
-	info, err := g.resumeSession(context.Background(), "session-dead", "", "")
-	if err != nil || info.ID != "session-dead" || info.ConversationState != "starting" || !info.Reachable {
-		t.Fatalf("resume: %+v, %v", info, err)
-	}
-	g.starting.Wait()
-	if got := <-launched; got.ID != "session-dead" || got.AgentSessionID != "agent-1" || got.ConversationState != "starting" {
-		t.Fatalf("worker launch %+v", got)
-	}
-	if _, err := g.resumeSession(context.Background(), "session-dead", "", ""); !errors.Is(err, errResumeConflict) {
-		t.Fatalf("second resume: %v", err)
+	for _, prompt := range []string{"", "continue"} {
+		id := "session-resume"
+		if prompt != "" {
+			id = "session-prompt"
+		}
+		stuckChat(t, g, seedFolder(t, home), id)
+		if _, err := g.store.DB.Exec("UPDATE sessions SET closed_at=2 WHERE id=?", id); err != nil {
+			t.Fatal(err)
+		}
+		info, err := g.resumeSession(t.Context(), id, prompt, "resume-prompt")
+		if err != nil || info.ID != id || !info.ClosedAt.IsZero() || info.ConversationState != "starting" || !info.Reachable {
+			t.Fatalf("resume: %+v, %v", info, err)
+		}
+		g.starting.Wait()
+		if got := <-launched; got.ID != id || !got.ClosedAt.IsZero() || got.AgentSessionID != "agent-1" || got.ConversationState != "starting" {
+			t.Fatalf("worker launch %+v", got)
+		}
+		if _, err := g.resumeSession(t.Context(), id, "", ""); !errors.Is(err, errResumeConflict) {
+			t.Fatalf("second resume: %v", err)
+		}
+		stored, err := session.StoredSession(t.Context(), g.store.Reader, id)
+		if err != nil || !stored.ClosedAt.IsZero() {
+			t.Fatalf("reopened row: %+v, %v", stored, err)
+		}
+		if prompt != "" {
+			seen, err := network.StoredPromptID(t.Context(), g.store, id, "resume-prompt")
+			if err != nil || !seen {
+				t.Fatalf("prompt was not queued: %v", err)
+			}
+		}
 	}
 }
 

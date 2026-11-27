@@ -207,7 +207,7 @@ func (g *Gateway) serveStopSession(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) serveUpdateSession(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Name   *string `json:"name"`
-		Hidden *bool   `json:"hidden"`
+		Closed *bool   `json:"closed"`
 	}
 	if !network.ReadJSON(w, r, &input) {
 		return
@@ -215,23 +215,8 @@ func (g *Gateway) serveUpdateSession(w http.ResponseWriter, r *http.Request) {
 	if !g.authorizeACPWriteByID(w, r, r.PathValue("id")) {
 		return
 	}
-	if input.Hidden != nil && *input.Hidden {
-		archived, _ := sessionRow(r.Context(), r.PathValue("id"))
-		changed, err := network.HideSession(r.Context(), g.store, g.options.Home, r.PathValue("id"))
-		// Only this machine's worktrees can be removed here; a remote path names nothing local.
-		if local, nodeErr := g.nodeID(r.Context()); changed && err == nil && nodeErr == nil && archived.NodeID == local {
-			g.removeArchivedWorktree(r.Context(), archived)
-		}
-		switch {
-		case errors.Is(err, session.ErrSessionNotFound):
-			http.Error(w, "session not found", http.StatusNotFound)
-		case errors.Is(err, network.ErrSessionRunning):
-			http.Error(w, "Stop the session before archiving it.", http.StatusConflict)
-		case err != nil:
-			http.Error(w, "Couldn't archive the session.", http.StatusInternalServerError)
-		default:
-			network.WriteJSON(w, map[string]bool{"hidden": true})
-		}
+	if input.Closed != nil {
+		g.setSessionClosed(w, r, *input.Closed)
 		return
 	}
 	if input.Name == nil {
@@ -277,6 +262,44 @@ func (g *Gateway) serveRestartSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	network.WriteJSON(w, map[string]bool{"restarted": true})
+}
+
+func (g *Gateway) setSessionClosed(w http.ResponseWriter, r *http.Request, closed bool) {
+	ctx, id := r.Context(), r.PathValue("id")
+	var stamp int64
+	query := "UPDATE sessions SET closed_at=? WHERE id=? AND archived_at=0"
+	if closed {
+		if _, err := network.ReadWorkerRecord(g.options.Home, id); err == nil {
+			http.Error(w, "Stop the session before closing it.", http.StatusConflict)
+			return
+		}
+		stamp = time.Now().UnixNano()
+		query = "UPDATE sessions SET closed_at=CASE WHEN closed_at=0 THEN ? ELSE closed_at END WHERE id=? AND archived_at=0 AND ended_at>0"
+	}
+	var saved int64
+	err := g.store.DB.QueryRowContext(ctx, query+" RETURNING closed_at", stamp, id).Scan(&saved)
+	switch {
+	case errors.Is(err, sql.ErrNoRows) && closed:
+		http.Error(w, "Stop the session before closing it.", http.StatusConflict)
+	case errors.Is(err, sql.ErrNoRows):
+		http.Error(w, "session unavailable", http.StatusConflict)
+	case err != nil:
+		if event := obs.From(ctx); event != nil {
+			event.Fail(err)
+		}
+		http.Error(w, "Couldn't update the session.", http.StatusInternalServerError)
+	default:
+		if closed {
+			g.dropAutoResume(id)
+		}
+		if closed && saved == stamp {
+			info, _ := sessionRow(ctx, id)
+			if local, err := g.nodeID(ctx); err == nil && info.NodeID == local {
+				g.removeClosedWorktree(ctx, info)
+			}
+		}
+		network.WriteJSON(w, map[string]bool{"closed": closed})
+	}
 }
 
 func (g *Gateway) serveResumeSession(w http.ResponseWriter, r *http.Request) {
@@ -737,11 +760,11 @@ func (g *Gateway) resumeSession(ctx context.Context, id, prompt, queueID string)
 	// A worker that died without ending its row is settled first, so the claim below sees it stopped.
 	// The person's own message resumes this chat, so the reaper doesn't resume it too.
 	g.reapStoppedChatsExcept(ctx, id)
-	return g.claimResume(ctx, id, prompt, queueID)
+	return g.claimResume(ctx, id, prompt, queueID, false)
 }
 
 // claimResume restarts a stopped chat; the caller holds chatLifecycle.
-func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string) (session.SessionInfo, error) {
+func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string, automatic bool) (session.SessionInfo, error) {
 	// Whoever claims the chat ends its wait. Deferred, so the wait shows until the row says starting.
 	defer g.dropAutoResume(id)
 	info, err := session.StoredSession(ctx, g.store.Reader, id)
@@ -771,7 +794,7 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string) (
 	// The claim is atomic, so two resumes cannot start two workers for one chat.
 	now := time.Now().UTC()
 	err = state.Transaction(ctx, g.store.DB, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, "UPDATE sessions SET conversation_state='starting',ended_at=0,last_used=? WHERE id=? AND ended_at>0 AND archived_at=0 AND node_id="+state.LocalNodeSQL, session.SessionTimestamp(now), id)
+		result, err := tx.ExecContext(ctx, "UPDATE sessions SET conversation_state='starting',ended_at=0,closed_at=0,last_used=? WHERE id=? AND ended_at>0 AND archived_at=0 AND (closed_at=0 OR NOT ?) AND node_id="+state.LocalNodeSQL, session.SessionTimestamp(now), id, automatic)
 		if err != nil {
 			return err
 		}
@@ -791,6 +814,7 @@ func (g *Gateway) claimResume(ctx context.Context, id, prompt, queueID string) (
 	}
 	info.ConversationState = "starting"
 	info.EndedAt = time.Time{}
+	info.ClosedAt = time.Time{}
 	info.Reachable = true
 	info.LastUsed = now
 	g.startInBackground(ctx, info, "", nil)
@@ -832,7 +856,7 @@ func (g *Gateway) switchHarness(ctx context.Context, id, harness string) (sessio
 	if switched, err := result.RowsAffected(); err != nil || switched != 1 {
 		return session.SessionInfo{}, errors.Join(errResumeConflict, err)
 	}
-	return g.claimResume(ctx, id, "", "")
+	return g.claimResume(ctx, id, "", "", false)
 }
 
 // failStart leaves the error in the chat's transcript and ends the row. The notice also keeps the
@@ -914,7 +938,7 @@ func (g *Gateway) reapStoppedChatsExcept(ctx context.Context, manual string) {
 		}
 		// A turn cut off by sleep, a reboot or a crash carries on by itself, once per stop window.
 		auto := false
-		if info.AgentSessionID != "" && info.ID != manual {
+		if info.ClosedAt.IsZero() && info.AgentSessionID != "" && info.ID != manual {
 			var cutErr error
 			auto, cutErr = cutOffTurn(ctx, g.store.Reader, info.ID, time.Now())
 			err = errors.Join(err, cutErr)
@@ -942,7 +966,7 @@ func (g *Gateway) reapStoppedChatsExcept(ctx context.Context, manual string) {
 			g.resumeWhenCaughtUp(ctx, id)
 			continue
 		}
-		if _, resumeErr := g.claimResume(ctx, id, mcp.AutoResumePrompt, ""); resumeErr != nil && !errors.Is(resumeErr, errResumeConflict) {
+		if _, resumeErr := g.claimResume(ctx, id, mcp.AutoResumePrompt, "", true); resumeErr != nil && !errors.Is(resumeErr, errResumeConflict) {
 			err = errors.Join(err, resumeErr)
 		}
 	}
@@ -982,7 +1006,7 @@ func (g *Gateway) resumeWhenCaughtUp(ctx context.Context, id string) {
 		if _, pending := g.resumePending.Load(id); !pending {
 			return // resumed or switched by hand meanwhile
 		}
-		if _, err := g.claimResume(ctx, id, mcp.AutoResumePrompt, ""); err != nil && !errors.Is(err, errResumeConflict) {
+		if _, err := g.claimResume(ctx, id, mcp.AutoResumePrompt, "", true); err != nil && !errors.Is(err, errResumeConflict) {
 			_, event := obs.Start(ctx, "gateway", "auto_resume")
 			event.Set("session_id", id)
 			event.Fail(err)

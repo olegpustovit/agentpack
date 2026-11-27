@@ -83,6 +83,9 @@ func TestArchiveMovesOnlyCompleteOldChatsAndReplicatesPruning(t *testing.T) {
 	archiveRoles(t, main, "main", "main")
 	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
 	archiveFixture(t, main, "session-complete", now.Add(-8*24*time.Hour), 3, 1, 3)
+	if _, err := main.store.DB.Exec("UPDATE sessions SET ended_at=?,closed_at=? WHERE id='session-complete'", now.Add(-8*24*time.Hour).UnixNano(), now.Add(-7*24*time.Hour).UnixNano()); err != nil {
+		t.Fatal(err)
+	}
 	archiveFixture(t, main, "session-incomplete", now.Add(-8*24*time.Hour), 3, 1)
 	archiveFixture(t, main, "session-young", now.Add(-6*24*time.Hour), 1, 1)
 	archiveFixture(t, main, "session-image", now.Add(-8*24*time.Hour), 1, 1)
@@ -107,15 +110,15 @@ func TestArchiveMovesOnlyCompleteOldChatsAndReplicatesPruning(t *testing.T) {
 			archived bool
 		}{{"session-complete", 0, true}, {"session-incomplete", 1, false}, {"session-young", 1, false}, {"session-image", 1, false}, {"session-working", 1, false}, {"session-needs-you", 1, false}} {
 			var rows int
-			var archived bool
+			var archived, closed bool
 			if err := store.Reader.QueryRow("SELECT count(*) FROM conversation_events WHERE session_id=?", test.id).Scan(&rows); err != nil {
 				t.Fatal(err)
 			}
-			if err := store.Reader.QueryRow("SELECT archived_at>0 FROM sessions WHERE id=?", test.id).Scan(&archived); err != nil {
+			if err := store.Reader.QueryRow("SELECT archived_at>0,closed_at>0 FROM sessions WHERE id=?", test.id).Scan(&archived, &closed); err != nil {
 				t.Fatal(err)
 			}
-			if rows != test.rows || archived != test.archived {
-				t.Fatalf("%s rows=%d archived=%v", test.id, rows, archived)
+			if rows != test.rows || archived != test.archived || closed != (test.id == "session-complete") {
+				t.Fatalf("%s rows=%d archived=%v closed=%v", test.id, rows, archived, closed)
 			}
 		}
 	}
