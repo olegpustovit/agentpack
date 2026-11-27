@@ -90,6 +90,8 @@ test("the layout does not overflow at 390 px", async ({ page }) => {
   await page.goto("/machines/topology")
   await expect(row(page, "mac-studio").getByRole("button", { name: "Update", exact: true })).toBeEnabled()
   await expect(page.locator('[data-slot="topology-diagram"]')).toBeHidden()
+  const tableRight = await grid(page).evaluate((table) => table.getBoundingClientRect().right)
+  expect(tableRight).toBeLessThanOrEqual(390)
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
 })
 

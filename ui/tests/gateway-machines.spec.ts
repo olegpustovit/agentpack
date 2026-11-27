@@ -180,6 +180,7 @@ test("limits labels replicated reports after machine discovery", async ({ page }
 })
 
 test("startup and machine discovery announce pending work", async ({ page }) => {
+  await page.clock.install()
   await mockAPI(page)
   let releaseStatus!: () => void
   let releaseNodes!: () => void
@@ -194,9 +195,13 @@ test("startup and machine discovery announce pending work", async ({ page }) => 
     await route.fulfill({ json: [] })
   })
 
+  const requestingStatus = page.waitForRequest(/\/api\/status(\?.*)?$/)
   await page.goto("/")
+  await requestingStatus
+  await page.clock.fastForward("00:02")
   await expect(page.getByText("Connecting to gateway…")).toBeVisible()
   releaseStatus()
+  await page.clock.fastForward("00:01")
   await expect(page.getByText("Discovering machines…")).toBeVisible()
 
   releaseNodes()

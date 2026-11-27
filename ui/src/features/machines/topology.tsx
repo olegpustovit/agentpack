@@ -139,7 +139,7 @@ export function TopologyView() {
           </svg>
         </div>
         <Section title="Machines" className="max-[760px]:border-t-0 max-[760px]:pt-0">
-          <DataGrid aria-label="Machines">
+          <DataGrid aria-label="Machines" className="max-[760px]:min-w-0">
             {!isPhone && (
               <DataGridHead>
                 <DataGridRow>
