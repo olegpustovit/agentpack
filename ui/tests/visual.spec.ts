@@ -537,9 +537,10 @@ test.describe("session list behaviour", () => {
     const pin = { module: "github.com/acme/tools", commit: "a".repeat(40), kind: "skill", name: "tools", direct: true }
     const posted: unknown[] = []
     await page.route("**/api/projects", (route) => route.fulfill({ json: [projectRow(session.directory, [], { packages: posted.length === 1 ? [] : [pin] })] }))
-    await page.route("**/api/projects/settings", (route) => {
-      posted.push(route.request().postDataJSON())
-      return route.fulfill({ status: 204 })
+    // Remove and its Undo go through the package routes, which any member who can install may use.
+    await page.route("**/api/packages", (route) => {
+      posted.push({ method: route.request().method(), ...route.request().postDataJSON() })
+      return route.fulfill({ json: {} })
     })
     await page.goto(`/sessions/project/local/${encodeURIComponent(session.directory)}`)
     const remove = page.getByRole("button", { name: "Remove tools" })
@@ -558,8 +559,8 @@ test.describe("session list behaviour", () => {
     await undo.click()
     await expect(remove).toBeAttached()
     expect(posted).toEqual([
-      expect.objectContaining({ directory: session.directory, remove: [pin.module] }),
-      expect.objectContaining({ directory: session.directory, add: [`${pin.module}@${pin.commit}`] }),
+      expect.objectContaining({ method: "DELETE", directory: session.directory, module: pin.module }),
+      expect.objectContaining({ method: "POST", directory: session.directory, spec: `${pin.module}@${pin.commit}` }),
     ])
   })
 })
