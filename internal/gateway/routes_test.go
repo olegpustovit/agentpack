@@ -133,7 +133,7 @@ func TestRoutePoliciesArePinned(t *testing.T) {
 	if !slices.Equal(peers, identityOnly) {
 		t.Errorf("identity-only peer writes = %v", peers)
 	}
-	// The peer allow list before the route table, verbatim.
+	// The expected peer allow list.
 	old := []string{
 		"GET /api/cache/{cache_key}", "POST /api/logs/ingest", "GET /api/logs/trace/{trace}", "GET /api/sync/changes", "GET /api/sync/events", "POST /api/sync/main/release",
 		"GET /api/library/packages", "GET /api/library/agentpacks", "POST /api/library/agentpacks", "POST /api/library/latest", "POST /api/library/draft-state",
@@ -141,7 +141,7 @@ func TestRoutePoliciesArePinned(t *testing.T) {
 		"POST /api/library/agentpacks/{id}/resolve", "GET /api/library/agentpacks/{id}/revisions/{revision}/restore-preview",
 		"POST /api/library/agentpacks/{id}/revisions/{revision}/restore",
 		"GET /api/identity", "GET /api/machine", "GET /api/events", "GET /api/agent-sessions", "GET /api/recent", "DELETE /api/recent", "GET /api/packages",
-		"POST /api/packages", "POST /api/mcp/servers", "GET /api/projects", "GET /api/projects/files", "GET /api/folders", "POST /api/folders", "GET /api/folders/found", "GET /api/worktrees",
+		"POST /api/packages", "DELETE /api/packages", "POST /api/mcp/servers", "GET /api/projects", "GET /api/projects/files", "GET /api/folders", "POST /api/folders", "GET /api/folders/found", "GET /api/worktrees",
 		"POST /api/worktrees/remove", "POST /api/worktrees/push", "GET /api/limits", "POST /api/limits/refresh", "GET /api/agents",
 		"POST /api/agents/{harness}/login", "GET /api/agents/{harness}/login/{id}", "POST /api/agents/{harness}/login/{id}",
 		"DELETE /api/agents/{harness}/login/{id}", "POST /api/agents/{harness}/logout", "GET /api/agents/defaults", "GET /api/omp/settings", "GET /api/omp/models",

@@ -9,6 +9,7 @@ DELETE /api/local/sessions/{id}/presence
 DELETE /api/mcp/credentials/{id}
 DELETE /api/mcp/credentials/{id}/approvals
 DELETE /api/omp/settings/{key}
+DELETE /api/packages
 DELETE /api/push/subscription
 DELETE /api/recent
 DELETE /api/sessions/{id}/conversation/goal
