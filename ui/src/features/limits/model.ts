@@ -1,6 +1,5 @@
 import { useMachines, useReplicatedQueries } from "@/features/machines/queries"
 import type { LimitSnapshot, LimitWindow } from "@/lib/api-types"
-import { relativeTime } from "@/lib/format"
 import { limitsQuery } from "./queries"
 
 export type LimitReport = { id: string; name: string; snapshot: LimitSnapshot }
@@ -79,32 +78,6 @@ export function providerGroups(reports: LimitReport[], now = Date.now()): Provid
   })
 }
 
-// When another machine reports a materially different remaining %, surface both reports with their ages.
-export function disagreementSummary(group: ProviderGroup, now: number): string | undefined {
-  if (!group.usable || group.others.length === 0) return undefined
-  const selectedWindows = windowsOf(group.selected.snapshot)
-  const selectedObserved = observedAt([group.selected.snapshot], 0)
-  for (const other of group.others) {
-    if (!usable(other.snapshot)) continue
-    const otherObserved = observedAt([other.snapshot], 0)
-    // Usage moves with time: only readings taken close together can disagree.
-    if (Math.abs(selectedObserved - otherObserved) > STALE_LIMIT_MS) continue
-    for (const selWin of selectedWindows) {
-      const otherWin = windowsOf(other.snapshot).find((candidate) => candidate.id === selWin.id)
-      if (!otherWin) continue
-      const selLeft = remainingPercent(selWin)
-      const otherLeft = remainingPercent(otherWin)
-      if (selLeft === undefined || otherLeft === undefined) continue
-      if (Math.abs(selLeft - otherLeft) >= 15) {
-        const selAge = selectedObserved > 0 ? ` (${relativeTime(new Date(selectedObserved), Math.max(now, selectedObserved))})` : ""
-        const otherAge = otherObserved > 0 ? ` (${relativeTime(new Date(otherObserved), Math.max(now, otherObserved))})` : ""
-        return `${group.selected.name} reports ${Math.round(selLeft)}% left${selAge}; ${other.name} reported ${Math.round(otherLeft)}%${otherAge}.`
-      }
-    }
-  }
-  return undefined
-}
-
 // Null when the provider reports neither field; clamped so the meter and label agree.
 export function remainingPercent(window: LimitWindow): number | undefined {
   const left = window.remaining_percent ?? (window.used_percent == null ? undefined : 100 - window.used_percent)
@@ -177,6 +150,23 @@ export function paceText(window: LimitWindow, now: number): { text: string; warn
   const end = runsOutAt(window, now)
   if (end !== undefined) return { text: `Runs out in about ${untilText(end - now)} at this pace`, warn: true }
   return { text: window.duration_seconds && window.reset_at ? "On pace" : "", warn: false }
+}
+
+export type AgentLimit = { provider: string; left?: number; window?: LimitWindow; observed: number }
+
+// Rows in a fixed order, so an agent keeps its place as readings change.
+const order = ["claude", "codex", "cursor", "agy", "grok", "opencode"]
+
+// One number per agent: its tightest window from the newest reading, or a sign-in row when that is all any machine says.
+// OMP has no row: its windows are the Codex and Cursor accounts it borrows, which have their own.
+export function agentLimits(groups: ProviderGroup[], now = Date.now()): AgentLimit[] {
+  return groups.filter((group) => group.provider !== "omp").flatMap((group): AgentLimit[] => {
+    const observed = observedAt([group.selected.snapshot], 0)
+    // A window whose reset passed is still the newest number until the next reading arrives.
+    const tight = tightestWindow([group], now) ?? tightestWindow([group], 0)
+    if (tight) return [{ provider: group.provider, left: tight.left, window: tight.window, observed }]
+    return [group.selected, ...group.others].some((report) => needsLogin(report.snapshot)) ? [{ provider: group.provider, observed }] : []
+  }).sort((a, b) => (order.indexOf(a.provider) >>> 0) - (order.indexOf(b.provider) >>> 0))
 }
 
 // Every machine's replicated report, grouped per provider. `only` keeps one machine's reports.

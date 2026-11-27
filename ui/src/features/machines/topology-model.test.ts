@@ -1,16 +1,10 @@
 import { describe, expect, it } from "vitest"
 import type { TopologyPeer } from "@/lib/api-types"
-import { edgeOf, layoutDiagram, machinePeers, reasonOf, routeLabel, ROW_H, sessionCount, stateWord } from "./topology-model"
+import { edgeOf, layoutDiagram, machinePeers, meshState, ROW_H } from "./topology-model"
 
 function peer(name: string, state: string, connection = "", relay = ""): TopologyPeer {
   return { id: name, name, os: "linux", state, connection, relay, sessions: 0 }
 }
-
-describe("stateWord", () => {
-  it("names both peer states in words", () => {
-    expect(["reachable", "offline"].map(stateWord)).toEqual(["Reachable", "Offline"])
-  })
-})
 
 describe("edgeOf", () => {
   it("labels relay with its region and dashes it, and labels direct solid", () => {
@@ -23,14 +17,6 @@ describe("edgeOf", () => {
   })
 })
 
-describe("routeLabel", () => {
-  it("formats compact human-readable route labels for phone rows", () => {
-    expect(routeLabel(peer("a", "reachable", "relay", "fra"))).toBe("Relay via fra")
-    expect(routeLabel(peer("b", "reachable", "direct"))).toBe("Direct")
-    expect(routeLabel(peer("c", "reachable"))).toBe("")
-  })
-})
-
 describe("machinePeers", () => {
   it("lists exactly the sidebar machines with their online state, enriched from the tailnet", () => {
     const peers = [{ ...peer("mac", "reachable", "direct"), os: "macOS" }, peer("tv", "offline"), peer("phone", "no-gateway")]
@@ -39,19 +25,16 @@ describe("machinePeers", () => {
   })
 })
 
-describe("reasonOf", () => {
-  it("gives the last contact for offline peers only", () => {
-    expect(reasonOf(peer("mac", "reachable"))).toBe("")
-    expect(reasonOf({ ...peer("build", "offline"), last_seen: new Date(Date.now() - 3 * 86_400_000).toISOString() })).toBe("Last seen 3 days ago")
-  })
-})
-
-describe("sessionCount", () => {
-  it("uses the topology count when it is set, the sessions query otherwise", () => {
-    expect(sessionCount(2, 5)).toBe(2)
-    expect(sessionCount(0, 5)).toBe(5)
-    expect(sessionCount(0, 0)).toBe(0)
-    expect(sessionCount(0, undefined)).toBeUndefined()
+describe("meshState", () => {
+  const now = Date.parse("2026-11-27T12:00:00Z")
+  const node = (online: boolean) => ({ id: "mac", name: "mac", online })
+  it("says what a machine needs to sync, in order of what to do first", () => {
+    expect(meshState(node(true), undefined, undefined, undefined, true, now)).toEqual({ text: "Not in mesh", glyph: "stopped" })
+    expect(meshState(node(true), { node: "mac", mesh: false }, undefined, undefined, true, now).text).toBe("Waiting for your approval")
+    expect(meshState(node(true), { node: "mac", mesh: true }, { at: "2026-11-27T11:59:50Z", needs_trust: true }, undefined, true, now).text).toBe("Add this machine on mac to sync")
+    expect(meshState(node(false), { node: "mac", mesh: true }, { at: "2026-11-27T02:00:00Z" }, undefined, true, now).text).toBe("Offline · last seen 10 hours ago")
+    expect(meshState(node(true), { node: "mac", mesh: true }, { at: "2026-11-27T11:59:50Z", last_sync: "2026-11-27T11:59:00Z" }, undefined, true, now)).toMatchObject({ text: "Synced 1 minute ago", glyph: "running" })
+    expect(meshState(node(true), { node: "mac", mesh: true }, { at: "2026-11-27T11:50:00Z", last_sync: "2026-11-27T11:50:00Z" }, undefined, true, now).text).toBe("Last synced 10 minutes ago")
   })
 })
 

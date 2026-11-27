@@ -5,14 +5,13 @@ import { ChevronRight } from "lucide-react"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { FormGroup, FormRow } from "@/components/kit/forms"
 import { SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
-import { StatusDot } from "@/components/kit/status-dot"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { ConfirmAlert, ConfirmAlertContent } from "@/components/kit/overlays"
 import { identityQuery } from "@/features/machines/queries"
 import { useListedSessions } from "@/features/sessions/queries"
 import { api, errorText, LOCAL, routeMissing } from "@/lib/api"
-import { harnessName, plural } from "@/lib/format"
+import { plural } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { terminalPool } from "@/features/terminal/pool"
 import { screenReaderEnabled, setScreenReaderEnabled } from "@/features/terminal/screen-reader"
@@ -21,6 +20,8 @@ import { agentDefaultsQuery, settingsQuery, type AgentDefaults } from "./queries
 import { useGatewayActions } from "./actions"
 import { PublicAccessBanner, PublicAccessRows } from "./public-access"
 import { applyTheme, currentTheme, themes, type Theme } from "./theme"
+import { AccountGroup } from "./account-pane"
+import { sections, useBadges } from "./sections"
 
 export const DiagnosticsPane = lazy(() => import("./diagnostics-pane").then((module) => ({ default: module.DiagnosticsPane })))
 export const OmpPane = lazy(() => import("./omp-pane").then((module) => ({ default: module.OmpPane })))
@@ -43,6 +44,7 @@ export function LoadError({ what, error, retry }: { what: string; error: Error; 
 export function GeneralPane() {
   const settings = useQuery(settingsQuery)
   const identity = useQuery(identityQuery)
+  const badges = useBadges()
   const failed = settings.error ?? identity.error
   if (failed) {
     return (
@@ -59,29 +61,27 @@ export function GeneralPane() {
   if (!settings.data || !identity.data) return <RowSkeleton lines={2} />
   return (
     <Pane title="General">
-      <FormGroup title="About">
-        <FormRow label="Gateway"><StatusDot state={settings.data.running ? "running" : "stopped"} /></FormRow>
-        <FormRow label="Version">{identity.data.node.version}</FormRow>
-        <FormRow label="Platform">{settings.data.platform}</FormRow>
-        <FormRow label="Hostname">{identity.data.node.name}</FormRow>
-      </FormGroup>
+      <AccountGroup />
+      <AppearanceGroup />
       <FormGroup>
-        <Link to="/machines/$machine" params={{ machine: LOCAL }} className={linkRow}><LinkRow label="Machine details" description="Hardware, agents, limits and updates" /></Link>
+        {sections.filter((item) => item.parent === "general").map((item) => (
+          <Link key={item.id} to="/settings/$pane" params={{ pane: item.id }} className={linkRow}>
+            <FormRow label={<span className="flex items-center gap-(--s3)"><item.icon aria-hidden className="size-(--fs) text-(--fg2)" />{item.label}</span>} className="border-t-0">
+              {badges[item.id]}
+              <ChevronRight aria-hidden className="size-(--fs) text-(--fg3)" />
+            </FormRow>
+          </Link>
+        ))}
       </FormGroup>
-      {settings.data.can_manage !== false && <MachineControls machine={identity.data.node.name} stopped={!settings.data.running} />}
+      <MachineControls machine={identity.data.node.name} version={`${identity.data.node.version} · ${settings.data.platform}`} stopped={!settings.data.running} canManage={settings.data.can_manage !== false} />
     </Pane>
   )
 }
 
 const linkRow = "block outline-none hover:bg-(--hover) focus-visible:bg-(--hover) [&+&]:border-t-[0.5px] [&+&]:border-(--sep-soft)"
 
-// A row that opens another screen: macOS disclosure chevron, the whole row is the link.
-function LinkRow({ label, description }: { label: string; description: string }) {
-  return <FormRow label={label} description={description} className="border-t-0"><ChevronRight aria-hidden className="size-(--fs) text-(--fg3)" /></FormRow>
-}
-
 // Machine lifecycle, not account: each confirmation names the machine, what stops and how to recover.
-function MachineControls({ machine, stopped }: { machine: string; stopped: boolean }) {
+function MachineControls({ machine, version, stopped, canManage }: { machine: string; version: string; stopped: boolean; canManage: boolean }) {
   const actions = useGatewayActions()
   const running = useListedSessions().sessions.filter((session) => session.machine === LOCAL && session.state.running)
   const [confirm, setConfirm] = useState<"agents" | "gateway" | null>(null)
@@ -92,13 +92,16 @@ function MachineControls({ machine, stopped }: { machine: string; stopped: boole
     gateway: { title: `Stop the gateway on ${machine}?`, description: `Browser access to ${machine} disconnects. ${sessions} keep running in the CLI. Run ap gateway start on ${machine} to reconnect.`, destructiveLabel: "Stop gateway" },
   }
   return (
-    <FormGroup title="Stop" footer={<>Stopping is reversible: run <code>ap gateway start</code> on {machine} to reconnect.</>}>
-      <FormRow label="Stop all agents" description={`${agents} on ${machine}. Shells and chats owned by another device keep running.`}>
-        <Button variant="destructive" disabled={stopped} onClick={() => setConfirm("agents")}>Stop agents…</Button>
-      </FormRow>
-      <FormRow label="Stop gateway" description="Browser access disconnects. CLI sessions keep running.">
-        <Button variant="destructive" disabled={stopped} onClick={() => setConfirm("gateway")}>Stop gateway…</Button>
-      </FormRow>
+    <FormGroup title={machine}>
+      <FormRow label="agentpack">{version}</FormRow>
+      {canManage && <>
+        <FormRow label="Agents" description={agents}>
+          <Button variant="destructive" disabled={stopped} onClick={() => setConfirm("agents")}>Stop all…</Button>
+        </FormRow>
+        <FormRow label="Gateway">
+          <Button variant="destructive" disabled={stopped} onClick={() => setConfirm("gateway")}>Stop…</Button>
+        </FormRow>
+      </>}
       <ConfirmAlert open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>
         {confirm && (
           <ConfirmAlertContent
@@ -156,7 +159,7 @@ function subscribeToSystemTheme(notify: () => void) {
   return () => preference.removeEventListener("change", notify)
 }
 
-export function AppearancePane() {
+function AppearanceGroup() {
   const [theme, setTheme] = useState<Theme>(currentTheme)
   const dark = useSyncExternalStore(subscribeToSystemTheme, () => systemTheme().matches)
   const [screenReader, setScreenReader] = useState(screenReaderEnabled)
@@ -167,46 +170,31 @@ export function AppearancePane() {
     setTheme(next)
   }
   return (
-    <Pane title="Appearance">
-      <FormGroup>
-        <FormRow label="Theme" description={<span role="status">{`Currently ${themeLabels[theme === "system" ? dark ? "dark" : "light" : theme]}`}</span>}>
-          <SegmentedControl aria-label="Theme" value={[theme]} onValueChange={choose}>
-            {themes.map((item) => (
-              <SegmentedControlItem key={item} value={item}>
-                {themeLabels[item]}
-              </SegmentedControlItem>
-            ))}
-          </SegmentedControl>
-        </FormRow>
-      </FormGroup>
-      <FormGroup title="Accessibility">
-        <FormRow label="Terminal screen reader mode" htmlFor="terminal-screen-reader" description={<span id="terminal-screen-reader-scope">Open terminals reconnect with this setting.</span>}>
-          <Switch
-            id="terminal-screen-reader"
-            aria-describedby="terminal-screen-reader-scope"
-            checked={screenReader}
-            onCheckedChange={(checked) => {
-              setScreenReaderEnabled(checked)
-              setScreenReader(checked)
-              // The mode is chosen when a terminal opens; open sessions reconnect with it on return.
-              terminalPool.disposeAll()
-            }}
-          />
-        </FormRow>
-      </FormGroup>
-    </Pane>
+    <FormGroup title="Appearance">
+      <FormRow label="Theme" description={theme === "system" ? <span role="status">{`Currently ${dark ? "dark" : "light"}`}</span> : undefined}>
+        <SegmentedControl aria-label="Theme" value={[theme]} onValueChange={choose}>
+          {themes.map((item) => (
+            <SegmentedControlItem key={item} value={item}>
+              {themeLabels[item]}
+            </SegmentedControlItem>
+          ))}
+        </SegmentedControl>
+      </FormRow>
+      <FormRow label="Terminal screen reader mode" htmlFor="terminal-screen-reader">
+        <Switch
+          id="terminal-screen-reader"
+          checked={screenReader}
+          onCheckedChange={(checked) => {
+            setScreenReaderEnabled(checked)
+            setScreenReader(checked)
+            // The mode is chosen when a terminal opens; open sessions reconnect with it on return.
+            terminalPool.disposeAll()
+          }}
+        />
+      </FormRow>
+    </FormGroup>
   )
 }
-
-// Each harness's own subagent tool, and whether agentpack can turn it off today.
-const subagentCoverage = [
-  { harness: "claude", tool: "Agent, Task", replaceable: true },
-  { harness: "codex", tool: "Subagents", replaceable: true },
-  { harness: "opencode", tool: "task", replaceable: false },
-  { harness: "omp", tool: "task", replaceable: false },
-  { harness: "cursor", tool: "Subagents", replaceable: false },
-  { harness: "agy", tool: "invoke_subagent", replaceable: false },
-]
 
 export function AgentsPane() {
   const defaults = useQuery(agentDefaultsQuery)
@@ -233,36 +221,29 @@ export function AgentsPane() {
   return (
     <Pane title="Agents">
       <FormGroup title="Permissions" footer={
-        bypass === undefined ? "Update this gateway to change permission defaults." : "Applies when chats start or resume. Use the Permissions menu to change a running chat."
+        bypass === undefined ? "Update this gateway to change permission defaults." : "Applies when a chat starts or resumes."
       }>
-        <FormRow label="Bypass permissions by default" htmlFor="bypass-permissions" description="Let chats run tools, including commands and file edits, without asking.">
+        <FormRow label="Bypass permissions by default" htmlFor="bypass-permissions" description="Chats run commands and edit files without asking.">
           <Switch id="bypass-permissions" checked={bypass ?? false} disabled={disabled || bypass === undefined} onCheckedChange={(on) => save.mutate({ bypass_permissions: on })} />
         </FormRow>
-        <FormRow label="Auto-approve helper chats" htmlFor="auto-approve-helpers" description="Let helper chats run tools automatically even when the general bypass default is off.">
+        <FormRow label="Auto-approve helper chats" htmlFor="auto-approve-helpers" description="Even when bypass is off.">
           <Switch id="auto-approve-helpers" checked={helpers ?? false} disabled={disabled || helpers === undefined} onCheckedChange={(on) => save.mutate({ auto_approve_helpers: on })} />
         </FormRow>
       </FormGroup>
       <FormGroup title="New chats" footer={<>
-        <p>Running chats keep what they started with. Turn agentpack tools on or off for one chat in its inspector.</p>
+        <p>Running chats keep what they started with.</p>
         {readOnly && <p>Only the gateway owner can change agent defaults.</p>}
       </>}>
-        <FormRow label="agentpack tools" htmlFor="agentpack-tools" description="The agentpack MCP server: agents start helper chats, read other sessions, ask you questions and install packages.">
+        <FormRow label="agentpack tools" htmlFor="agentpack-tools" description="Agents start helpers, read other chats, ask you questions and install packages.">
           <Switch id="agentpack-tools" checked={tools} disabled={disabled} onCheckedChange={(on) => save.mutate({ agentpack_tools: on })} />
         </FormRow>
         <FormRow
           label="Replace built-in subagents"
           htmlFor="replace-subagents"
-          description={tools ? "Helpers run as agentpack chats you can watch and stop." : "Needs agentpack tools: without them an agent keeps its own subagents."}
+          description={tools ? "Helpers run as chats you can watch and stop." : "Needs agentpack tools."}
         >
           <Switch id="replace-subagents" checked={tools && replace} disabled={disabled || !tools} onCheckedChange={(on) => save.mutate({ replace_subagents: on })} />
         </FormRow>
-      </FormGroup>
-      <FormGroup title="Built-in subagents" footer="Where an agent keeps its own tool, agentpack’s run_helper tool asks it to start a helper chat instead. Grok has no subagents.">
-        {subagentCoverage.map((item) => (
-          <FormRow key={item.harness} label={harnessName(item.harness)} description={item.tool}>
-            {!item.replaceable ? "Kept" : tools && replace ? "Replaced by helpers" : "On"}
-          </FormRow>
-        ))}
       </FormGroup>
     </Pane>
   )

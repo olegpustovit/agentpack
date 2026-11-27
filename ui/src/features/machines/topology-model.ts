@@ -1,4 +1,4 @@
-import type { TopologyPeer } from "@/lib/api-types"
+import type { PeerReplica, ReplicationPeers, TailnetNode, TopologyPeer } from "@/lib/api-types"
 import { relativeTime } from "@/lib/format"
 
 // Diagram geometry in SVG user units. Rows are 44 px apart; the gateway sits left, peers stack right.
@@ -9,15 +9,6 @@ export const PEER_X = 420
 export const PEER_W = 200
 export const DIAGRAM_W = PEER_X + PEER_W
 
-const stateWords: Record<string, string> = {
-  reachable: "Reachable",
-  offline: "Offline",
-}
-
-export function stateWord(state: string): string {
-  return stateWords[state] ?? state
-}
-
 // The topology shows the same machines as the sidebar, with the same online state; the tailnet adds OS and path.
 export function machinePeers(peers: TopologyPeer[], machines: { id: string; name: string; online: boolean }[]): TopologyPeer[] {
   return machines.map((machine) => {
@@ -26,9 +17,23 @@ export function machinePeers(peers: TopologyPeer[], machines: { id: string; name
   })
 }
 
-export function reasonOf(peer: TopologyPeer): string {
-  if (peer.state === "offline") return peer.last_seen ? `Last seen ${relativeTime(new Date(peer.last_seen))}` : "Not connected"
-  return ""
+export type MeshState = { text: string; glyph: "running" | "idle" | "offline" | "stopped" | "needsYou" | "needsUpdate"; warn?: boolean; detail?: string; member?: boolean }
+
+// One line for a machine's place in the mesh: whether it syncs, and the one thing to do when it doesn't.
+export function meshState(node: TailnetNode, replica: PeerReplica | undefined, contact: ReplicationPeers["contacts"][string] | undefined, lastSeen: string | undefined, sharing: boolean, now: number): MeshState {
+  const age = (at: string) => relativeTime(new Date(at), Math.max(now, Date.parse(at)))
+  if (!replica) return { text: node.online ? "Not in mesh" : "Not in mesh · offline", glyph: node.online ? "stopped" : "offline" }
+  if (contact?.needs_trust || replica.mesh === false) {
+    return { text: replica.mesh ? `Add this machine on ${node.name} to sync` : "Waiting for your approval", glyph: "needsYou", warn: true, member: true }
+  }
+  if (contact?.needs_update || node.needs_update) return { text: "Needs update to sync", glyph: "needsUpdate", warn: true, member: true }
+  const seen = lastSeen ?? contact?.at
+  if (!node.online) return { text: seen ? `Offline · last seen ${age(seen)}` : "Offline", glyph: "offline", member: true }
+  if (contact?.error) return { text: "Sync failed", glyph: "needsYou", warn: true, detail: contact.error, member: true }
+  const stale = !sharing || contact?.reachable === false || (!!contact?.at && now - Date.parse(contact.at) > 90_000)
+  const synced = contact?.last_sync
+  if (synced) return { text: `${stale ? "Last synced" : "Synced"} ${age(synced)}`, glyph: stale ? "idle" : "running", member: true }
+  return { text: "Not synced yet", glyph: "idle", member: true }
 }
 
 export type Edge = { label: string; dashed: boolean }
@@ -38,18 +43,6 @@ export function edgeOf(peer: TopologyPeer): Edge {
   if (peer.connection === "relay") return { label: peer.relay ? `relay ${peer.relay}` : "relay", dashed: true }
   if (peer.connection === "direct") return { label: "direct", dashed: false }
   return { label: "path unknown", dashed: false }
-}
-
-// Human-readable route text for compact phone rows.
-export function routeLabel(peer: TopologyPeer): string {
-  if (peer.connection === "relay") return peer.relay ? `Relay via ${peer.relay}` : "Relay"
-  if (peer.connection === "direct") return "Direct"
-  return ""
-}
-
-// The topology endpoint always reports 0 sessions, so the sessions query count is the real source.
-export function sessionCount(fromTopology: number | undefined, fromQuery: number | undefined): number | undefined {
-  return fromTopology || fromQuery
 }
 
 export type DiagramEdge = { peer: TopologyPeer; d: string; label: string; dashed: boolean; labelX: number; labelY: number }

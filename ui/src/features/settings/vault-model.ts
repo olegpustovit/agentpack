@@ -14,8 +14,8 @@ export type SharedSignIn = {
   refreshErrorAt?: string
 }
 
-// Rows in display order. OMP keeps its sign-in in its own database, so the gateway reports nothing for it.
-export const vaultAgents = ["claude", "codex", "cursor", "grok", "opencode", "agy", "omp"]
+// Rows in display order. OMP keeps its sign-in in its own database, so it has nothing to show or do here.
+export const vaultAgents = ["claude", "codex", "cursor", "grok", "opencode", "agy"]
 
 export function readSharedSignIns(value: unknown): SharedSignIn[] {
   return array(object(value, "shared").agents, "shared.agents").map((raw, index) => {
@@ -40,17 +40,15 @@ export const sharedSignInsQuery = queryOptions({
   retry: (count, error) => !(error instanceof ApiError && (error.status === 403 || error.status === 404)) && count < 2,
 })
 
-export function signInStatus(harness: string, row: SharedSignIn | undefined, machineName: (node: string) => string, now = Date.now()): string {
-  if (harness === "omp") return "Kept in each machine’s own store"
-  if (!row || row.state === "none") return "Not shared yet"
-  if (row.state === "stopped") return "Sharing stopped"
+// One sign-in serves every machine, so the row says only whether it works and, near the end, how long it lasts.
+export function signInStatus(row: SharedSignIn | undefined, now = Date.now()): string {
+  if (!row || row.state === "none" || row.state === "stopped") return "Not signed in"
   if (row.state === "expired") {
     const past = [row.expiresAt, row.refreshErrorAt].find((at) => at && Date.parse(at) <= now)
-    return `Expired${past ? ` ${shortAge(new Date(past), now)} ago` : ""} · Sign in again`
+    return `Expired${past ? ` ${shortAge(new Date(past), now)} ago` : ""}`
   }
-  if (!row.renewer) return row.publisher ? `Shared from ${machineName(row.publisher)}` : "Shared"
-  const left = row.expiresAt && Date.parse(row.expiresAt) > now ? ` · expires in ${shortAge(new Date(now), Date.parse(row.expiresAt))}` : ""
-  return `Shared · renewed by ${machineName(row.renewer)}${left}`
+  const soon = row.expiresAt && !row.renewer && Date.parse(row.expiresAt) - now < 86_400_000 ? ` · expires in ${shortAge(new Date(now), Date.parse(row.expiresAt))}` : ""
+  return `Signed in${soon}`
 }
 
 // The badge counts only what is broken: expired or failed sign-ins and MCP logins that need one. Never none or stopped.

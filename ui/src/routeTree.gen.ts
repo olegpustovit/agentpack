@@ -26,7 +26,6 @@ import { Route as AppMachinesTopologyRouteImport } from './routes/_app/machines/
 import { Route as AppSessionsIndexRouteImport } from './routes/_app/sessions/index'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings/index'
 import { Route as AppSettingsPaneRouteImport } from './routes/_app/settings/$pane'
-import { Route as AppSettingsAccessibilityRouteImport } from './routes/_app/settings/accessibility'
 import { Route as AppUsageIndexRouteImport } from './routes/_app/usage/index'
 import { Route as AppUsageLimitsRouteImport } from './routes/_app/usage/limits'
 import { Route as AppLibraryAgentpackIdRouteImport } from './routes/_app/library/agentpack/$id'
@@ -120,12 +119,6 @@ const AppSettingsPaneRoute = AppSettingsPaneRouteImport.update({
   path: '/settings/$pane',
   getParentRoute: () => AppRoute,
 } as any)
-const AppSettingsAccessibilityRoute =
-  AppSettingsAccessibilityRouteImport.update({
-    id: '/settings/accessibility',
-    path: '/settings/accessibility',
-    getParentRoute: () => AppRoute,
-  } as any)
 const AppUsageIndexRoute = AppUsageIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -182,7 +175,6 @@ export interface FileRoutesByFullPath {
   '/machines/$machine': typeof AppMachinesMachineRoute
   '/machines/topology': typeof AppMachinesTopologyRoute
   '/settings/$pane': typeof AppSettingsPaneRoute
-  '/settings/accessibility': typeof AppSettingsAccessibilityRoute
   '/usage/limits': typeof AppUsageLimitsRoute
   '/library/': typeof AppLibraryIndexRoute
   '/machines/': typeof AppMachinesIndexRoute
@@ -205,7 +197,6 @@ export interface FileRoutesByTo {
   '/machines/$machine': typeof AppMachinesMachineRoute
   '/machines/topology': typeof AppMachinesTopologyRoute
   '/settings/$pane': typeof AppSettingsPaneRoute
-  '/settings/accessibility': typeof AppSettingsAccessibilityRoute
   '/usage/limits': typeof AppUsageLimitsRoute
   '/library': typeof AppLibraryIndexRoute
   '/machines': typeof AppMachinesIndexRoute
@@ -234,7 +225,6 @@ export interface FileRoutesById {
   '/_app/machines/$machine': typeof AppMachinesMachineRoute
   '/_app/machines/topology': typeof AppMachinesTopologyRoute
   '/_app/settings/$pane': typeof AppSettingsPaneRoute
-  '/_app/settings/accessibility': typeof AppSettingsAccessibilityRoute
   '/_app/usage/limits': typeof AppUsageLimitsRoute
   '/_app/library/': typeof AppLibraryIndexRoute
   '/_app/machines/': typeof AppMachinesIndexRoute
@@ -263,7 +253,6 @@ export interface FileRouteTypes {
     | '/machines/$machine'
     | '/machines/topology'
     | '/settings/$pane'
-    | '/settings/accessibility'
     | '/usage/limits'
     | '/library/'
     | '/machines/'
@@ -286,7 +275,6 @@ export interface FileRouteTypes {
     | '/machines/$machine'
     | '/machines/topology'
     | '/settings/$pane'
-    | '/settings/accessibility'
     | '/usage/limits'
     | '/library'
     | '/machines'
@@ -314,7 +302,6 @@ export interface FileRouteTypes {
     | '/_app/machines/$machine'
     | '/_app/machines/topology'
     | '/_app/settings/$pane'
-    | '/_app/settings/accessibility'
     | '/_app/usage/limits'
     | '/_app/library/'
     | '/_app/machines/'
@@ -456,13 +443,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsPaneRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/settings/accessibility': {
-      id: '/_app/settings/accessibility'
-      path: '/settings/accessibility'
-      fullPath: '/settings/accessibility'
-      preLoaderRoute: typeof AppSettingsAccessibilityRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/usage/': {
       id: '/_app/usage/'
       path: '/'
@@ -598,7 +578,6 @@ interface AppRouteChildren {
   AppSystemRoute: typeof AppSystemRoute
   AppUsageRoute: typeof AppUsageRouteWithChildren
   AppSettingsPaneRoute: typeof AppSettingsPaneRoute
-  AppSettingsAccessibilityRoute: typeof AppSettingsAccessibilityRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
 }
 
@@ -610,7 +589,6 @@ const AppRouteChildren: AppRouteChildren = {
   AppSystemRoute: AppSystemRoute,
   AppUsageRoute: AppUsageRouteWithChildren,
   AppSettingsPaneRoute: AppSettingsPaneRoute,
-  AppSettingsAccessibilityRoute: AppSettingsAccessibilityRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
 }
 

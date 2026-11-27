@@ -89,33 +89,3 @@ export function UsageHeatmap({ rows, win, metric, series, name }: {
     </Section>
   )
 }
-
-// What the tokens were: cache reads dominate long chats, output is the work.
-export function TokenMix({ rows }: { rows: UsageHour[] }) {
-  const parts = [
-    { key: "Output", value: rows.reduce((sum, row) => sum + row.output_tokens, 0), color: "var(--accent)" },
-    { key: "Input", value: rows.reduce((sum, row) => sum + row.input_tokens, 0), color: "var(--series-3)" },
-    { key: "Cache write", value: rows.reduce((sum, row) => sum + row.cache_write_tokens, 0), color: "var(--series-4)" },
-    { key: "Cache read", value: rows.reduce((sum, row) => sum + row.cache_read_tokens, 0), color: "color-mix(in oklab, var(--fg3) 45%, var(--track))" },
-  ]
-  const total = parts.reduce((sum, part) => sum + part.value, 0) || 1
-  return (
-    <Section title="Token mix">
-      <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-(--track)" role="img" aria-label={parts.map((part) => `${part.key} ${Math.round((part.value / total) * 100)}%`).join(", ")}>
-        {parts.map((part) => (
-          <span key={part.key} className="h-full transition-[width] duration-(--dur-3) ease-(--ease) not-last:border-r-2 not-last:border-(--page)" style={{ width: `${(part.value / total) * 100}%`, background: part.color }} />
-        ))}
-      </div>
-      <dl className="mt-(--s4) grid grid-cols-2 gap-x-(--s6) gap-y-(--s3) text-(length:--fs-sm)">
-        {parts.map((part) => (
-          <div key={part.key} className="flex min-w-0 items-center gap-(--s3)">
-            <span aria-hidden className="size-2.5 shrink-0 rounded-[3px]" style={{ background: part.color }} />
-            <dt className="min-w-0 flex-1 truncate text-(--fg2)">{part.key}</dt>
-            <dd className="font-semibold tabular-nums">{fmt(part.value)}</dd>
-            <dd className="w-10 text-end text-(--fg3) tabular-nums">{`${((part.value / total) * 100).toFixed(part.value / total < 0.1 ? 1 : 0)}%`}</dd>
-          </div>
-        ))}
-      </dl>
-    </Section>
-  )
-}

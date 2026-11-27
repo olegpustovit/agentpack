@@ -4,7 +4,6 @@ import { AGENTS_MODULE, changesAgent, readSharedSignIns, refusedForAgents, secre
 
 const now = Date.parse("2026-11-26T12:00:00Z")
 const at = (hours: number) => new Date(now + hours * 3_600_000).toISOString()
-const name = (node: string) => ({ mini: "olegs-mac-mini" })[node] ?? node
 const rows = readSharedSignIns({ agents: [
   { harness: "claude", state: "shared", publisher_node: "mini", renewer_node: "mini", expires_at: at(6) },
   { harness: "codex", state: "shared", publisher_node: "mini" },
@@ -13,24 +12,24 @@ const rows = readSharedSignIns({ agents: [
   { harness: "opencode", state: "expired", expires_at: at(-48) },
   { harness: "agy", state: "expired", expires_at: at(3), refresh_error_at: at(-2) },
 ] })
-const status = (harness: string) => signInStatus(harness, rows.find((row) => row.harness === harness), name, now)
+const status = (harness: string) => signInStatus(rows.find((row) => row.harness === harness), now)
 
 describe("vault", () => {
   test("every row state reads as the plan words it", () => {
-    expect(status("claude")).toBe("Shared · renewed by olegs-mac-mini · expires in 6 h")
-    expect(status("codex")).toBe("Shared from olegs-mac-mini")
-    expect(status("cursor")).toBe("Not shared yet")
-    expect(status("grok")).toBe("Sharing stopped")
-    expect(status("opencode")).toBe("Expired 2 d ago · Sign in again")
-    expect(status("agy")).toBe("Expired 2 h ago · Sign in again")
-    expect(status("omp")).toBe("Kept in each machine’s own store")
+    expect(status("claude")).toBe("Signed in")
+    expect(status("codex")).toBe("Signed in")
+    expect(status("cursor")).toBe("Not signed in")
+    expect(status("grok")).toBe("Not signed in")
+    expect(status("opencode")).toBe("Expired 2 d ago")
+    expect(status("agy")).toBe("Expired 2 h ago")
   })
 
   // The gateway omits expires_at for Codex, whose sign-in only says when it was last renewed.
   test("a row without an expiry still reads sensibly", () => {
-    const read = (row: object) => signInStatus("codex", readSharedSignIns({ agents: [{ harness: "codex", publisher_node: "mini", ...row }] })[0], name, now)
-    expect(read({ state: "shared", renewer_node: "mini" })).toBe("Shared · renewed by olegs-mac-mini")
-    expect(read({ state: "expired", renewer_node: "mini", refresh_error_at: at(-2) })).toBe("Expired 2 h ago · Sign in again")
+    const read = (row: object) => signInStatus(readSharedSignIns({ agents: [{ harness: "codex", publisher_node: "mini", ...row }] })[0], now)
+    expect(read({ state: "shared", renewer_node: "mini" })).toBe("Signed in")
+    expect(read({ state: "shared", expires_at: at(6) })).toBe("Signed in · expires in 6 h")
+    expect(read({ state: "expired", renewer_node: "mini", refresh_error_at: at(-2) })).toBe("Expired 2 h ago")
   })
 
   test("the badge counts expired sign-ins and MCP logins, not none or stopped", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { LimitSnapshot, LimitWindow } from "@/lib/api-types"
-import { absoluteResetTime, disagreementSummary, isWindowStale, needsLogin, observedAt, paceText, providerGroups, remainingPercent, resetPassed, resetText, runsOutAt, selectReport, tightestWindow, untilText, type LimitReport } from "./model"
+import { absoluteResetTime, agentLimits, isWindowStale, needsLogin, observedAt, paceText, providerGroups, remainingPercent, resetPassed, resetText, runsOutAt, selectReport, tightestWindow, untilText, type LimitReport } from "./model"
 
 const snapshot = (over: Partial<LimitSnapshot>): LimitSnapshot => ({
   harness: "codex",
@@ -164,7 +164,7 @@ describe("runsOutAt", () => {
   })
 })
 
-describe("staleness, disagreement, and absolute reset time", () => {
+describe("staleness, one number per agent, and absolute reset time", () => {
   const now = Date.parse("2026-10-30T12:00:00Z")
 
   it("ranks a current report ahead of one whose reset already passed and flags stale windows", () => {
@@ -181,24 +181,16 @@ describe("staleness, disagreement, and absolute reset time", () => {
     expect(isWindowStale(fresh.snapshot.windows[0]!, Date.parse(fresh.snapshot.observed_at), now)).toBe(false)
   })
 
-  it("summarizes material disagreement between machines", () => {
-    const stale = report("atlas", {
-      observed_at: "2026-10-30T11:10:00Z",
-      windows: [window({ id: "w", remaining_percent: 75, reset_at: "2026-10-30T15:00:00Z" })],
-    })
-    const fresh = report("birch", {
-      observed_at: "2026-10-30T11:59:00Z",
-      windows: [window({ id: "w", remaining_percent: 4, reset_at: "2026-10-30T15:00:00Z" })],
-    })
-    const [group] = providerGroups([stale, fresh], now)
-    expect(disagreementSummary(group!, now)).toContain("birch reports 4% left")
-    expect(disagreementSummary(group!, now)).toContain("atlas reported 75%")
-  })
-
-  it("does not compare readings more than an hour apart", () => {
-    const reading = (id: string, observed_at: string, remaining_percent: number) => report(id, { observed_at, windows: [window({ remaining_percent })] })
-    const [group] = providerGroups([reading("atlas", "2026-10-29T12:00:00Z", 75), reading("birch", "2026-10-30T11:59:00Z", 4)], now)
-    expect(disagreementSummary(group!, now)).toBeUndefined()
+  it("gives each agent one number: the tightest window of the newest reading, and drops OMP", () => {
+    const claude = (id: string, observed_at: string, left: number) => report(id, { harness: "claude", observed_at, windows: [window({ id: "week", remaining_percent: left }), window({ id: "fable", remaining_percent: 99 })] })
+    const groups = providerGroups([
+      claude("atlas", "2026-10-29T09:00:00Z", 88),
+      claude("birch", "2026-10-30T11:50:00Z", 42),
+      report("birch", { harness: "grok", state: "error", error: "Grok login expired. Sign in with agentpack grok login.", windows: null as never }),
+      report("birch", { harness: "opencode", state: "error", error: "native probe exited with status 1", windows: null as never }),
+      report("birch", { harness: "omp", windows: [window({ remaining_percent: 0 })] }),
+    ], now)
+    expect(agentLimits(groups, now).map((row) => [row.provider, row.left])).toEqual([["claude", 42], ["grok", undefined]])
   })
 
   it("skips a passed window when picking the tightest one", () => {

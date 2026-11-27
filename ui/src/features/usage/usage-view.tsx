@@ -2,13 +2,12 @@ import { lazy, Suspense, useRef, useState, type ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { getRouteApi, Link, useNavigate } from "@tanstack/react-router"
 import { ChevronLeft, ChevronRight, Folder, Server, Cpu, X } from "lucide-react"
-import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, KeyValue, Meter, Section } from "@/components/kit/data"
+import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, KeyValue, Section } from "@/components/kit/data"
 import { Banner, Empty, RowSkeleton } from "@/components/kit/feedback"
 import { FilterButton, FilterToken } from "@/components/kit/filters"
 import { PopupSelect } from "@/components/kit/forms"
 import { SegmentedControl, SegmentedControlItem } from "@/components/kit/list"
 import { Button } from "@/components/ui/button"
-import { LimitsSummary } from "@/features/limits/limits-view"
 import { AgentTile } from "@/components/kit/agent-tile"
 import { useEventsConnected } from "@/features/events/use-events"
 import { topologyQuery, useMachines } from "@/features/machines/queries"
@@ -44,7 +43,7 @@ import {
   type View,
 } from "./model"
 import { UsageChart } from "./usage-chart"
-import { TokenMix, UsageHeatmap } from "./usage-heatmap"
+import { UsageHeatmap } from "./usage-heatmap"
 import { seriesColor, useNames, useUsage, type Names } from "./use-usage"
 
 // Loaded on first open, so Popover stays out of the route bundle.
@@ -242,9 +241,6 @@ export function UsageView() {
               <Empty title={dataState === "partial" ? "No synced usage in this range" : "No usage in this range"}>
                 {dataState === "partial" ? "Waiting for usage from the remaining machines." : `No recorded activity for ${exactRange}.`}
               </Empty>
-              <div className="grid gap-x-(--s7) gap-y-(--s6) min-[1100px]:grid-cols-2">
-                <LimitsSummary />
-              </div>
             </div>
           ) : (
             <>
@@ -345,12 +341,9 @@ export function UsageView() {
                 {win.range !== "day" && <UsageHeatmap rows={rows} win={win} metric={metric} series={series} name={byAgent ? names.agent : names.model} />}
               </div>
 
-              <div className="mt-(--s7) grid gap-x-(--s7) gap-y-(--s6) min-[1100px]:grid-cols-2">
-                {!filtered ? <LimitsSummary /> : <Summary rows={rows} sessions={sessions} view={view} names={names} />}
+              <div className={cn("mt-(--s7) grid gap-x-(--s7) gap-y-(--s6)", filtered && "min-[1100px]:grid-cols-2")}>
+                {filtered && <Summary rows={rows} sessions={sessions} view={view} names={names} />}
                 <MostUsed rows={rows} view={view} metric={metric} names={names} onFilter={setFilter} />
-                {view.agent !== undefined && <LimitsSummary agent={view.agent} />}
-                <TokenMix rows={rows} />
-                <Efficiency rows={rows} sessions={sessions} />
               </div>
 
               <SessionsTable
@@ -518,38 +511,6 @@ function MetricTabs({ metric, rows, previous, onPick }: { metric: Metric; rows: 
         )
       })}
     </div>
-  )
-}
-
-function Efficiency({ rows, sessions }: { rows: UsageHour[]; sessions: UsageSession[] }) {
-  const sum = (value: (row: UsageHour) => number) => rows.reduce((total, row) => total + value(row), 0)
-  const turns = sum((row) => row.turns)
-  const read = sum((row) => row.cache_read_tokens)
-  const fresh = read + sum((row) => row.cache_write_tokens) + sum((row) => row.input_tokens)
-  const hit = fresh ? (read / fresh) * 100 : undefined
-  const costed = sessions.filter((session) => session.cost_micros >= 0)
-  return (
-    <Section title="Efficiency">
-      <div className="mb-(--s3) flex flex-col gap-(--s1)">
-        <div className="flex items-baseline justify-between text-(length:--fs-sm)">
-          <span className="font-semibold">Cache hit rate</span>
-          <span className="text-(--fg2) tabular-nums">{hit === undefined ? "—" : `${hit.toFixed(1)}%`}</span>
-        </div>
-        <Meter value={hit} label="Cache hit rate" />
-      </div>
-      <dl className="flex flex-col gap-(--s2) text-(length:--fs-sm)">
-        <KeyValue label="Output per turn">{turns ? fmt(sum((row) => row.output_tokens) / turns) : "—"}</KeyValue>
-        <KeyValue label="Turns per session">{sessions.length ? (turns / sessions.length).toFixed(1) : "—"}</KeyValue>
-        <KeyValue label="Cost per session">{costed.length ? fmt(costed.reduce((total, session) => total + session.cost_micros, 0) / 1e6 / costed.length, "cost") : "—"}</KeyValue>
-        <KeyValue label="Agent time per turn">{turns ? fmt(sum((row) => row.agent_ms) / 60_000 / turns, "time") : "—"}</KeyValue>
-      </dl>
-      <details className="mt-(--s3) text-(length:--fs-sm) text-(--fg2)">
-        <summary className="cursor-default text-(--accent) [&::-webkit-details-marker]:hidden">About these numbers</summary>
-        <p className="mt-(--s2) max-w-[62ch]"><b className="font-semibold text-(--fg)">Cache hit rate</b> is cache reads ÷ (cache reads + cache writes + fresh input). Above 95% is normal for long chats. A drop means prompts are being rebuilt, which is where cost goes.</p>
-        <p className="mt-(--s2) max-w-[62ch]"><b className="font-semibold text-(--fg)">Output tokens</b> count what the agent wrote. They are the default because cache reads make up nearly all of "All tokens", which mostly measures context size.</p>
-        <p className="mt-(--s2) max-w-[62ch]"><b className="font-semibold text-(--fg)">Cost</b> is what the agent reports (Claude, Grok, OMP). Codex and Cursor don't report it; those show "—", never $0. Session rows total each session's whole life.</p>
-      </details>
-    </Section>
   )
 }
 

@@ -25,7 +25,6 @@ export function VaultAgents() {
   const now = useNow(true, 60_000)
   const [signingIn, setSigningIn] = useState<string>()
   const machineID = (node: string) => (node === localNode ? LOCAL : node)
-  const machineName = (node: string) => machines.find((item) => item.id === machineID(node))?.name ?? node
   const group = (children: ReactNode) => <Section title="Agent sign-ins"><FormGroup>{children}</FormGroup></Section>
 
   if (routeMissing(shared.error)) return group(<FormRow label={<StatusDot state="needsUpdate" />} description="Update Agentpack on this machine to see agent sign-ins." />)
@@ -36,7 +35,7 @@ export function VaultAgents() {
     <>
       {group(vaultAgents.map((harness) => {
         const row = shared.data.find((item) => item.harness === harness)
-        return <AgentRow key={harness} harness={harness} row={row} status={signInStatus(harness, row, machineName, now)} machines={machines}
+        return <AgentRow key={harness} harness={harness} row={row} status={signInStatus(row, now)} machines={machines}
           publisher={row?.publisher ? machineID(row.publisher) : undefined} onSignIn={() => setSigningIn(harness)} />
       }))}
       <Sheet open={signingIn !== undefined} onOpenChange={(open) => !open && setSigningIn(undefined)}>
@@ -47,12 +46,11 @@ export function VaultAgents() {
 }
 
 function AgentRow({ harness, row, status, machines, publisher, onSignIn }: { harness: string; row?: SharedSignIn; status: string; machines: Machine[]; publisher?: string; onSignIn: () => void }) {
-  const [open, setOpen] = useState(false)
   const phone = useIsPhone()
   const name = harnessName(harness)
   const expired = row?.state === "expired"
   const indent = "ps-[calc(18px+var(--s4))]"
-  const signIn = harness !== "omp" && row?.state !== "shared"
+  const signIn = row?.state !== "shared"
     ? <Button size="sm" aria-label={`Sign in to ${name}…`} onClick={onSignIn}>Sign in…</Button>
     : undefined
   return (
@@ -62,16 +60,10 @@ function AgentRow({ harness, row, status, machines, publisher, onSignIn }: { har
         {name}
       </span>}
       description={<span className={`block ${indent}`}>{status}</span>}
-      detail={<>
-        {/* Phones put the action under the status line. */}
-        {phone && signIn && <div className={indent}>{signIn}</div>}
-        <details className={`w-full text-(length:--fs-sm) ${indent}`} onToggle={(event) => setOpen(event.currentTarget.open)}>
-          <summary className="w-fit cursor-pointer text-(--fg2)">Machines</summary>
-          {open && <ul aria-label={`${name} on each machine`} className="mt-(--s2)">{machines.map((machine) => <MachineLine key={machine.id} harness={harness} machine={machine} />)}</ul>}
-        </details>
-      </>}
+      // Phones put the action under the status line.
+      detail={phone && signIn && <div className={indent}>{signIn}</div>}
     >
-      {harness !== "omp" && row?.state === "shared"
+      {row?.state === "shared"
         ? <HealthyMenu harness={harness} machines={machines} publisher={publisher} onSignIn={onSignIn} />
         : phone ? undefined : signIn}
     </FormRow>
@@ -109,33 +101,6 @@ function HealthyMenu({ harness, machines, publisher, onSignIn }: { harness: stri
         />}
       </ConfirmAlert>
     </>
-  )
-}
-
-// One machine's own view of an agent. Loaded only once the disclosure is open.
-function MachineLine({ harness, machine }: { harness: string; machine: Machine }) {
-  const queryClient = useQueryClient()
-  const accounts = useQuery({ ...agentsQuery(machine.id), enabled: machine.online })
-  // macOS keeps some sign-ins in the keychain, read only when the person asks.
-  const check = useMutation({
-    mutationFn: () => queryClient.fetchQuery({ ...agentsQuery(machine.id, true), staleTime: 0, retry: false }),
-    onSuccess: (data) => queryClient.setQueryData(agentsQuery(machine.id).queryKey, data),
-  })
-  const account = accounts.data?.find((item) => item.harness === harness)
-  const state = !machine.online ? "Offline"
-    : routeMissing(accounts.error) ? "Needs update"
-      : accounts.error ? errorText(accounts.error)
-        : !accounts.data ? undefined
-          : !account?.installed ? "Not installed"
-            : account.checkRequired ? "Unchecked"
-              : account.signedIn ? ["Signed in", account.label].filter(Boolean).join(" · ")
-                : account.error ?? "Not signed in"
-  return (
-    <li className="flex min-h-(--row-h) items-center gap-(--s4) border-t-[0.5px] border-(--sep-soft) first:border-t-0">
-      <span className="w-36 shrink-0 truncate max-[760px]:w-28">{machine.name}</span>
-      <span className="min-w-0 flex-1 truncate text-(--fg2)" title={state}>{check.error ? `Check failed: ${errorText(check.error)}` : state ?? <Spinner />}</span>
-      {machine.online && account?.checkRequired && <Button size="sm" aria-label={`Check ${harnessName(harness)} on ${machine.name}`} disabled={check.isPending} onClick={() => check.mutate()}>Check</Button>}
-    </li>
   )
 }
 

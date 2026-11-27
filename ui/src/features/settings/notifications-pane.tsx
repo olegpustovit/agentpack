@@ -3,12 +3,12 @@ import { Banner } from "@/components/kit/feedback"
 import { FormGroup, FormRow } from "@/components/kit/forms"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { attentionTitle, LIMIT_WARN, loadNotifyPrefs, notificationPermission, saveNotifyPrefs, showNotification, type AlertKind } from "@/features/shell/attention"
+import { LIMIT_WARN, loadNotifyPrefs, notificationPermission, saveNotifyPrefs, showNotification, type AlertKind } from "@/features/shell/attention"
 import { Pane } from "./panes"
 import { PushRows } from "./push-rows"
 
 const events: { kind: AlertKind; label: string; note?: string }[] = [
-  { kind: "needs", label: "An agent needs you", note: "A permission, question or plan is waiting" },
+  { kind: "needs", label: "An agent needs you" },
   { kind: "finished", label: "A turn finishes" },
   { kind: "limit", label: `A limit drops below ${LIMIT_WARN}%` },
   { kind: "offline", label: "A machine goes offline" },
@@ -37,10 +37,7 @@ export function NotificationsPane() {
         </FormRow>
         <PushRows permission={permission} onPermissionChange={setPermission} />
       </FormGroup>
-      <FormGroup
-        title="Notify me when"
-        footer={<>{permission !== "granted" && "Applies once delivery is on. "}The tab title and the installed app's icon badge also count sessions that need you, as in <b className="font-medium text-(--fg)">{attentionTitle(2)}</b>.</>}
-      >
+      <FormGroup title="Notify me when">
         {events.map((event) => (
           <FormRow key={event.kind} label={event.label} htmlFor={`notify-${event.kind}`} description={event.note}>
             <Switch id={`notify-${event.kind}`} checked={prefs[event.kind]} onCheckedChange={(on) => toggle(event.kind, on)} />
