@@ -171,7 +171,7 @@ var oauthConsent = template.Must(template.New("consent").Parse(`<!doctype html>
     <li>Start and stop sessions on connected machines.</li>
     <li>Install packages on connected machines and restart affected agents.</li>
   </ul>
-  <p>In <a href="/settings/account">Settings › Account</a>, choose <strong>Sign out everywhere</strong> to revoke access for all connected assistants and sign out all browsers for this account.</p>
+  <p>In <a href="/settings/general">Settings › General</a>, choose <strong>Sign out everywhere</strong> to revoke access for all connected assistants and sign out all browsers for this account.</p>
   <form method="post" action="{{.Action}}">
     <input type="hidden" name="consent" value="{{.Token}}">
     <button type="submit" name="decision" value="deny">Cancel</button>

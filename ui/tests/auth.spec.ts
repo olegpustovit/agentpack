@@ -39,7 +39,7 @@ test("a 401 during an expired browser login keeps the open page as the destinati
     return route.fallback()
   })
 
-  const destination = "/settings/account#identity"
+  const destination = "/settings/general#identity"
   await page.goto(destination)
   await expect(page.getByRole("heading", { name: "Sign in to Agentpack" })).toBeVisible()
   expect(new URL(page.url()).searchParams.get("return_to")).toBe(destination)

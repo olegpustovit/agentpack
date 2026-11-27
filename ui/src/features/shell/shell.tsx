@@ -16,6 +16,7 @@ import { api } from "@/lib/api"
 import type { SessionInfo } from "@/lib/api-types"
 import { hud } from "@/lib/hud"
 import { queueLastChatTerminal, requestTerminal, terminalShortcut } from "@/features/terminal/shortcuts"
+import { sections } from "@/features/settings/sections"
 import { useAttention } from "./attention"
 import { useIsPhone } from "./use-is-phone"
 import { useSidebar } from "./sidebar"
@@ -197,6 +198,8 @@ function AppToolbar({ onCommands }: { onCommands: () => void }) {
   const discovering = useDiscovering()
   const tab = views.find((item) => item.id === view)
   const title = tab?.label ?? "Agentpack"
+  const pane = useParams({ strict: false, select: (params) => params.pane })
+  const parent = isPhone && pane ? sections.find((section) => section.id === pane)?.parent : undefined
   const backTo = view === "system" ? "/system" : tab?.to ?? "/sessions"
   const hasSidebar = listDetailViews.includes(view)
   const viewsTrack = useSlidingThumb<HTMLElement>('[aria-current="page"]')
@@ -216,9 +219,10 @@ function AppToolbar({ onCommands }: { onCommands: () => void }) {
       )}
       {isPhone && detail && !subagent && (
         <Link
-          to={backTo}
-          href={origin}
-          aria-label={`Back to ${title}`}
+          to={parent ? "/settings/$pane" : backTo}
+          params={parent ? { pane: parent } : undefined}
+          href={parent ? undefined : origin}
+          aria-label={`Back to ${parent ? "General" : title}`}
           className={buttonVariants({ variant: "ghost", size: "icon", className: "shrink-0" })}
         >
           <ChevronLeft />

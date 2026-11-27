@@ -85,8 +85,8 @@ test("on phones the settings index opens the System list and a pane opens full h
   await page.setViewportSize({ width: 390, height: 500 })
   await page.goto("/settings")
   await expect(page).toHaveURL(/\/system$/)
-  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: "Appearance" }).click()
-  await expect(page).toHaveURL(/\/settings\/appearance$/)
+  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: "General" }).click()
+  await expect(page).toHaveURL(/\/settings\/general$/)
   await expect(page.getByRole("navigation", { name: "System" })).toHaveCount(0)
   for (const viewport of [{ width: 390, height: 500 }, { width: 320, height: 568 }]) {
     await page.setViewportSize(viewport)
@@ -108,14 +108,19 @@ test("the settings index opens General", async ({ page }) => {
   await expect(page).toHaveURL(/\/settings\/general$/)
 })
 
-test("general shows gateway state, platform, version and hostname", async ({ page }) => {
+test("General puts Account and Appearance before settings links and machine controls", async ({ page }) => {
   await mockGateway(page)
+  await page.route("**/api/logs/issues*", (route) => answer(route, [{ regressed: true }, { regressed: false }]))
   await page.goto("/settings/general")
-  await expect(page.getByText("Running", { exact: true })).toBeVisible()
-  await expect(page.getByText("linux", { exact: true })).toBeVisible()
-  await expect(page.getByText("0.9.0", { exact: true })).toBeVisible()
-  await expect(page.getByRole("main").or(page.locator("body")).getByText("host-a", { exact: true }).last()).toBeVisible()
-  await expect(page.getByRole("link", { name: /Machine details/ })).toHaveAttribute("href", "/machines/local")
+  const pane = page.getByRole("region", { name: "General" })
+  const groups = pane.locator('[data-slot="form-group"]')
+  await expect(groups).toHaveCount(4)
+  await expect(groups.nth(0).getByRole("heading")).toHaveText("Account")
+  await expect(groups.nth(0).getByText("ada@example.com", { exact: true })).toBeVisible()
+  await expect(groups.nth(1).getByRole("heading")).toHaveText("Appearance")
+  await expect(groups.nth(2).getByRole("link")).toHaveText(["Sharing", "Agents", "Oh My Pi", "Diagnostics2 open"])
+  await expect(groups.nth(3).getByRole("heading")).toHaveText("host-a")
+  await expect(groups.nth(3).getByText("0.9.0 · linux", { exact: true })).toBeVisible()
 })
 
 test("blocked browser delivery keeps event preferences editable", async ({ page }) => {
@@ -125,7 +130,6 @@ test("blocked browser delivery keeps event preferences editable", async ({ page 
   })
   await page.goto("/settings/notifications")
   await expect(page.getByText(/Notifications are blocked for this site/)).toHaveCount(1)
-  await expect(page.getByText(/^Applies once delivery is on\./)).toBeVisible()
   const alert = page.getByRole("switch", { name: "A turn finishes" })
   await expect(alert).toBeChecked()
   await alert.click()
@@ -145,6 +149,8 @@ test("the sharing switch sends the new state and says when it applies", async ({
   await expect.poll(() => calls).toEqual([{ request: "POST /api/settings/sharing", body: { enabled: false } }])
   await expect(page.getByText("Disabled. Local CLI sessions still work.")).toBeVisible()
   await expect(page.getByText("Sharing change applies within five seconds. Local CLI sessions keep running.")).toBeVisible()
+  await page.getByRole("link", { name: "Back to General" }).click()
+  await expect(page).toHaveURL(/\/settings\/general$/)
 })
 
 test("a catch-all proxy suggests nothing; the owner types the address and it is checked", async ({ page }) => {
@@ -235,12 +241,12 @@ test("replication lists what a peer receives and links removal to credential rec
   await expect(page.getByRole("link", { name: "Open Vault" })).toBeVisible()
 })
 
-test("appearance sets the theme and keeps it across a reload", async ({ page }) => {
+test("the former Appearance URL opens General, where the theme persists across reload", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings/appearance")
+  await expect(page).toHaveURL(/\/settings\/general$/)
   await page.getByRole("button", { name: "Dark" }).click()
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark")
-  await expect(page.getByText("Currently Dark")).toBeVisible()
 
   await page.reload()
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark")
@@ -248,35 +254,25 @@ test("appearance sets the theme and keeps it across a reload", async ({ page }) 
   await page.getByRole("button", { name: "System" }).click()
   await expect(page.locator("html")).not.toHaveAttribute("data-theme")
   await page.emulateMedia({ colorScheme: "light" })
-  await expect(page.getByText("Currently Light")).toBeVisible()
+  await expect(page.getByRole("status").filter({ hasText: "Currently light" })).toBeVisible()
 })
 
-test("an old Accessibility link opens Appearance, where screen reader mode explains its browser scope", async ({ page }) => {
+test("the former Accessibility URL opens the screen reader setting in General", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings/accessibility")
-  await expect(page).toHaveURL(/\/settings\/appearance$/)
+  await expect(page).toHaveURL(/\/settings\/general$/)
   await expect(page.getByRole("group", { name: "Theme" })).toBeVisible()
   const mode = page.getByRole("switch", { name: "Terminal screen reader mode" })
-  await expect(mode).toHaveAccessibleDescription("Open terminals reconnect with this setting.")
   await mode.click()
   await page.reload()
   await expect(mode).toBeChecked()
-})
-
-test("account shows the signed-in identity and the attribution sentence", async ({ page }) => {
-  await mockGateway(page)
-  await page.goto("/settings/account")
-  const account = page.getByRole("region", { name: "Account" })
-  await expect(account.getByText("ada@example.com", { exact: true })).toHaveCount(2)
-  await expect(account.getByText("Sessions you start are attributed to this account.")).toBeVisible()
-  await expect(account.getByText("Signing out leaves running agents running.")).toBeVisible()
 })
 
 test("stop all agents asks first and sends nothing until confirmed", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings/general")
 
-  await page.getByRole("button", { name: "Stop agents…" }).click()
+  await page.getByRole("button", { name: "Stop all…", exact: true }).click()
   const dialog = page.getByRole("alertdialog")
   await expect(dialog).toContainText("Stop all agents on host-a?")
   expect(calls).toEqual([])
@@ -290,7 +286,7 @@ test("stop gateway in General names the machine and how to reconnect", async ({ 
   await mockGateway(page)
   await page.goto("/settings/general")
 
-  await page.getByRole("button", { name: "Stop gateway…" }).click()
+  await page.getByRole("button", { name: "Stop…", exact: true }).click()
   const dialog = page.getByRole("alertdialog")
   await expect(dialog).toContainText("Stop the gateway on host-a?")
   await expect(dialog).toContainText("ap gateway start on host-a")
@@ -301,19 +297,13 @@ test("stop gateway in General names the machine and how to reconnect", async ({ 
 
   await dialog.getByRole("button", { name: "Stop gateway" }).click()
   await expect.poll(() => calls).toEqual([{ request: "POST /api/node/stop", body: null }])
-  await expect(page.getByRole("button", { name: "Stop gateway…" })).toBeDisabled()
+  await expect(page.getByRole("button", { name: "Stop…", exact: true })).toBeDisabled()
 })
 
-test("account holds identity only; machine controls live in General", async ({ page }) => {
+test("the former Account URL opens General, where Sign out returns to login", async ({ page }) => {
   await mockGateway(page)
   await page.goto("/settings/account")
-  await expect(page.getByRole("button", { name: "Sign out everywhere…" })).toBeVisible()
-  await expect(page.getByRole("button", { name: "Stop gateway…" })).toHaveCount(0)
-})
-
-test("sign out calls the logout endpoint and returns to the login card", async ({ page }) => {
-  await mockGateway(page)
-  await page.goto("/settings/account")
+  await expect(page).toHaveURL(/\/settings\/general$/)
 
   await page.getByRole("button", { name: "Sign out", exact: true }).click()
 
@@ -385,7 +375,7 @@ test("first run claims the owner account and signs in", async ({ page }) => {
     { request: "POST /api/claim", body: { email: "ada@example.com", password: "correct horse battery" } },
   ])
   await expect(page).toHaveURL(/\/sessions$/)
-  await page.goto("/settings/account")
+  await page.goto("/settings/general")
   if (process.env.CAPTURE) {
     await expect(page.getByRole("button", { name: "Sign out", exact: true })).toBeVisible()
     await page.screenshot({ path: test.info().outputPath("account-mobile.png"), animations: "disabled" })
@@ -417,7 +407,7 @@ test("a failed claim keeps the consent return_to", async ({ page }) => {
 
 test("sign out everywhere confirms before revoking account logins", async ({ page }) => {
   await mockGateway(page)
-  await page.goto("/settings/account")
+  await page.goto("/settings/general")
   await page.getByRole("button", { name: "Sign out everywhere…", exact: true }).click()
   const dialog = page.getByRole("alertdialog")
   await expect(dialog).toContainText("Sign out everywhere?")
@@ -483,33 +473,38 @@ test("phone Vault shows visible actions and the OAuth return state on its row", 
   await expect(page.getByRole("listitem").filter({ hasText: "Client" }).getByRole("button", { name: "Try again" })).toHaveCount(0)
 })
 
-test("Vault lists agent sign-ins, opens the sign-in sheet and tolerates an older gateway", async ({ page }) => {
+test("Vault shows signed-in and expired agents and opens the sign-in sheet", async ({ page }) => {
   await mockGateway(page)
-  let shared = 200
+  await page.setViewportSize({ width: 390, height: 700 })
+  await page.clock.setFixedTime(new Date("2026-11-27T12:00:00Z"))
   await page.route("**/api/mcp/credentials", (route) => answer(route, { callback_url: "", credentials: [] }))
   await page.route("**/api/agents", (route) => answer(route, { agents: [
     { harness: "cursor", installed: true, signed_in: false, methods: [{ id: "cursor", label: "Cursor account" }] },
   ] }))
-  await page.route("**/api/agents/shared", (route) => shared === 200
-    ? answer(route, { agents: [{ harness: "claude", state: "shared", publisher_node: "n1" }, { harness: "cursor", state: "none" }] })
-    : route.fulfill({ status: shared, body: "404 page not found" }))
+  await page.route("**/api/agents/shared", (route) => answer(route, { agents: [
+    { harness: "claude", state: "shared", publisher_node: "n1" },
+    { harness: "cursor", state: "expired", expires_at: "2026-11-27T10:00:00Z" },
+  ] }))
   await page.goto("/settings/connections")
   const pane = page.getByRole("region", { name: "Vault" })
-  await expect(pane.getByText("Shared from host-a")).toBeVisible()
+  await expect(pane.getByText("Signed in", { exact: true })).toBeVisible()
+  await expect(pane.getByText("Expired 2 h ago", { exact: true })).toBeVisible()
   await expect(pane.getByRole("button", { name: "Claude actions" })).toBeVisible()
-  await pane.getByRole("button", { name: "Sign in to Cursor CLI…" }).click()
-  await expect(page.getByRole("dialog").getByRole("button", { name: "Sign in with Cursor account" })).toBeVisible()
-  await page.keyboard.press("Escape")
-
   // Phones put the action under the status line.
-  await page.setViewportSize({ width: 390, height: 700 })
-  const status = await pane.getByText("Not shared yet").first().boundingBox()
-  const action = await pane.getByRole("button", { name: "Sign in to Cursor CLI…" }).boundingBox()
+  const signIn = pane.getByRole("button", { name: "Sign in to Cursor CLI…" })
+  const status = await pane.getByText("Expired 2 h ago", { exact: true }).boundingBox()
+  const action = await signIn.boundingBox()
   expect(action!.y).toBeGreaterThanOrEqual(status!.y + status!.height)
 
-  shared = 404
-  await page.reload()
-  await expect(pane.getByText("Update Agentpack on this machine to see agent sign-ins.")).toBeVisible()
+  await signIn.click()
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Sign in with Cursor account" })).toBeVisible()
+})
+
+test("Vault asks for an update when the gateway lacks shared agent sign-ins", async ({ page }) => {
+  await mockGateway(page)
+  await page.route("**/api/agents/shared", (route) => route.fulfill({ status: 404, body: "404 page not found" }))
+  await page.goto("/settings/connections")
+  await expect(page.getByText("Update Agentpack on this machine to see agent sign-ins.")).toBeVisible()
 })
 
 const secret = (id: string, label: string, name: string, plugins: string[] = []) => ({ id, match: "", kind: "env", label, status: "connected", names: [name], plugins })
@@ -596,35 +591,15 @@ test("removing a shared secret asks first", async ({ page }) => {
   await expect.poll(() => calls.map((call) => call.request)).toEqual(["DELETE /api/mcp/credentials/e1"])
 })
 
-test("sidebar search filters sections, opens the first match on Enter and clears on Escape", async ({ page }) => {
+test("the System sidebar has six links and shows the Vault sign-in badge", async ({ page }) => {
   await mockGateway(page)
-  await page.goto("/settings")
-  const sidebar = page.getByRole("navigation", { name: "System" })
-  const search = page.getByLabel("Search system")
-  await search.fill("mcp")
-  await expect(sidebar.getByRole("link")).toHaveCount(3)
-  await expect(sidebar.getByRole("link", { name: "Appearance" })).toBeHidden()
-  await search.press("Enter")
-  await expect(page).toHaveURL(/\/settings\/sharing$/)
-  await search.press("Escape")
-  await expect(search).toHaveValue("")
-  await expect(sidebar.getByRole("link", { name: "Appearance" })).toBeVisible()
-})
-
-test("sidebar shows badges for issues, expired logins and peers that are behind", async ({ page }) => {
-  await mockGateway(page)
-  await page.route("**/api/logs/issues*", (route) => answer(route, [{ regressed: true }, { regressed: false }]))
   await page.route("**/api/mcp/credentials", (route) => answer(route, { credentials: [
     { id: "c1", match: "https://mcp.example/mcp", kind: "oauth", label: "Work", status: "needs_login" },
   ] }))
-  await page.route("**/api/library/replication/peers", (route) => answer(route, {
-    ...replication, contacts: { n2: { needs_update: true } },
-  }))
-  await page.goto("/settings")
+  await page.goto("/settings/general")
   const sidebar = page.getByRole("navigation", { name: "System" })
-  for (const name of ["Diagnostics 2", "Vault 1 to sign in", "Replication 1 not syncing"]) {
-    await expect(sidebar.getByRole("link", { name, exact: true })).toBeVisible()
-  }
+  await expect(sidebar.getByRole("link")).toHaveText(["Usage", "Limits", "Topology", "General", "Vault1 to sign in", "Notifications"])
+  await expect(sidebar.getByRole("group", { name: "Settings" }).getByRole("link")).toHaveCount(3)
 })
 
 test("turning agentpack tools off writes only that default and disables replacement", async ({ page }) => {

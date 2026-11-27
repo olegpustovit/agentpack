@@ -130,6 +130,17 @@ test("a direct phone Settings pane returns to the System list", async ({ page })
   await expect(page.getByRole("link", { name: "Notifications" })).toBeVisible()
 })
 
+test("phone toolbar Back returns from a Settings sub-pane to General", async ({ page, isMobile }) => {
+  test.skip(!isMobile, "phone toolbar")
+  await mockAPI(page)
+  await page.goto("/system")
+  await page.getByRole("link", { name: "General", exact: true }).click()
+  await page.getByRole("link", { name: "Sharing", exact: true }).click()
+  await expect(page).toHaveURL(/\/settings\/sharing$/)
+  await page.getByRole("link", { name: "Back to General", exact: true }).click()
+  await expect(page).toHaveURL(/\/settings\/general$/)
+})
+
 test("phone System stays selected at its list, topology and a machine", async ({ page }) => {
   await mockAPI(page)
   await page.setViewportSize({ width: 390, height: 844 })
@@ -160,7 +171,7 @@ test("the skip link and palette are visible entry points and Settings moves focu
   await expect(skip).toBeFocused()
   await page.keyboard.press("Enter")
   await expect(page.getByRole("main")).toBeFocused()
-  await page.getByRole("link", { name: "Appearance", exact: true }).click()
+  await page.getByRole("link", { name: "Sharing", exact: true }).click()
   const heading = page.getByRole("heading", { level: 1 })
   await expect(heading).toHaveCount(1)
   await expect(heading).toBeFocused()
