@@ -52,6 +52,8 @@ stops the agent if it is running and asks for confirmation if it would interrupt
 a busy agent. Use the project or machine header menu to close several sessions
 at once. The toolbar activity viewer offers one **Undo** for the whole close.
 
+After upgrading, ended chats you previously archived appear in History once their gateway restores them in the background.
+
 Work's **History** section shows the three most recently closed chats.
 Select **Show all** to browse chat history by date, search by name or project,
 or filter by project, machine or agent. A project's **History** tab in the

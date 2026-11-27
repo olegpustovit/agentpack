@@ -90,3 +90,64 @@ func TestSessionHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestRestoreLegacyHistory(t *testing.T) {
+	g, _ := identityGateway(t, t.TempDir(), nil)
+	ctx := t.Context()
+	if _, err := g.store.DB.ExecContext(ctx, `
+		INSERT INTO sessions(id,node_id,hidden,transport,last_used,ended_at,archived_at) VALUES
+		('prompted',`+state.LocalNodeSQL+`,1,'acp',30,20,0),
+		('fallback',`+state.LocalNodeSQL+`,1,'acp',0,20,0),
+		('empty',`+state.LocalNodeSQL+`,1,'acp',30,20,0),
+		('remote','other',1,'acp',30,20,0),
+		('live',`+state.LocalNodeSQL+`,1,'acp',30,0,0),
+		('archived',`+state.LocalNodeSQL+`,1,'acp',30,20,40),
+		('terminal',`+state.LocalNodeSQL+`,1,'terminal',30,20,0);
+		WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM numbers WHERE n<129)
+		INSERT INTO sessions(id,node_id,hidden,transport,last_used,ended_at)
+		SELECT 'batch-'||n,`+state.LocalNodeSQL+`,1,'acp',30,20 FROM numbers;
+		INSERT INTO conversation_events(session_id,seq,body)
+		SELECT id,1,'{"kind":"prompt"}' FROM sessions WHERE id<>'empty';
+	`); err != nil {
+		t.Fatal(err)
+	}
+	check := func(id string, wantHidden int, wantClosed int64) {
+		t.Helper()
+		var hidden int
+		var closed int64
+		if err := g.store.Reader.QueryRowContext(ctx, "SELECT hidden,closed_at FROM sessions WHERE id=?", id).Scan(&hidden, &closed); err != nil {
+			t.Fatal(err)
+		}
+		if hidden != wantHidden || closed != wantClosed {
+			t.Errorf("%s: hidden=%d closed_at=%d, want %d and %d", id, hidden, closed, wantHidden, wantClosed)
+		}
+	}
+	if err := restoreLegacyHistory(ctx, g.store); err != nil {
+		t.Fatal(err)
+	}
+	check("prompted", 0, 30)
+	check("fallback", 0, 20)
+	var restored int
+	if err := g.store.Reader.QueryRowContext(ctx, "SELECT count(*) FROM sessions WHERE id LIKE 'batch-%' AND hidden=0 AND closed_at=30").Scan(&restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored != 129 {
+		t.Errorf("restored %d of 129 batch chats", restored)
+	}
+	for _, id := range []string{"empty", "remote", "live", "archived", "terminal"} {
+		check(id, 1, 0)
+	}
+	// Make a row eligible after completion and open a fresh store as a gateway restart would.
+	if _, err := g.store.DB.ExecContext(ctx, "UPDATE sessions SET ended_at=20 WHERE id='live'"); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := state.Open(g.options.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := restoreLegacyHistory(ctx, reopened); err != nil {
+		t.Fatal(err)
+	}
+	check("live", 1, 0)
+}

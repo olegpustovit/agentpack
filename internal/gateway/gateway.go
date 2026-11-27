@@ -217,6 +217,11 @@ func ServeGateway(ctx context.Context, options GatewayOptions) (result error) {
 	defer server.Close()
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
+	background.Add(1)
+	obs.Go("gateway.restore_legacy_history", func() {
+		defer background.Done()
+		gateway.restoreLegacyHistory(ctx)
+	})
 	select {
 	case err := <-done:
 		if !errors.Is(err, http.ErrServerClosed) {
