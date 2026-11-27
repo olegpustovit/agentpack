@@ -114,17 +114,20 @@ test("save, rename, preview and restore an agentpack in the Library", async ({ p
   expect(restoreBody).toEqual({ directory: "/work/my-project", restart: false, preview_digest: "restore-current" })
 })
 
-test("offline package rows save drafts and require a fresh review before apply", async ({ page }) => {
+test("an existing offline package draft requires a fresh review before apply", async ({ page }) => {
   await page.clock.install()
   await mockAPI(page)
   await mockLibraryBase(page)
-  let online = true
+  let online = false
   let ready = false
   let digest: string | undefined
-  let drafts: Record<string, unknown>[] = []
   let discarded = false
   const packageRequests: { body: unknown; node: string | null }[] = []
   const item = { id: "package-1", module: "github.com/acme/tools", commit: "abcd1234", content_hash: "sha256-tree-v1:abc", kind: "plugin", name: "Tools", cache_key: "cache-key" }
+  let drafts = [{
+    id: "draft-1", created_at: "2026-10-28T12:00:00Z", item: `${item.module}@${item.commit}`,
+    node: peer.id, directory: "/srv/project", reason: "Machine offline", folder_identity: "folder-fingerprint", expected_pins: {},
+  }]
   await page.route("**/api/nodes*", (route) => route.fulfill({ json: [{ ...peer, online }] }))
   await page.route("**/api/projects**", (route) => {
     const rows = new URL(route.request().url()).searchParams.get("node") === peer.id ? [projectRow("/srv/project", [{ harness: "claude" }], { folder_id: "folder-fingerprint" })] : []
@@ -132,14 +135,7 @@ test("offline package rows save drafts and require a fresh review before apply",
   })
   await page.route("**/api/library/packages**", (route) => route.fulfill({ json: [item] }))
   await page.route("**/api/library/agentpacks**", (route) => route.fulfill({ json: [] }))
-  await page.route(/\/api\/library\/drafts(\?.*)?$/, async (route) => {
-    if (route.request().method() === "POST") {
-      const input: Record<string, unknown> = route.request().postDataJSON()
-      drafts = [{ ...input, id: "draft-1", created_at: "2026-10-28T12:00:00Z" }]
-      return route.fulfill({ json: drafts[0] })
-    }
-    return route.fulfill({ json: drafts })
-  })
+  await page.route("**/api/library/drafts", (route) => route.fulfill({ json: drafts }))
   await page.route("**/api/library/drafts/draft-1/review", (route) =>
     route.fulfill({
       json: { draft: drafts[0], ready, pins_match: false, folder_match: true, reason: ready ? "Destination pins changed." : "Build server is offline.", diff: { add: [], update: [item.module], remove: [], mode: "default", preview_digest: digest } },
@@ -162,21 +158,10 @@ test("offline package rows save drafts and require a fresh review before apply",
   })
 
   await page.goto("/library")
-  await expect(page.getByRole("link", { name: /Tools/ })).toBeVisible()
-  online = false
-  await refreshMachines(page)
-  await page.getByRole("link", { name: /Tools/ }).click()
-  await page.getByRole("button", { name: "Install…" }).click()
-  await page.locator("label").filter({ hasText: "Offline · install as draft" }).click()
-  await page.getByRole("button", { name: "Save 1 draft" }).click()
-  await page.getByRole("button", { name: "Done", exact: true }).click()
-  // Phones show one pane at a time, and Pending changes lives in the list pane, so reopen the list.
-  await page.goto("/library")
   const pending = page.getByRole("region", { name: "Pending changes" })
   await expect(pending).toBeVisible()
   await expect(pending).toContainText("Reconnecting never applies a draft.")
   await expect(pending).toContainText("Offline")
-  expect(drafts[0]).toMatchObject({ item: `${item.module}@${item.commit}`, node: "peer-1", directory: "/srv/project", folder_identity: "folder-fingerprint", expected_pins: {} })
 
   await pending.getByRole("button", { name: "Review again" }).click()
   await expect(page.getByText("Build server is offline.", { exact: true })).toBeVisible()

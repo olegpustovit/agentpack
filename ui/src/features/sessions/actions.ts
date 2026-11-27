@@ -72,7 +72,7 @@ export function useSessionCommands(onClosePending?: (session: ListedSession, pen
 
 // Project settings and Install package open the project's page in the main pane; Install focuses its search.
 export function projectPage(machine: string, directory: string, install = false) {
-  return { to: "/sessions/project/$machine/$folder", params: { machine, folder: directory }, search: install ? { install: "1" } : {} } as const
+  return { to: "/sessions/project/$machine/$folder", params: { machine, folder: directory }, search: install ? { install: 1 } : {} } as const
 }
 
 const setClosed = (session: ListedSession, closed: boolean) =>

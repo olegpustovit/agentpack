@@ -8,7 +8,6 @@ export const Route = createFileRoute("/_app/library/package/$")({
     type: "text",
     sort: "text",
     add: "flag",
-    install: "flag",
   }),
   component: PackageRoute,
 })

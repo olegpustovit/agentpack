@@ -1,4 +1,3 @@
-import { getRouteApi } from "@tanstack/react-router"
 import { useState, type ReactNode } from "react"
 import { Puzzle, RefreshCw, Sparkles } from "lucide-react"
 import { DataGrid, DataGridCell, DataGridHead, DataGridHeaderCell, DataGridRow, Hash, Inspector, InspectorHead, KeyValue, Section } from "@/components/kit/data"
@@ -11,10 +10,8 @@ import { installedIn, packageRecord, packageVersions, type InstalledRow, type Ve
 import { Failures, MissingItem } from "./inspector-state"
 import type { PackageItem } from "./model"
 import { useLatest, useLibrary } from "./use-library"
-import { InstallSheet } from "./install-sheet"
+import { InstallProjectMenu } from "./install-project-menu"
 import { UpdateSheet, type UpdateTarget } from "./update-sheet"
-
-const route = getRouteApi("/_app/library/package/$")
 
 const sourceName = (module: string) => module.replace(/^github\.com\//i, "")
 
@@ -38,9 +35,6 @@ export function PackageInspector({ module }: { module: string }) {
     (entry): entry is PackageItem =>
       (entry.type === "skill" || entry.type === "plugin") && entry.sources.some((source) => source.toLowerCase() === module.toLowerCase()),
   )
-  const [picked, setPicked] = useState<{ module: string; commit: string }>()
-  const search = route.useSearch()
-  const navigate = route.useNavigate()
   const latest = useLatest(inputs, item?.sources ?? [], Boolean(item))
   const [review, setReview] = useState<UpdateTarget[]>([])
   if (!item) {
@@ -55,7 +49,7 @@ export function PackageInspector({ module }: { module: string }) {
   const known = packageVersions(inputs, item.sources)
   // A newer version nobody has fetched yet still belongs in the list.
   const installed = installedIn(inputs, item.sources)
-  const chosen = picked ?? { module: item.module, commit: latestOf(item.module)?.commit ?? item.commit }
+  const chosen = { module: item.module, commit: latestOf(item.module)?.commit ?? item.commit }
   const record = packageRecord(inputs, chosen.module, chosen.commit) ?? packageRecord(inputs, item.module, item.commit)
   const behind = installed.flatMap((row) => {
     const newest = latestOf(row.module)
@@ -64,11 +58,6 @@ export function PackageInspector({ module }: { module: string }) {
   const updatable = behind.filter(({ row }) => row.online)
   const kind = item.type === "plugin" ? "Plugin" : "Skill"
   const Glyph = item.type === "plugin" ? Puzzle : Sparkles
-  const openInstall = (version: { module: string; commit: string }) => {
-    setPicked(version)
-    void navigate({ search: (prev) => ({ ...prev, install: "1" }) })
-  }
-
   const fresh = new Map<string, VersionRow>()
   for (const source of item.sources) {
     const newest = latestOf(source)
@@ -95,9 +84,9 @@ export function PackageInspector({ module }: { module: string }) {
     return latestOf(row.module) ? "Latest" : latest.checking ? "Checking…" : "Unknown"
   }
   const installVersion = (version: VersionRow) => (
-    <Button size="sm" variant="ghost" onClick={() => openInstall(version)}>
+    <InstallProjectMenu size="sm" variant="ghost" name={item.name} target={{ spec: `${version.module}@${version.commit}` }}>
       {`Install ${shortHash(version.commit)}…`}
-    </Button>
+    </InstallProjectMenu>
   )
   const used = (version: VersionRow) => (version.projects ? `${plural(version.projects, "project")} · ${version.machines.join(", ")}` : "Not installed")
   return (
@@ -117,9 +106,9 @@ export function PackageInspector({ module }: { module: string }) {
             {`Update ${plural(updatable.length, "project")}…`}
           </Button>
         )}
-        <Button type="button" variant="primary" onClick={() => openInstall(chosen)}>
+        <InstallProjectMenu variant="primary" name={item.name} target={{ spec: `${chosen.module}@${chosen.commit}` }}>
           Install…
-        </Button>
+        </InstallProjectMenu>
       </InspectorHead>
       {latest.failed && (
         <Banner tone="warn" className="col-span-full flex flex-wrap items-center justify-between gap-(--s3)">
@@ -222,13 +211,6 @@ export function PackageInspector({ module }: { module: string }) {
         </dl>
       </Section>
       <UpdateSheet targets={review} onClose={() => setReview([])} />
-      <InstallSheet
-        item={{ module: chosen.module, commit: chosen.commit, name: item.name, cache_key: record?.commit === chosen.commit ? record.cache_key : "", content_hash: record?.commit === chosen.commit ? record.content_hash : undefined }}
-        open={search.install === "1"}
-        onOpenChange={(open) => {
-          if (!open) void navigate({ search: (prev) => ({ ...prev, install: undefined }), replace: true })
-        }}
-      />
     </Inspector>
   )
 }

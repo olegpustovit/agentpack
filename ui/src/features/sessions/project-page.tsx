@@ -19,7 +19,7 @@ import { connectionsQuery, loginsFor, serverName, type Connection } from "@/feat
 import { useIsPhone } from "@/features/shell/use-is-phone"
 import { api, ApiError, errorText, LOCAL, routeMissing } from "@/lib/api"
 import type { CatalogItem, MCPServerInput, ProjectMCP, ProjectPackage } from "@/lib/api-types"
-import { basename, plural } from "@/lib/format"
+import { basename, plural, shortHash } from "@/lib/format"
 import { hud } from "@/lib/hud"
 import { cn } from "@/lib/utils"
 import { ProjectSignInStatus, useProjectSignIn } from "./project-sign-in"
@@ -119,7 +119,7 @@ const kindLabel = { skill: "Skill", plugin: "Plugin", mcp: "MCP server" }
 // A project's page in the main pane, as VS Code's Extensions view: one search over what is installed here, what the
 // mesh already pins (Library) and the public catalogs, with the same row for each. Installed rows carry their
 // controls (Remove, the server switch and its login); the rest carry Install. Nothing to save; Remove offers Undo.
-export function ProjectPage({ machine, directory, install }: { machine: string; directory: string; install: boolean }) {
+export function ProjectPage({ machine, directory, install, find }: { machine: string; directory: string; install: boolean; find?: string }) {
   const queryClient = useQueryClient()
   const isPhone = useIsPhone()
   const origin = useRouterState({ select: (state) => state.location.state.sectionOrigin })
@@ -130,7 +130,8 @@ export function ProjectPage({ machine, directory, install }: { machine: string; 
   const active = summary?.details_deferred ? details : projects
   const project = summary?.details_deferred ? details.data : summary
   const { items: library } = useLibrary()
-  const [text, setText] = useState("")
+  const target = useRouterState({ select: (state) => state.location.state.projectInstall })
+  const [text, setText] = useState(find ?? "")
   const needle = text.trim().toLowerCase()
   const catalog = useQuery(catalogQuery(useSettled(text.trim())))
   const connections = useQuery(connectionsQuery(false))
@@ -230,9 +231,26 @@ export function ProjectPage({ machine, directory, install }: { machine: string; 
   // Catalog servers (`add`) were already matched by the registry, which searches more than it returns.
   const results = needle ? all.filter((entry) => entry.add || `${entry.name} ${entry.description ?? ""} ${entry.from ?? ""}`.toLowerCase().includes(needle))
     .sort((a, b) => rank(a) - rank(b)) : []
-  const spec = sourceSpec(text)
+  // A handoff preserves the selected pin or server definition even when the catalog cannot supply it.
+  const selectedTarget = text === find && target
+  if (find && selectedTarget) {
+    const key = selectedTarget.server ? `mcp:${selectedTarget.server.name.toLowerCase()}` : `pkg:${moduleOf(selectedTarget.spec)}`
+    const entry = entries.get(key)
+    const commit = selectedTarget.spec?.split("@")[1]
+    const changingPin = entry?.pkg && commit && entry.pkg.commit !== commit
+    const selected: Entry = entry && !available(entry) && !changingPin ? entry : {
+      key, kind: entry?.kind ?? (selectedTarget.server ? "mcp" : "plugin"), name: find,
+      description: changingPin ? `Version ${shortHash(commit)}` : entry?.description,
+      from: entry?.from ?? (selectedTarget.spec ? shortSource(selectedTarget.spec) : selectedTarget.server?.url),
+      elsewhere: entry?.elsewhere ?? [], spec: selectedTarget.spec, add: selectedTarget.server,
+    }
+    const index = results.findIndex((result) => result.key === key)
+    if (index >= 0) results.splice(index, 1)
+    results.unshift(selected)
+  }
+  const spec = selectedTarget ? undefined : sourceSpec(text)
   if (spec && !entries.has(`pkg:${moduleOf(spec)}`)) results.unshift({ key: `source:${spec}`, kind: "plugin", name: shortSource(spec), description: "Install from this GitHub source", from: "GitHub", elsewhere: [], spec, pasted: true })
-  const pasted = pastedServer(text, taken)
+  const pasted = selectedTarget ? undefined : pastedServer(text, taken)
   if (pasted) results.unshift({ key: `add:${pasted.name}`, kind: "mcp", name: pasted.name, description: pasted.url ?? [pasted.command, ...(pasted.args ?? [])].join(" "), from: pasted.url ? new URL(pasted.url).host : "Command", elsewhere: [], add: pasted, pasted: true })
   const suggestions = all.filter(available).sort((a, b) => rank(a) - rank(b))
   // At rest Discover shows a few of each kind, so servers aren't buried under the plugin list.

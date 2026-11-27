@@ -197,11 +197,11 @@ The gateway's browser app lives in `ui/` (Vite, Bun only; no Node or npm). `make
 | `/login` | `return_to` |
 | `/sessions` | `q`, `group`, `new`, `view` (`history`), `find` (text), `project` (folder name), `on` (node ID), `by` (agent) |
 | `/sessions/$machine/$sessionId` | same, plus `sub` (the subagent open in the main view) |
-| `/sessions/project/$machine/$folder` | same, plus `install` (focuses project search) |
+| `/sessions/project/$machine/$folder` | same, plus `install` (focuses project search); `find` prefills project search |
 | `/library` | `q`, `type`, `sort`, `add` |
-| `/library/package/$` | same, plus `install` |
+| `/library/package/$` | same |
 | `/library/mcp/$name` | same |
-| `/library/discover` | same; Install… sets `add` to the spec |
+| `/library/discover` | same |
 | `/library/agentpack/$id` | same, plus `revision`, `restore` |
 | `/system` | none. Desktop redirects to `/usage`; phones show the System list |
 | `/usage` | `range` (`day`, `week`, `month`), `back`, `metric`, and the filters `project` (folder name), `machine` (node ID), `agent` |

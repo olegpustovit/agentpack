@@ -120,7 +120,7 @@ test("selecting a row opens its detail and keeps the query", async ({ page }) =>
   await expect(page).toHaveURL(/\/library\/mcp\/foo-tools\?type=mcp&q=foo$/)
 })
 
-test("Discover lists the catalog and Install… opens Add package with the spec filled in", async ({ page }) => {
+test("Discover lists installable catalog items and source errors", async ({ page }) => {
   await page.route(/\/api\/library\/catalog(\?.*)?$/, (route) =>
     route.fulfill({
       json: {
@@ -138,11 +138,10 @@ test("Discover lists the catalog and Install… opens Add package with the spec 
   const catalog = page.getByRole("list", { name: "Catalog" })
   await expect(catalog.getByRole("listitem").filter({ hasText: "foo-tools" })).toContainText("In 2 projects")
   await expect(page.getByText("Couldn't reach MCP Registry: 502 Bad Gateway")).toBeVisible()
-  await catalog.getByRole("button", { name: "Install hookify…" }).click()
-  await expect(page.getByRole("dialog").getByLabel("Package", { exact: true })).toHaveValue("github.com/anthropics/claude-plugins-official/plugins/hookify")
+  await expect(catalog.getByRole("button", { name: "Install hookify…" })).toBeVisible()
 })
 
-test("Discover installs an MCP server into a chosen project; an older peer reads Needs update", async ({ page }) => {
+test("Discover hands an MCP definition to the project page and reports an older peer", async ({ page }) => {
   const server = { name: "new-server", command: "npx", args: ["-y", "@acme/new-server"] }
   await page.route(/\/api\/library\/catalog(\?.*)?$/, (route) =>
     route.fulfill({ json: { items: [{ kind: "mcp", name: "new-server", source: "MCP Registry", command: "agentpack mcp add new-server --command npx --args -y @acme/new-server", server }], sources: [] } }),
@@ -159,17 +158,29 @@ test("Discover installs an MCP server into a chosen project; an older peer reads
   await expect(page.getByRole("menuitem", { name: "Copy command" })).toBeVisible()
   await page.keyboard.press("Escape")
   await row.getByRole("button", { name: "Install new-server…" }).click()
-  const dialog = page.getByRole("dialog")
-  await dialog.getByRole("combobox", { name: "Project" }).click()
-  await page.getByRole("option", { name: /oracle/ }).click()
-  await dialog.getByRole("button", { name: "Install", exact: true }).click()
-  await expect(dialog).toContainText("Couldn't install new-server: Needs update")
-  await dialog.getByRole("combobox", { name: "Project" }).click()
-  await page.getByRole("option", { name: /agentpack/ }).click()
-  await expect(dialog.getByRole("checkbox", { name: "Restart affected agents now" })).not.toBeChecked()
-  await dialog.getByRole("button", { name: "Install", exact: true }).click()
-  await expect(dialog).toBeHidden()
-  expect(posted.at(-1)).toEqual({ node: "local", body: { ...server, directory: "/home/oleg/agentpack", restart: false } })
+  await page.getByRole("dialog", { name: "Choose a project" }).getByRole("link", { name: "oracle · oracle-vm" }).click()
+  await page.getByRole("button", { name: "Install new-server" }).click()
+  await expect(page.getByText("Couldn't install new-server. Update agentpack on oracle-vm to change this project.")).toBeVisible()
+  expect(posted).toEqual([{ node: "n2", body: { ...server, directory: "/srv/oracle", restart: false } }])
+})
+
+test("the MCP inspector can install a pinned npm server absent from the catalog", async ({ page }) => {
+  await page.route("**/api/library/catalog**", (route) => route.fulfill({ json: { items: [], sources: [] } }))
+  await page.route("**/api/projects*", (route) => {
+    const rows = machineOf(route.request().url()) === "local"
+      ? [...machines.local!.projects, folder("/home/oleg/other", "other", [])]
+      : machines.n2!.projects
+    return route.fulfill({ json: rows })
+  })
+  await page.route("**/api/mcp/servers", (route) => route.fulfill({ json: { installed: true } }))
+  await page.goto("/library/mcp/foo-tools")
+  await page.getByRole("button", { name: "Install in another project…" }).click()
+  await page.getByRole("dialog", { name: "Choose a project" }).getByRole("link", { name: "other · host-a" }).click()
+  const posted = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/api/mcp/servers")
+  await page.getByRole("button", { name: "Install foo-tools" }).click()
+  expect((await posted).postDataJSON()).toEqual({
+    directory: "/home/oleg/other", name: "foo-tools", command: "npx", args: ["-y", "@acme/foo-tools@1.2.3"], restart: false,
+  })
 })
 
 test("sort popup writes sort to the URL", async ({ page }) => {
@@ -256,7 +267,7 @@ test("LIB-01: partial update check never says Up to date, Retry failed refetches
   await expect(page.getByRole("navigation", { name: "Library" }).getByRole("link", { name: /alpha-skill/ })).toBeVisible()
 })
 
-test("LIB-02, LIB-03 and AG-01: Discover has independent catalog search, installed rows link and install, and Add sheet opens once on phone and desktop", async ({ page }) => {
+test("LIB-02, LIB-03 and AG-01: Discover has independent catalog search, installed rows link and install, and the picker preserves catalog search", async ({ page }) => {
   await page.route(/\/api\/projects(\?.*)?$/, (route) =>
     route.fulfill({
       json:
@@ -293,11 +304,11 @@ test("LIB-02, LIB-03 and AG-01: Discover has independent catalog search, install
   await expect(page).toHaveURL(/\/library\/discover\?q=red$/)
   await expect(page.getByRole("list", { name: "Catalog" }).getByRole("listitem")).toHaveCount(1)
 
-  // AG-01: Install opens exactly one dialog with spec prefilled; Cancel keeps ?q=red and catalog search.
+  // AG-01: Closing the picker keeps ?q=red and catalog search.
   await page.getByRole("button", { name: "Install Redwood tools…" }).click()
   await expect(page.getByRole("dialog")).toHaveCount(1)
-  await expect(page.getByRole("dialog").getByLabel("Package", { exact: true })).toHaveValue("github.com/acme/redwood")
-  await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click()
+  await expect(page.getByRole("dialog", { name: "Choose a project" }).getByRole("link", { name: "agentpack · host-a" })).toBeVisible()
+  await page.keyboard.press("Escape")
   await expect(page.getByRole("dialog")).toHaveCount(0)
   await expect(page).toHaveURL(/\/library\/discover\?q=red$/)
   await expect(search).toHaveValue("Redwood")
@@ -306,12 +317,12 @@ test("LIB-02, LIB-03 and AG-01: Discover has independent catalog search, install
   await expect(search).toHaveValue("")
   await expect(page).toHaveURL(/\/library\/discover\?q=red$/)
 
-  // LIB-03: Installed plugin row shows both link ("In 1 project") and "Install in another project", opening sheet with existing targets marked "Already installed".
+  // LIB-03: Installed plugin row shows both link ("In 1 project") and "Install in another project", opening the project picker.
   const alphaRow = page.getByRole("list", { name: "Catalog" }).getByRole("listitem").filter({ hasText: "alpha-skill" })
   await expect(alphaRow.getByRole("link", { name: "In 1 project" })).toBeVisible()
   await alphaRow.getByRole("button", { name: /Install alpha-skill in another project/ }).click()
-  await expect(page.getByRole("dialog")).toContainText("Already installed")
-  await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click()
+  await expect(page.getByRole("dialog", { name: "Choose a project" }).getByRole("link", { name: "other · host-a" })).toBeVisible()
+  await page.keyboard.press("Escape")
 
   // Installed MCP row shows both link ("In 2 projects") and "Install in another project".
   const fooRow = page.getByRole("list", { name: "Catalog" }).getByRole("listitem").filter({ hasText: "foo-tools" })
@@ -322,7 +333,7 @@ test("LIB-02, LIB-03 and AG-01: Discover has independent catalog search, install
 test.describe("phone viewport", () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
 
-  test("LIB-02 and AG-01 on phone: Discover search is visible and editable, and Install opens one sheet keeping ?q=red on Cancel", async ({ page }) => {
+  test("LIB-02 and AG-01 on phone: Discover search is visible and editable, and closing the picker keeps ?q=red", async ({ page }) => {
     await page.route(/\/api\/library\/catalog(\?.*)?$/, (route) =>
       route.fulfill({
         json: {
@@ -339,8 +350,8 @@ test.describe("phone viewport", () => {
     await search.fill("Redwood")
     await page.getByRole("button", { name: "Install Redwood tools…" }).click()
     await expect(page.getByRole("dialog")).toHaveCount(1)
-    await expect(page.getByRole("dialog").getByLabel("Package", { exact: true })).toHaveValue("github.com/acme/redwood")
-    await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click()
+    await expect(page.getByRole("dialog", { name: "Choose a project" }).getByRole("link", { name: "agentpack · host-a" })).toBeVisible()
+    await page.keyboard.press("Escape")
     await expect(page.getByRole("dialog")).toHaveCount(0)
     await expect(page).toHaveURL(/\/library\/discover\?q=red$/)
     await page.getByRole("button", { name: "Clear", exact: true }).click()
