@@ -335,11 +335,17 @@ type ProjectSettingsInput struct {
 	Add          []string                   `json:"add"`
 	Remove       []string                   `json:"remove"`
 	Servers      []registry.MCPServerInput  `json:"servers"`
+	RenameMCP    map[string]string          `json:"rename_mcp,omitempty"`
 	RemoveMCP    []string                   `json:"remove_mcp"`
 	Logins       map[string]string          `json:"logins"`
 	PluginLogins map[string]mcp.PluginLogin `json:"plugin_logins"`
 	MCPEnabled   map[string]bool            `json:"mcp_enabled"`
 }
+
+// ProjectMCPRenameError carries a user-facing rejection from the settings transaction.
+type ProjectMCPRenameError string
+
+func (err ProjectMCPRenameError) Error() string { return string(err) }
 
 var ErrProjectPluginServerChanged = errors.New("the MCP server changed. Reopen Project Settings and choose it again")
 var ErrProjectReload = errors.New("project settings saved, but a session could not reload")
@@ -400,6 +406,11 @@ func (g *Gateway) saveProjectSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := g.options.SaveProject(r.Context(), input); err != nil {
+		var renameError ProjectMCPRenameError
+		if errors.As(err, &renameError) {
+			badRequest(w, renameError.Error())
+			return
+		}
 		if errors.Is(err, ErrProjectPluginServerChanged) {
 			http.Error(w, ErrProjectPluginServerChanged.Error(), http.StatusConflict)
 			return

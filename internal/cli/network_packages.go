@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/olegpustovit/agentpack/internal/gateway"
 	"github.com/olegpustovit/agentpack/internal/lockfile"
@@ -212,6 +214,15 @@ func (runner Runner) saveNetworkProject(ctx context.Context, input gateway.Proje
 				return err
 			}
 		}
+		if len(input.RenameMCP) > 0 {
+			if err := runner.renameProjectMCP(root, input.Directory, input.RenameMCP); err != nil {
+				return err
+			}
+			project, err = manifest.Load(root)
+			if err != nil {
+				return err
+			}
+		}
 		for _, name := range input.RemoveMCP {
 			if _, err := manifest.RemoveMCPServer(root, name); err != nil {
 				return err
@@ -236,6 +247,13 @@ func (runner Runner) saveNetworkProject(ctx context.Context, input gateway.Proje
 							return fmt.Errorf("changing the endpoint of a server with private configuration requires editing agentpack.toml")
 						}
 					}
+					if !slices.Contains(input.RemoveMCP, entry.Name) && current.IsRemote() && server.IsRemote() &&
+						(current.Type == nil && *server.Type == "http" || current.Type != nil && *current.Type == *server.Type) {
+						if err := manifest.UpdateMCPServerURL(root, entry.Name, entry.URL); err != nil {
+							return err
+						}
+						continue
+					}
 					server.Headers, server.OAuth, server.Credential = current.Headers, current.OAuth, current.Credential
 					server.Env, server.Cwd, server.Disabled = current.Env, current.Cwd, current.Disabled
 				}
@@ -244,8 +262,8 @@ func (runner Runner) saveNetworkProject(ctx context.Context, input gateway.Proje
 				return err
 			}
 		}
-		if len(input.Servers)+len(input.RemoveMCP) > 0 {
-			if err := runner.Service.RefreshMCPRecords(ctx, root, len(input.Servers) > 0, false); err != nil {
+		if len(input.Servers)+len(input.RemoveMCP)+len(input.RenameMCP) > 0 {
+			if err := runner.Service.RefreshMCPRecords(ctx, root, len(input.Servers) > 0, false, input.RenameMCP); err != nil {
 				return err
 			}
 		}
@@ -293,4 +311,48 @@ func (runner Runner) saveNetworkProject(ctx context.Context, input gateway.Proje
 		}
 		return nil
 	})
+}
+
+// Called under the definition lock, after changing packages that may supply MCP servers.
+func (runner Runner) renameProjectMCP(root, workspace string, names map[string]string) error {
+	locked, err := runner.Service.LoadLock(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	project, err := manifest.Load(root)
+	if err != nil {
+		return err
+	}
+	plan, err := staging.CollectMCPPlan(workspace, locked, project, nil)
+	if err != nil {
+		return err
+	}
+	destinations := make(map[string]bool, len(names))
+	for _, old := range slices.Sorted(maps.Keys(names)) {
+		name := names[old]
+		if !manifest.ValidMCPName(name) {
+			return gateway.ProjectMCPRenameError("MCP server names must contain only letters, numbers, hyphens, or underscores")
+		}
+		entry, exists := plan.Entries[old]
+		if !exists {
+			return gateway.ProjectMCPRenameError(fmt.Sprintf("MCP server %q does not exist in this project", old))
+		}
+		if entry.Source != mcp.Manifest {
+			return gateway.ProjectMCPRenameError("Only servers defined in the project manifest can be renamed")
+		}
+		for existing := range plan.Entries {
+			if existing != old && strings.EqualFold(existing, name) {
+				return gateway.ProjectMCPRenameError(fmt.Sprintf("MCP server name %q is already in use", name))
+			}
+		}
+		if _, enabled := project.MCP.Enabled[name]; old != name && enabled {
+			return gateway.ProjectMCPRenameError(fmt.Sprintf("MCP server name %q already has an enabled setting", name))
+		}
+		key := strings.ToLower(name)
+		if destinations[key] {
+			return gateway.ProjectMCPRenameError(fmt.Sprintf("MCP server name %q is already in use", name))
+		}
+		destinations[key] = true
+	}
+	return manifest.RenameMCPServers(root, names)
 }

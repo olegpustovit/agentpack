@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,4 +185,26 @@ func testProjects(home string, contents func(context.Context, string) (network.P
 		return nil, err
 	}
 	return projectRows(context.Background(), withoutWorktrees(home, network.RecentFolders(recent)), contents)
+}
+
+func TestSaveProjectSettingsReportsRenameRejection(t *testing.T) {
+	home := projectsHome(t)
+	folder := seedFolder(t, home)
+	g, _ := identityGateway(t, home, nil)
+	const message = "MCP server name is already in use"
+	g.options.SaveProject = func(_ context.Context, input ProjectSettingsInput) error {
+		if input.RenameMCP["docs"] != "work" {
+			t.Fatalf("rename_mcp was not decoded: %+v", input.RenameMCP)
+		}
+		return ProjectMCPRenameError(message)
+	}
+	body, err := json.Marshal(ProjectSettingsInput{Directory: folder, RenameMCP: map[string]string{"docs": "work"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	g.saveProjectSettings(rec, httptest.NewRequest(http.MethodPut, "/api/projects/settings", strings.NewReader(string(body))))
+	if rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != message {
+		t.Fatalf("rename rejection: %d %s", rec.Code, rec.Body.String())
+	}
 }
