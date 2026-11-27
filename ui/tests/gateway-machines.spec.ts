@@ -158,18 +158,16 @@ test("settings errors finish loading and offer a working retry", async ({ page }
     return route.fulfill({ json: { running: true, platform: "macOS", sharing_enabled: true, allowed_peers: [] } })
   })
 
-  await page.goto("/")
-  await page.getByRole("link", { name: "System", exact: true }).click()
-  await page.getByRole("link", { name: "General", exact: true }).click()
+  await page.goto("/settings/general")
   const skeleton = page.locator('[data-slot="skeleton"]')
   await expect(skeleton.first()).toBeVisible()
 
   releaseSettings()
-  await expect(page.getByText("Couldn't load gateway details: Gateway is unavailable")).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText("Couldn't load gateway details: Gateway is unavailable")).toBeVisible()
   await expect(skeleton).toHaveCount(0)
 
   fail = false
   await page.getByRole("button", { name: "Retry", exact: true }).click()
-  await expect(page.getByText("macOS", { exact: true })).toBeVisible()
+  await expect(page.getByText(/ · macOS$/)).toBeVisible()
   await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeHidden()
 })

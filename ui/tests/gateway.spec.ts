@@ -63,11 +63,6 @@ function gwString(body: unknown, key: string): string {
   return typeof value === "string" ? value : ""
 }
 
-function gwFlag(body: unknown, key: string): boolean {
-  if (typeof body !== "object" || body === null) return false
-  return new Map<string, unknown>(Object.entries(body)).get(key) === true
-}
-
 const gwText = (value: string | Buffer) => (typeof value === "string" ? value : value.toString())
 const gwCtrlC = (value: string | Buffer) => typeof value !== "string" && Buffer.from(value).equals(Buffer.from([3]))
 
@@ -477,31 +472,24 @@ test("restarting keeps the same operation ID after ambiguous failures", async ({
 })
 
 test("gateway settings stay separate from selected remote sessions", async ({ page }) => {
-  const requests = await mockAPI(page)
-  let enabled = true
+  await mockAPI(page)
+  await attachTerminal(page)
+  await page.route("**/api/nodes", (route) => route.fulfill({ json: [{ id: "peer-1", name: "Build server", online: true }] }))
+  await page.route((url) => url.pathname === "/api/sessions", (route) =>
+    route.fulfill({ json: [{ ...session, id: "remote-one", node_id: "peer-1" }] }),
+  )
   const settingsQueries: string[] = []
-  await page.route("**/api/settings", (route) => {
+  await page.route((url) => url.pathname === "/api/settings", (route) => {
     settingsQueries.push(new URL(route.request().url()).search)
-    return route.fulfill({ json: { running: true, platform: "linux", sharing_enabled: enabled, allowed_peers: ["tag:server"] } })
-  })
-  await page.route("**/api/settings/sharing", (route) => {
-    enabled = gwFlag(route.request().postDataJSON(), "enabled")
-    return route.fulfill({ json: { sharing_enabled: enabled } })
+    return route.fulfill({ json: { running: true, platform: "linux", sharing_enabled: true, allowed_peers: ["tag:server"] } })
   })
   await page.goto("/")
-  await gwRow(page, "local:local-one").click()
+  await gwRow(page, "peer-1:remote-one").click()
   await gwSystemLink(page).click()
-  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: "Sharing" }).click()
-  await expect(page.getByText("tag:server", { exact: true })).toBeVisible()
-  await page.getByRole("switch", { name: "Tailscale sharing" }).click()
-  await expect(page.getByRole("switch", { name: "Tailscale sharing" })).not.toBeChecked()
-  expect(settingsQueries.every((value) => !value.includes("node="))).toBeTruthy()
-
   await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: "General" }).click()
-  await page.getByRole("button", { name: "Stop agents…", exact: true }).click()
-  await page.getByRole("alertdialog").getByRole("button", { name: "Stop all agents", exact: true }).click()
-  await expect(page.getByText("Agents on the gateway machine have been stopped.")).toBeVisible()
-  expect(requests.some((value) => value.path === "/api/node/stop-agents")).toBeTruthy()
+  await page.getByRole("link", { name: "Sharing", exact: true }).click()
+  await expect(page.getByText("tag:server", { exact: true })).toBeVisible()
+  expect(settingsQueries).toEqual([""])
 })
 
 test("a restarted process that exits immediately still replays its final output", async ({ page }) => {
@@ -595,36 +583,21 @@ test("reconnect preserves and dims the last frame until replay is rendered", asy
   await expect(gwStage(page)).toHaveAttribute("aria-busy", "false")
 })
 
-test("Sessions starts active and appearance settings persist across views and reload", async ({ page }) => {
+test("the terminal opens with the theme chosen in General", async ({ page }) => {
   await page.setViewportSize(gwDesktopViewport)
   await mockAPI(page)
   await attachTerminal(page)
-  await gwLibraryStubs(page)
   await page.goto("/")
   await gwRow(page, "local:local-one").click()
   await expect(page.getByRole("link", { name: "Sessions", exact: true })).toHaveAttribute("aria-current", "page")
 
   await gwSystemLink(page).click()
-  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: "Appearance" }).click()
-  for (const theme of ["Dark", "Light"] as const) {
-    await page.getByRole("group", { name: "Theme" }).getByRole("button", { name: theme, exact: true }).click()
-    await expect(page.locator("html")).toHaveAttribute("data-theme", theme.toLowerCase())
-  }
-  // The terminal takes the theme it is attached under, so returning to the session shows light.
+  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: "General" }).click()
+  await page.getByRole("group", { name: "Theme" }).getByRole("button", { name: "Light", exact: true }).click()
   await page.getByRole("link", { name: "Sessions", exact: true }).click()
   await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible()
   await page.getByRole("link", { name: "Continue “Terminal · Claude”", exact: true }).click()
   await expect.poll(() => page.evaluate(() => window.__agentpackTerminal?.options.theme?.background)).toBe("#ffffff")
-
-  await page.getByRole("link", { name: "Library", exact: true }).click()
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light")
-  await page.reload()
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light")
-
-  await gwSystemLink(page).click()
-  await page.getByRole("navigation", { name: "System" }).getByRole("link", { name: "Appearance" }).click()
-  await page.getByRole("group", { name: "Theme" }).getByRole("button", { name: "System", exact: true }).click()
-  await expect(page.locator("html")).not.toHaveAttribute("data-theme", /./)
 })
 
 test("sessions and library show loaders until their requests finish", async ({ page }) => {

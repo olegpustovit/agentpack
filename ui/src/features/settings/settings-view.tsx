@@ -30,7 +30,7 @@ export function SettingsView({ pane }: { pane: string }) {
           {current && View ? (
             <>
               <header className="flex items-center gap-(--s2) max-[760px]:sr-only">
-                {current.parent && (
+                {current.parent && !isPhone && (
                   <Link to="/settings/$pane" params={{ pane: current.parent }} aria-label="Back to General" title="General" className="-ms-(--s3) grid size-(--ctl-h) shrink-0 place-items-center rounded-(--r-ctl) hover:bg-(--hover)">
                     <ChevronLeft aria-hidden className="size-4" />
                   </Link>
